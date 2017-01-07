@@ -1,14 +1,4 @@
-OPX NAS L3
-============
+# opx-nas-l3
+This repository contains the Layer 3 (L3) component of the network abstraction service (NAS). This handles routes equal cost multi-path (ECMP) and non-ECMP, and neighbor programming for IPv4 and IPv6 addressing. 
 
-Layer 3 functionality for the OPX project
-
-Description
------------
-
-This repo contains the Layer 3 portion of the Network abstraction
-service. This handles Routes(ECMP, non-ECMP) and Neighbor programming
-for IPv4 & IPv6.
-
-(c) Dell 2016
-
+(c) 2017 Dell
