@@ -19,4 +19,4 @@ libopx_hal_routing_la_CXXFLAGS=-std=c++11
 
 libopx_hal_routing_la_LDFLAGS=-shared -version-info 1:1:0
 
-libopx_hal_routing_la_LIBADD=-lopx_nas_linux -lopx_common -lopx_nas_ndi -lopx_cps_api_common -lopx_logging -lcrypto
+libopx_hal_routing_la_LIBADD=-lopx_nas_linux -lopx_nas_common -lopx_common -lopx_nas_ndi -lopx_cps_api_common -lopx_logging -lcrypto
