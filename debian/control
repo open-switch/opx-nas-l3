@@ -19,5 +19,5 @@ Description: This package contains base layer 3 functionality for the Openswitch
 
 Package: opx-nas-l3
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, opx-cps, python-opx-cps
+Depends: ${shlibs:Depends}, ${misc:Depends}, opx-cps, python-opx-cps, python-netaddr
 Description: This package contains base layer 3 functionality for the Openswitch software.
