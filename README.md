@@ -4,11 +4,9 @@ This repository contains the Layer 3 (L3) component of the network abstraction s
 ##Packages
 Contained within this repository are the below packages:
 
-opx-nas-l3\_*version*.dsc                   - Source package
-libopx-nas-l3\_*version*\_*arch*.deb         - NAS L3 runtime DLL library
-libopx-nas-l3-dev\_*_version*\__*arch*.deb     - NAS L3 development library
-opx-nas-l\_3*_version*\_*arch*.deb            - Unit-test executable, configuration files, and tool scripts
-
+libopx-nas-l3\_*version*\_*arch*.deb        - Utility libraries  
+libopx-nas-l3-dev\_*version*\_*arch*.deb    - Exported header file  
+opx-nas-l3\_*version*\_*arch*.deb           - Service executables, configuration files, tool scripts 
 
 See https://github.com/open-switch/opx-docs/wiki/NAS-L3
 for information on the NAS L3` functionality.
