@@ -99,7 +99,7 @@ static cps_api_return_code_t nas_route_cps_all_route_get_func (void *ctx,
         return cps_api_ret_code_ERR;
     } else if (((prefix_attr != NULL) && (pref_len_attr == NULL)) ||
                ((prefix_attr == NULL) && (pref_len_attr != NULL))) {
-        HAL_RT_LOG_ERR("NAS-RT-CPS","Invlaid prefix info prefix:%s len:%s",
+        HAL_RT_LOG_ERR("NAS-RT-CPS","Invalid prefix info prefix:%s len:%s",
                ((prefix_attr == NULL) ? "Not Present" : "Present"),
                ((pref_len_attr == NULL) ? "Not Present" : "Present"));
         return cps_api_ret_code_ERR;
