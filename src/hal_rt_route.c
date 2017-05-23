@@ -336,6 +336,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
             }
         }
 
+        route_entry.rif_id = rif_id;
         route_entry.nh_handle = nh_handle;
         hal_dump_route_entry(&route_entry);
         if (!p_dr->a_is_written[npu_id]) {
