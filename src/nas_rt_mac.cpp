@@ -213,7 +213,7 @@ t_std_error nas_route_delete_vrf_peer_mac_config(uint32_t vrf_id) {
             if ((rc = ndi_route_vr_delete(0, ptr->vrf_obj_id))!= STD_ERR_OK) {
                 HAL_RT_LOG_ERR("HAL-RT", "Vrf:%d if_name:%s peer-mac:%s obj-id:0x%x deletion failed!",
                                vrf_id, ptr->if_name,
-                               hal_rt_mac_to_str(&ptr->mac, p_buf, HAL_RT_MAX_BUFSZ),
+                               hal_rt_mac_to_str(&ptr->mac, p_buf, MAC_STR_LEN),
                                ptr->vrf_obj_id);
                 return STD_ERR(ROUTE, FAIL, rc);
             }
@@ -221,7 +221,7 @@ t_std_error nas_route_delete_vrf_peer_mac_config(uint32_t vrf_id) {
             if (ndi_rif_delete(0, ptr->rif_obj_id) != STD_ERR_OK) {
                 HAL_RT_LOG_ERR("HAL-RT", "Vrf:%d if_name:%s peer-mac:%s obj-id:0x%x deletion failed!",
                                vrf_id, ptr->if_name,
-                               hal_rt_mac_to_str(&ptr->mac, p_buf, HAL_RT_MAX_BUFSZ),
+                               hal_rt_mac_to_str(&ptr->mac, p_buf, MAC_STR_LEN),
                                ptr->rif_obj_id);
                 return (STD_ERR(ROUTE, PARAM, 0));
             }

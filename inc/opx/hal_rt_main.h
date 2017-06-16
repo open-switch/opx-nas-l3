@@ -83,6 +83,12 @@ enum _rt_proto {
     RT_PROTO_MAX,
 };
 
+enum {
+    RT_INTF_ADMIN_STATUS_NONE,
+    RT_INTF_ADMIN_STATUS_UP,
+    RT_INTF_ADMIN_STATUS_DOWN
+};
+
 /* ARP/ND status */
 #define RT_NUD_INCOMPLETE 0x01
 #define RT_NUD_REACHABLE  0x02
@@ -241,6 +247,7 @@ typedef struct _t_fib_vrf_cntrs {
     uint32_t  num_nbr_add_probe;
     uint32_t  num_nbr_add_failed;
     uint32_t  num_nbr_add_permanent;
+    uint32_t  num_nbr_add_noarp;
     uint32_t  num_nbr_del;
     uint32_t  num_nbr_resolving;
     uint32_t  num_nbr_un_rslvd;
@@ -275,9 +282,11 @@ typedef enum _t_fib_cmp_result {
 } t_fib_cmp_result;
 
 typedef enum {
-    FIB_MSG_TYPE_INTF = 1,
-    FIB_MSG_TYPE_NBR,
-    FIB_MSG_TYPE_ROUTE
+    FIB_MSG_TYPE_NL_INTF = 1, /* Admin status notification from the kernel */
+    FIB_MSG_TYPE_NBR_MGR_INTF, /* Admin status notification from the Nbr mgr */
+    FIB_MSG_TYPE_NL_ROUTE, /* Route notification from the kernel */
+    FIB_MSG_TYPE_NBR_MGR_NBR_INFO, /* Nbr notification from the Nbr mgr */
+    FIB_MSG_TYPE_NL_NBR
 } t_fib_msg_type;
 
 typedef struct  {
@@ -286,7 +295,7 @@ typedef struct  {
     hal_ip_addr_t         nbr_addr;
     hal_mac_addr_t      nbr_hwaddr;
     hal_ifindex_t   if_index;
-    hal_ifindex_t   phy_if_index;
+    hal_ifindex_t   mbr_if_index; /* VLAN member port - physical/LAG */
     unsigned long   vrfid;
     unsigned long   expire;
     unsigned long   flags;
@@ -316,8 +325,9 @@ typedef struct  {
 
 typedef struct {
     hal_ifindex_t if_index;
-    bool is_admin_up;
+    int admin_status;
     bool is_op_del;
+    hal_mac_addr_t mac_addr;
 } t_fib_intf_entry;
 
 typedef struct {
@@ -330,6 +340,7 @@ typedef struct {
 } t_fib_msg;
 
 t_fib_msg * hal_rt_alloc_mem_msg();
+bool hal_rt_validate_cps_obj_neigh_family(cps_api_object_t obj);
 void hal_rt_cps_obj_to_neigh(cps_api_object_t obj, t_fib_neighbour_entry *n);
 void hal_rt_cps_obj_to_route(cps_api_object_t obj, t_fib_route_entry *r);
 bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf);
@@ -460,6 +471,9 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf);
 
 #define FIB_INCR_CNTRS_NBR_ADD_PERMANENT(_vrf_id, _af_index)                          \
         (((hal_rt_access_fib_vrf_cntrs(_vrf_id, _af_index))->num_nbr_add_permanent)++)
+
+#define FIB_INCR_CNTRS_NBR_ADD_NOARP(_vrf_id, _af_index)                          \
+        (((hal_rt_access_fib_vrf_cntrs(_vrf_id, _af_index))->num_nbr_add_noarp)++)
 
 #define FIB_INCR_CNTRS_NBR_DEL(_vrf_id, _af_index)                          \
         (((hal_rt_access_fib_vrf_cntrs(_vrf_id, _af_index))->num_nbr_del)++)
@@ -613,6 +627,6 @@ void nas_l3_unlock();
 int hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac_config_t*p_status, bool status);
 int fib_create_nht_tree (t_fib_vrf_info *p_vrf_info);
 int fib_destroy_nht_tree (t_fib_vrf_info *p_vrf_info);
-bool hal_rt_process_intf_state_msg(t_fib_intf_entry *p_intf);
+bool hal_rt_process_intf_state_msg(t_fib_msg_type type, t_fib_intf_entry *p_intf);
 
 #endif /* __HAL_RT_MAIN_H__ */

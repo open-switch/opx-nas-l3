@@ -69,7 +69,7 @@ typedef struct  {
     hal_mac_addr_t              nbr_hwaddr;
     unsigned long               vrfid;
     hal_ifindex_t               if_index;
-    hal_ifindex_t               phy_if_index;
+    hal_ifindex_t               mbr_if_index; /* VLAN member port - physical/LAG */
     BASE_ROUTE_RT_OWNER_t       owner;
     BASE_ROUTE_RT_TYPE_t           type;
     unsigned long               flags;
@@ -97,7 +97,7 @@ typedef struct  {
     hal_mac_addr_t                  dmac_addr;
     hal_vlan_id_t                   dmac_vlan_id;
     hal_ifindex_t                   if_index;
-    hal_ifindex_t                   phy_if_index;
+    hal_ifindex_t                   mbr_if_index; /* VLAN member port - physical/LAG */
     BASE_ROUTE_RT_OWNER_t           owner;
     BASE_ROUTE_RT_TYPE_t               type;
     unsigned long                   flags;
@@ -164,7 +164,8 @@ t_std_error nas_route_publish_object(cps_api_object_t obj);
 t_std_error nas_route_nht_publish_object(cps_api_object_t obj);
 
 t_std_error nas_route_get_all_arp_info(cps_api_object_list_t list, uint32_t vrf_id, uint32_t af,
-                                       hal_ip_addr_t *p_nh_addr, bool is_specific_nh_get);
+                                       hal_ip_addr_t *p_nh_addr, bool is_specific_nh_get,
+                                       bool is_proactive_nh_get);
 
 t_std_error nas_route_process_cps_peer_routing(cps_api_transaction_params_t * param,
                                         size_t ix);
@@ -179,4 +180,8 @@ t_std_error nas_route_get_all_nht_info(cps_api_object_list_t list, unsigned int 
                                        unsigned int af, t_fib_ip_addr *p_dest_addr);
 t_std_error nas_route_get_all_route_info(cps_api_object_list_t list, uint32_t vrf_id, uint32_t af,
                                          hal_ip_addr_t *p_prefix, uint32_t pref_len, bool is_specific_prefix_get);
+cps_api_object_t nas_route_nh_to_nbr_cps_object(t_fib_nh *entry, cps_api_operation_types_t op, bool is_pub);
+bool nas_route_fdb_add_cps_msg (t_fib_nh *p_nh);
+
+bool nas_route_is_rsvd_intf(hal_ifindex_t nh_if_index);
 #endif /* NAS_RT_API_H */

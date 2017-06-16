@@ -85,7 +85,7 @@ void hal_rt_format_nh_list(next_hop_id_t nh_list[],  int count, char *buf, int s
 
  void hal_dump_ecmp_route_entry(ndi_nh_group_t *p_route_entry) {
     size_t i;
-    char buf[HAL_RT_MAX_BUFSZ * 10];
+    static char buf[HAL_RT_MAX_BUFSZ * 10];
     next_hop_id_t  nh_list[HAL_RT_MAX_ECMP_PATH];
 
     for (i=0; i<p_route_entry->nhop_count; i++) {
@@ -96,7 +96,7 @@ void hal_rt_format_nh_list(next_hop_id_t nh_list[],  int count, char *buf, int s
 
     HAL_RT_LOG_DEBUG("HAL-RT-NDI",
             "NH Group: VRF %d. Prefix: " "%s/%d flags 0x%x group type %d "
-            "nh_group_handle %d npu_id %d ecmp_count %d, next_hop_id_list hal_rt_format_nh_list: %s\r\n",
+            "nh_group_handle %d npu_id %d ecmp_count %d, next_hop_id_list hal_rt_format_nh_list: %s",
             p_route_entry->vrf_id, FIB_IP_ADDR_TO_STR(&(p_route_entry->prefix)),
             p_route_entry->mask_len, p_route_entry->flags,
             p_route_entry->group_type, p_route_entry->nh_group_handle,
@@ -125,7 +125,7 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
     ndi_neighbor_t nbr_entry;
 
     HAL_RT_LOG_INFO("HAL-RT-NDI",
-                    "ECMP route add - MP NH Group: VRF %d. " "Prefix: %s/%d, num_fh: %d\r\n", vrf_id,
+                    "ECMP route add - MP NH Group: VRF %d. " "Prefix: %s/%d, num_fh: %d", vrf_id,
                     FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
                     p_dr->num_fh);
 
@@ -165,7 +165,7 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
                     p_tunnel_dr_fh->status = FIB_DRFH_STATUS_WRITTEN;
 
                     HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                            "NH Group:VRF %d. Tunnel FH: %d\r\n", p_fh->vrf_id,
+                            "NH Group:VRF %d. Tunnel FH: %d", p_fh->vrf_id,
                             p_fh->key.if_index);
 
                     nh_handle = p_tunnel_fh->next_hop_id;
@@ -178,7 +178,7 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
                 if (!FIB_IS_FH_VALID_ECMP(p_fh, valid_ecmp_count)) {
                     p_dr_fh->status = FIB_DRFH_STATUS_UNWRITTEN;
                     HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                            "NH Group Add SKIP!!: VRF %d. Prefix: %s/%d, " "FH: %d, NH handle: %d\r\n",
+                            "NH Group Add SKIP!!: VRF %d. Prefix: %s/%d, " "FH: %d, NH handle: %d",
                             p_fh->vrf_id,
                             FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                             p_dr->prefix_len, p_fh->key.if_index,
@@ -187,27 +187,35 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
                 }
 
                 p_dr_fh->status = FIB_DRFH_STATUS_WRITTEN;
-                HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                        "NH Group Add VRF %d, FH: %d, nh_count: %d, " "NH handle: %d\r\n",
-                        p_fh->vrf_id, p_fh->key.if_index, valid_ecmp_count,
-                        p_fh->next_hop_id);
+                HAL_RT_LOG_INFO("HAL-RT-NDI", "NH Group Add VRF %d, Prefix: %s/%d FH-intf:%d IP:%s "
+                                " nh_count: %d, NH handle: %d",
+                                p_fh->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
+                                p_dr->prefix_len, p_fh->key.if_index,
+                                FIB_IP_ADDR_TO_STR(&(p_fh->key.ip_addr)),
+                                valid_ecmp_count, p_fh->next_hop_id);
                 nh_handle = p_fh->next_hop_id;
 
                 if (nh_handle == 0) {
                     HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                            "NH Group: FH nh_handle is NULL. " "Vrf_id: %d.\r\n",
+                            "NH Group: FH nh_handle is NULL. " "Vrf_id: %d.",
                             vrf_id);
                     /*
                      * If fh has no nh_handle, create one
                      */
                     if (nh_handle == 0) {
                         HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                                "NH Group: FH nh_handle is NULL. Creating!" "if_index %d Vrf_id: %d.\r\n",
-                                p_fh->key.if_index, vrf_id);
-
-                        rif_id = hal_rif_index_get(npu_id, vrf_id, p_fh->key.if_index);
+                                         "NH Group: FH nh_handle is NULL. Creating!" "if_index %d Vrf_id: %d.",
+                                         p_fh->key.if_index, vrf_id);
+                        if (hal_rif_index_get_or_create(npu_id, vrf_id, p_fh->key.if_index,
+                                                        &rif_id) != STD_ERR_OK) {
+                            HAL_RT_LOG_ERR("HAL-RT-NDI", "RIF creation failed for host:%s "
+                                           "while programming the route:%s/%d",
+                                           FIB_IP_ADDR_TO_STR(&(p_fh->key.ip_addr)),
+                                           FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len);
+                            return DN_HAL_ROUTE_E_FAIL;
+                        }
                         HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                                "NH Group: RIF ID %d!" "Vrf_id: %d.\r\n",
+                                "NH Group: RIF ID %d!" "Vrf_id: %d.",
                                 rif_id, vrf_id);
 
                         memset(&nbr_entry, 0, sizeof(nbr_entry));
@@ -237,7 +245,7 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
 
                 HAL_RT_LOG_DEBUG("HAL-RT-NDI",
                         "NH Group Add to NHLIST: VRF %d. Prefix: %s/%d, "
-                        "FH: %d, nh_id[%d]: %d\r\n",
+                        "FH: %d, nh_id[%d]: %d",
                         p_fh->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                         p_dr->prefix_len, p_fh->key.if_index, valid_ecmp_count,
                         nh_handle);
@@ -289,7 +297,7 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
                     &nh_group_handle, &is_ecmp_table_full);
             if (rc != STD_ERR_OK) {
                 HAL_RT_LOG_ERR("HAL-RT-NDI",
-                        "ECMP Group: Create Group ID failed. VRF %d. Prefix: " "%s/%d, Unit: %d, Err: %d, %s %d\r\n",
+                        "ECMP Group: Create Group ID failed. VRF %d. Prefix: " "%s/%d, Unit: %d, Err: %d, %s %d",
                         vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                         p_dr->prefix_len, npu_id, rc,
                         is_ecmp_table_full ?
@@ -298,7 +306,7 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
 
             } else {
                 HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                        "ECMP Group: Using Group ID: %d. VRF %d. Prefix: " "%s/%d,Unit: %d, Err: %d\r\n",
+                        "ECMP Group: Using Group ID: %d. VRF %d. Prefix: " "%s/%d,Unit: %d, Err: %d",
                         nh_group_handle, vrf_id,
                         FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                         p_dr->prefix_len, npu_id, rc);
@@ -386,7 +394,7 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
             if (rc != STD_ERR_OK) {
                 HAL_RT_LOG_ERR("HAL-RT-NDI",
                                 "MP: ECMP Route Update: Failed. Attribute Group Nexthop ID set failed."
-                                "Prefix: %s/%d Unit: %d, Err: %d, old gid %d, new gid to set %d\r\n",
+                                "Prefix: %s/%d Unit: %d, Err: %d, old gid %d, new gid to set %d",
                                 FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                                 p_dr->prefix_len, npu_id, rc, p_dr->nh_handle,
                                 route_entry.nh_handle);
@@ -395,7 +403,7 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
             }
             HAL_RT_LOG_INFO("HAL-RT-NDI",
                             "MP: ECMP Route Update:  Successful, VRF %d, Prefix: %s/%d - "
-                            "old gid %d, new gid %d %s\r\n",
+                            "old gid %d, new gid %d %s",
                             vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                             p_dr->prefix_len, p_dr->nh_handle, nh_group_handle,
                             (ecmp_handle_created && p_dr->ofh_cnt <= 1) ?
@@ -413,7 +421,7 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
              */
             HAL_RT_LOG_DEBUG("HAL-RT-NDI",
                     "MP: ECMP Route already programmed as %s! Prefix: %s/%d "
-                    "- old gid %d, new gid %d!\r\n",
+                    "- old gid %d, new gid %d!",
                     is_ecmp_table_full ? "Non-ECMP as Group ECMP table is full" : "ECMP",
                     FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
                     p_dr->nh_handle, nh_group_handle);
@@ -452,7 +460,7 @@ dn_hal_route_err hal_fib_ecmp_route_del(uint32_t vrf_id, t_fib_dr *p_dr) {
     t_std_error rc;
 
     HAL_RT_LOG_INFO("HAL-RT-NDI",
-                    "ECMP route del - VRF %d, Prefix: %s/%d, num_fh: %d\r\n", vrf_id,
+                    "ECMP route del - VRF %d, Prefix: %s/%d, num_fh: %d", vrf_id,
                     FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
                     p_dr->num_fh);
 
@@ -463,7 +471,7 @@ dn_hal_route_err hal_fib_ecmp_route_del(uint32_t vrf_id, t_fib_dr *p_dr) {
             npu_id++) {
         if (p_dr->a_is_written[npu_id] == false) {
             HAL_RT_LOG_ERR("HAL-RT-NDI",
-                    "%s (): ECMP route not programmed in " "hardware. Vrf_id: %d, Unit: %d.\r\n",
+                    "%s (): ECMP route not programmed in " "hardware. Vrf_id: %d, Unit: %d.",
                     __FUNCTION__, vrf_id, npu_id);
             continue;
         }
@@ -498,7 +506,7 @@ dn_hal_route_err hal_fib_ecmp_route_del(uint32_t vrf_id, t_fib_dr *p_dr) {
 
         if (rc != STD_ERR_OK) {
             HAL_RT_LOG_ERR("HAL-RT-MP",
-                           "NH Group:Failed to delete Route, group:%d. " "Vrf_id: %d, Unit: %d. Err: %d \r\n",
+                           "NH Group:Failed to delete Route, group:%d. " "Vrf_id: %d, Unit: %d. Err: %d ",
                            p_dr->nh_handle, vrf_id, npu_id, rc);
             error_occured = true;
         }

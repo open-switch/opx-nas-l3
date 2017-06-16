@@ -48,14 +48,14 @@ dn_hal_route_err hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr) {
     t_fib_nh_holder nh_holder1;
     t_fib_tunnel_dr_fh *p_tunnel_dr_fh = NULL;
 
-    HAL_RT_LOG_INFO("HAL-RT-NDI", "NPU route add - VRF %d. Prefix: %s/%d, num_fh: %d%s\r\n", vrf_id,
+    HAL_RT_LOG_INFO("HAL-RT-NDI", "NPU route add - VRF %d. Prefix: %s/%d, num_fh: %d%s", vrf_id,
                     FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
                     p_dr->num_fh,
                     (p_dr->status_flag & FIB_DR_STATUS_DEGENERATED) ? ", Degen DR" : "");
 
     if (!FIB_IS_VRF_ID_VALID(vrf_id)) {
         HAL_RT_LOG_ERR("HAL-RT-NDI",
-                "%s (): Invalid VRF %d.\r\n", __FUNCTION__, vrf_id);
+                "%s (): Invalid VRF %d.", __FUNCTION__, vrf_id);
         return DN_HAL_ROUTE_E_PARAM;
     }
 
@@ -128,13 +128,13 @@ dn_hal_route_err hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr) {
 dn_hal_route_err hal_fib_route_del(uint32_t vrf_id, t_fib_dr *p_dr) {
     dn_hal_route_err rc = DN_HAL_ROUTE_E_NONE;
 
-    HAL_RT_LOG_INFO("HAL-RT-NDI", " NPU route del - VRF %d. Prefix: %s/%d, num_fh: %d\r\n",
+    HAL_RT_LOG_INFO("HAL-RT-NDI", " NPU route del - VRF %d. Prefix: %s/%d, num_fh: %d",
                     vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
                     p_dr->num_fh);
 
     if (!FIB_IS_VRF_ID_VALID(vrf_id)) {
         HAL_RT_LOG_ERR("HAL-RT-NDI",
-                "%s (): Invalid VRF %d.\r\n", __FUNCTION__, vrf_id);
+                "%s (): Invalid VRF %d.", __FUNCTION__, vrf_id);
         return DN_HAL_ROUTE_E_PARAM;
     }
 
@@ -168,7 +168,7 @@ void hal_form_route_entry(ndi_route_t *p_route_entry, t_fib_dr *p_dr,
 
 void hal_dump_route_entry(ndi_route_t *p_route_entry) {
     HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-            "VRF %d. Prefix: %s/%d flags 0x%x " "nh_handle %d npu_id %d action %d\r\n",
+            "VRF %d. Prefix: %s/%d flags 0x%x " "nh_handle %d npu_id %d action %d",
             p_route_entry->vrf_id, FIB_IP_ADDR_TO_STR(&(p_route_entry->prefix)),
             p_route_entry->mask_len, p_route_entry->flags,
             p_route_entry->nh_handle, p_route_entry->npu_id,
@@ -198,7 +198,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
         p_fh = FIB_GET_FH_FROM_DRFH(p_dr_fh);
         p_status = &p_dr_fh->status;
         HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                "VRF %d. Prefix: %s/%d, FH:%d\r\n", vrf_id,
+                "VRF %d. Prefix: %s/%d, FH:%d", vrf_id,
                 FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
                 p_fh->key.if_index);
         if ((FIB_IS_FH_IP_TUNNEL(p_fh)) && (!FIB_IS_NH_ZERO(p_fh))) {
@@ -211,7 +211,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
 
                 if (nh_handle == 0) {
                     HAL_RT_LOG_ERR("HAL-RT-NDI",
-                            "%s (): nh_handle is NULL. " "Vrf_id: %d.\r\n",
+                            "%s (): nh_handle is NULL. " "Vrf_id: %d.",
                             __FUNCTION__, vrf_id);
                     return STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0);
                 }
@@ -221,12 +221,20 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
 
             if (nh_handle == 0) {
                 HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                        "nh_handle is NULL. Creating..!!" "if_index %d Vrf_id: %d.\r\n",
-                        p_fh->key.if_index, vrf_id);
+                                 "nh_handle is NULL. Creating..!!" "if_index %d Vrf_id: %d.",
+                                 p_fh->key.if_index, vrf_id);
                 //@Todo, Handle multi-npu case
-                rif_id = hal_rif_index_get(npu_id, vrf_id, p_fh->key.if_index);
+                if (hal_rif_index_get_or_create(npu_id, vrf_id, p_fh->key.if_index,
+                                                &rif_id) != STD_ERR_OK) {
+                    HAL_RT_LOG_ERR("HAL-RT-NDI", "RIF creation failed. VRF %d."
+                                   " Prefix: %s/%d: if-index:%d",
+                                   vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
+                                   p_dr->prefix_len, p_fh->key.if_index);
+                    return DN_HAL_ROUTE_E_FAIL;
+                }
+
                 HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                        "RIF ID %d!" "Vrf_id: %d.\r\n", rif_id, vrf_id);
+                        "RIF ID %d!" "Vrf_id: %d.", rif_id, vrf_id);
 
                 memset(&nbr_entry, 0, sizeof(nbr_entry));
                 if (hal_form_nbr_entry(&nbr_entry, p_fh) == STD_ERR_OK) {
@@ -259,7 +267,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
         }
     } else {
         HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                "VRF %d. Prefix: %s/%d, NULL FH\r\n", vrf_id,
+                "VRF %d. Prefix: %s/%d, NULL FH", vrf_id,
                 FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len);
     }
 
@@ -282,9 +290,17 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                 HAL_RT_LOG_DEBUG("HAL-RT-NDI", "Null NH!");
                 return DN_HAL_ROUTE_E_FAIL;
             }
-            rif_id = hal_rif_index_get(npu_id, vrf_id, p_nh->key.if_index);
+            if (hal_rif_index_get_or_create(npu_id, vrf_id, p_nh->key.if_index,
+                                            &rif_id) != STD_ERR_OK) {
+                HAL_RT_LOG_ERR("HAL-RT-NDI", "RIF creation failed VRF %d."
+                               " Prefix: %s/%d: if-index:%d",
+                               vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
+                               p_dr->prefix_len, p_nh->key.if_index);
+                return DN_HAL_ROUTE_E_FAIL;
+            }
+
             HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                    "RIF ID %d, Vrf_id: %d.\r\n", rif_id, vrf_id);
+                    "RIF ID %d, Vrf_id: %d.", rif_id, vrf_id);
 
             memset(&nbr_entry, 0, sizeof(nbr_entry));
             if (hal_form_nbr_entry(&nbr_entry, p_nh) == STD_ERR_OK) {
@@ -294,7 +310,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                         return STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0);
                     }
                     HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                                 "Created nh handle %d..!!" "Vrf_id: %d.\r\n", nh_handle, vrf_id);
+                                 "Created nh handle %d..!!" "Vrf_id: %d.", nh_handle, vrf_id);
                     p_nh->next_hop_id = nh_handle;
                     if ((p_nh->p_arp_info) && (p_nh->p_arp_info->state == FIB_ARP_RESOLVED)) {
                         /* If this NH is interested for NHT, but route add only creates the NH_handle, so,
@@ -302,25 +318,23 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                          * before this route add, so notify dest change to NHT now */
                         nas_rt_handle_dest_change(NULL, p_nh, true);
                     }
-
+                    rif_update = true;
                 } else {
                     HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                                 "nh handle already exists %d..!!" "Vrf_id: %d.\r\n",
+                                 "nh handle already exists %d..!!" "Vrf_id: %d.",
                                  p_nh->next_hop_id, vrf_id);
                     nh_handle = p_nh->next_hop_id;
                 }
                 route_entry.action = NDI_ROUTE_PACKET_ACTION_FORWARD;
             } else {
                 HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                             "NH IP Zero, Vrf_id: %d.\r\n", vrf_id);
+                                 "NH IP Zero, Vrf_id: %d.", vrf_id);
+                rif_update = true;
                 route_entry.action = NDI_ROUTE_PACKET_ACTION_TRAPCPU;
             }
-            rif_update = true;
             if_index = p_nh->key.if_index;
         } else {
-            if (STD_IP_IS_ADDR_LINK_LOCAL(&(p_fh->key.ip_addr))) {
-                //@@TODO Handle IPv6 case
-            } else if (FIB_IS_FH_IP_TUNNEL(p_fh)) {
+            if (FIB_IS_FH_IP_TUNNEL(p_fh)) {
                 if (FIB_IS_NH_ZERO(p_fh)) {
                     /* receive-only tunnel */
                     route_entry.action = NDI_ROUTE_PACKET_ACTION_DROP;
@@ -343,9 +357,11 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
             rc = ndi_route_add(&route_entry);
             if (rc != STD_ERR_OK) {
                 HAL_RT_LOG_ERR("HAL-RT-NDI",
-                               "Route Add: Failed. VRF %d. Prefix: %s/%d: " "NH Handle %d\r\n",
+                               "Route Add: Failed. VRF %d. Prefix: %s/%d: NH:%s NH Handle:%d",
                                vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
-                               p_dr->prefix_len, route_entry.nh_handle);
+                               p_dr->prefix_len, (p_fh ? FIB_IP_ADDR_TO_STR(&p_fh->key.ip_addr):
+                                                  (p_nh ? FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr): NULL)),
+                               route_entry.nh_handle);
 
                 error_occured = true;
                 break;
@@ -359,9 +375,13 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                 p_dr->a_is_written[npu_id] = true;
                 p_dr->nh_handle = nh_handle;
                 HAL_RT_LOG_INFO("HAL-RT-NDI(RT-END)",
-                                "Route Add: Successful. VRF %d. Prefix: %s/%d: " "NH Handle %d RIF %d",
+                                "Route Add: Successful. VRF %d. Prefix: %s/%d: NH:%s NH Handle %d RIF %d action:%s",
                                 vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
-                                p_dr->prefix_len, route_entry.nh_handle, rif_id);
+                                p_dr->prefix_len, (p_fh ? FIB_IP_ADDR_TO_STR(&p_fh->key.ip_addr):
+                                                   (p_nh ? FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr): NULL)),
+                                route_entry.nh_handle, rif_id,
+                                ((route_entry.action == NDI_ROUTE_PACKET_ACTION_FORWARD) ? "Forward" :
+                                 ((route_entry.action == NDI_ROUTE_PACKET_ACTION_TRAPCPU) ? "TrapToCpu" : "Drop")));
             }
         } else if (p_dr->nh_handle != nh_handle) {
             if (nh_handle != 0) {
@@ -369,14 +389,16 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                 rc = ndi_route_set_attribute(&route_entry);
                 if (rc != STD_ERR_OK) {
                     HAL_RT_LOG_ERR("HAL-RT-NDI",
-                               "Route Attribute Nexthop ID set failed.Unit: %d, " "Err: %d\r\n",
+                               "Route Attribute Nexthop ID set failed.Unit: %d, " "Err: %d",
                                npu_id, rc);
                     error_occured = true;
                     break;
                 }
                 HAL_RT_LOG_INFO("HAL-RT-NDI(RT-END)",
-                                "RT modified - VRF %d. Prefix: %s/%d: old hdl %d, new hdl %d RIF %d\r\n",
+                                "RT modified - VRF %d. Prefix: %s/%d: NH:%s old hdl %d, new hdl %d RIF %d",
                                 vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
+                                (p_fh ? FIB_IP_ADDR_TO_STR(&p_fh->key.ip_addr):
+                                 (p_nh ? FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr): NULL)),
                                 p_dr->nh_handle, nh_handle, rif_id);
             } else {
                 /* Route changed from ECMP/Non-ECMP to connected route */
@@ -389,14 +411,14 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                 rc = ndi_route_add(&route_entry);
                 if (rc != STD_ERR_OK) {
                     HAL_RT_LOG_ERR("HAL-RT-NDI",
-                                   "Connected Route Add: Failed. VRF %d. Prefix: %s/%d: " "NH Handle %d\r\n",
+                                   "Connected Route Add: Failed. VRF %d. Prefix: %s/%d: " "NH Handle %d",
                                    vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                                    p_dr->prefix_len, route_entry.nh_handle);
                     error_occured = true;
                     break;
                 }
                 HAL_RT_LOG_INFO("HAL-RT-NDI",
-                               "Connected Route Add: Successful.. VRF %d. Prefix: %s/%d: NH Handle old:%d new:%d\r\n",
+                               "Connected Route Add: Successful.. VRF %d. Prefix: %s/%d: NH Handle old:%d new:%d",
                                vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                                p_dr->prefix_len, p_dr->nh_handle, route_entry.nh_handle);
 
@@ -412,7 +434,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
              * entry or nh handle, just return success..
              */
             HAL_RT_LOG_DEBUG("HAL-RT-NDI(RT-END)",
-                    "Route already programmed!\r\n");
+                    "Route already programmed!");
         }
 
         /*
@@ -436,7 +458,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
             if (rc != STD_ERR_OK) {
                 HAL_RT_LOG_DEBUG("HAL-RT-NDI",
                         "ECMP:Failed to delete route from NH group :%d Prefix: %s/%d ,"
-                        "Vrf_id: %d, Unit: %d Err: %d \r\n",
+                        "Vrf_id: %d, Unit: %d Err: %d ",
                         old_nh_handle, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                         p_dr->prefix_len, vrf_id, npu_id, rc);
                 /*
@@ -451,8 +473,9 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
     if (error_occured == true) {
         hal_fib_route_del(vrf_id, p_dr);
         return DN_HAL_ROUTE_E_FAIL;
-    } else if ((p_fh && (p_fh->p_arp_info) && (p_fh->p_arp_info->state == FIB_ARP_RESOLVED)) ||
-               (p_nh && (p_nh->p_arp_info) && p_nh->p_arp_info->state == FIB_ARP_RESOLVED)) {
+    } else if (((p_fh && (p_fh->p_arp_info) && (p_fh->p_arp_info->state == FIB_ARP_RESOLVED)) ||
+                (p_nh && (p_nh->p_arp_info) && p_nh->p_arp_info->state == FIB_ARP_RESOLVED)) ||
+               (route_entry.action == NDI_ROUTE_PACKET_ACTION_TRAPCPU)) {
         /* Notify the route add only if the NH is resolved */
         nas_rt_handle_dest_change(p_dr, NULL, true);
     }
@@ -469,7 +492,7 @@ dn_hal_route_err _hal_fib_route_del(uint32_t vrf_id, t_fib_dr *p_dr) {
     ndi_route_t route_entry;
     t_std_error rc = STD_ERR_OK;
 
-    HAL_RT_LOG_DEBUG("HAL-RT-NDI", "VRF %d.\r\n", vrf_id);
+    HAL_RT_LOG_DEBUG("HAL-RT-NDI", "VRF %d.", vrf_id);
 
     memset(&route_entry, 0, sizeof(route_entry));
     hal_form_route_entry(&route_entry, p_dr, false);
@@ -519,7 +542,7 @@ int hal_fib_set_all_dr_fh_to_un_written(t_fib_dr *p_dr) {
 
     if (!p_dr) {
         HAL_RT_LOG_ERR("HAL-RT-NDI",
-                "%s (): Invalid input param. p_dr: %p\r\n", __FUNCTION__, p_dr);
+                "%s (): Invalid input param. p_dr: %p", __FUNCTION__, p_dr);
         return STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0);
     }
 

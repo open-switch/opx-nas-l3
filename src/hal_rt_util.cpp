@@ -45,7 +45,14 @@ extern "C" {
 #include <mutex>
 #include <sstream>
 #include <condition_variable>
+#include <algorithm>
 #include "nas_ndi_obj_id_table.h"
+#include "dell-base-switch-element.h"
+
+#include "cps_api_object_category.h"
+#include "cps_api_route.h"
+#include "cps_api_operation.h"
+#include "cps_class_map.h"
 
 typedef struct _nas_rif_info_t {
     ndi_rif_id_t rif_id;
@@ -163,12 +170,10 @@ bool hal_rt_is_reserved_ipv4(hal_ip_addr_t *p_ip_addr)
 
 bool hal_rt_is_reserved_ipv6(hal_ip_addr_t *p_ip_addr)
 {
-    if (STD_IP_IS_ADDR_LINK_LOCAL(p_ip_addr))
-        return true;
-    else if ((p_ip_addr->af_index == HAL_INET6_FAMILY) &&
-             (((((p_ip_addr->u.v6_addr[0]) & (0xff)) == (0xff)) &&
-              (((p_ip_addr->u.v6_addr[1]) & (0xf0)) == (0x00))) ||
-             (STD_IP_IS_V6_ADDR_LOOP_BACK(p_ip_addr)))) {
+    if ((p_ip_addr->af_index == HAL_INET6_FAMILY) &&
+        (((((p_ip_addr->u.v6_addr[0]) & (0xff)) == (0xff)) &&
+          (((p_ip_addr->u.v6_addr[1]) & (0xf0)) == (0x00))) ||
+         (STD_IP_IS_V6_ADDR_LOOP_BACK(p_ip_addr)))) {
         return true;
     }
     return false;
@@ -196,46 +201,85 @@ uint32_t hal_rt_rif_ref_inc(hal_ifindex_t if_index)
     if (it != g_rif_entry_table.end()) {
         auto& rif_info = (it->second);
         ref_cnt = ++rif_info.ref_count;
-        HAL_RT_LOG_DEBUG("HAL-RT", "Ref count for RIF id (%d) if_index (%d)"
+        HAL_RT_LOG_INFO("HAL-RT-RIF", "Incr Ref count for RIF id (%d) if_index (%d)"
                       "is %d", rif_info.rif_id, if_index, rif_info.ref_count);
     } else
-        HAL_RT_LOG_DEBUG("HAL-RT", "RIF not found for if_index (%d)", if_index);
+        HAL_RT_LOG_INFO("HAL-RT-RIF", "Incr RIF not found for if_index (%d)", if_index);
 
     return ref_cnt;
 }
 
-uint32_t hal_rt_rif_ref_dec(hal_ifindex_t if_index)
+bool hal_rt_rif_ref_dec(hal_ifindex_t if_index)
 {
     auto it = g_rif_entry_table.find(if_index);
-    uint32_t ref_cnt = 0;
+    int32_t ref_cnt = -1;
 
     /* return RIF entry if present in the RIF entry table */
     if (it != g_rif_entry_table.end()) {
         auto& rif_info = (it->second);
         if(rif_info.ref_count != 0) {
             ref_cnt = --rif_info.ref_count;
+            HAL_RT_LOG_INFO("HAL-RT-RIF", "Decr Ref count for RIF id (%d) if_index (%d)"
+                             "is %d", rif_info.rif_id, if_index, rif_info.ref_count);
         }
-        HAL_RT_LOG_DEBUG("HAL-RT", "Ref count for RIF id (%d) if_index (%d)"
-                      "is %d", rif_info.rif_id, if_index, rif_info.ref_count);
-    } else
-        HAL_RT_LOG_DEBUG("HAL-RT", "RIF not found for if_index (%d)", if_index);
+    } else {
+        HAL_RT_LOG_INFO("HAL-RT-RIF", "Decr RIF not found for if_index (%d)", if_index);
+    }
+    return ((ref_cnt == 0) ? false : true);
+}
 
+int hal_rt_rif_ref_get(hal_ifindex_t if_index)
+{
+    auto it = g_rif_entry_table.find(if_index);
+    int32_t ref_cnt = -1;
+
+    /* return RIF entry if present in the RIF entry table */
+    if (it != g_rif_entry_table.end()) {
+        auto& rif_info = (it->second);
+        ref_cnt = rif_info.ref_count;
+    }
     return ref_cnt;
 }
 
-/*
- * This function gets the RIF index entry for a given if_index from the RIF entry table.
- * If entry us not present it creates a new RIF index in hardware via NDI and caches it
- * in the RIF entry table.
- */
+bool hal_rif_update (hal_vrf_id_t vrf_id, t_fib_intf_entry *p_intf)
+{
+    ndi_rif_entry_t     rif_entry;
+    npu_id_t npu_id;
 
-ndi_rif_id_t hal_rif_index_get (npu_id_t npu_id, hal_vrf_id_t vrf_id, hal_ifindex_t if_index)
+    auto it = g_rif_entry_table.find(p_intf->if_index);
+    /* return RIF entry if present in the RIF entry table */
+    if (it == g_rif_entry_table.end())
+        return true;
+
+    auto& rif_info = (it->second);
+
+    memset (&rif_entry, 0, sizeof (ndi_rif_entry_t));
+    for (npu_id = 0; npu_id < (npu_id_t)hal_rt_access_fib_config()->max_num_npu;
+         npu_id++) {
+
+        rif_entry.npu_id = npu_id;
+        rif_entry.vrf_id = hal_vrf_obj_get(npu_id, vrf_id);
+        rif_entry.rif_id = rif_info.rif_id;
+        rif_entry.flags = NDI_RIF_ATTR_SRC_MAC_ADDRESS;
+        memcpy(&rif_entry.src_mac, &p_intf->mac_addr, sizeof(hal_mac_addr_t));
+
+        if (ndi_rif_set_attribute(&rif_entry)!= STD_ERR_OK) {
+            HAL_RT_LOG_ERR("NAS-RT-RIF", "RIF id update "
+                           " failed for if_index = %d",p_intf->if_index);
+            return false;
+        }
+        HAL_RT_LOG_INFO("NAS-RT-RIF", "RIF id update "
+                        " for if_index = %d",p_intf->if_index);
+    }
+    return true;
+}
+
+/* This function returns the RIF-id (non-zero) for the matching NPU-id, VRF-id and if-index,
+ * if does not exist, returns 0 */
+ndi_rif_id_t hal_rif_id_get (npu_id_t npu_id, hal_vrf_id_t vrf_id, hal_ifindex_t if_index)
 {
     ndi_rif_id_t        rif_id = 0;
     nas_rif_info_t      rif_info;
-    ndi_rif_entry_t     rif_entry;
-    interface_ctrl_t    intf_ctrl;
-    char                buf[HAL_RT_MAX_BUFSZ];
 
     auto it = g_rif_entry_table.find(if_index);
 
@@ -244,8 +288,120 @@ ndi_rif_id_t hal_rif_index_get (npu_id_t npu_id, hal_vrf_id_t vrf_id, hal_ifinde
         rif_info = (it->second);
         rif_id   = rif_info.rif_id;
         HAL_RT_LOG_DEBUG("HAL-RT", "RIF id is %d for if_index %d refcnt %d",
-                      rif_id, if_index, rif_info.ref_count);
-        return (rif_id);
+                         rif_id, if_index, rif_info.ref_count);
+    }
+    return (rif_id);
+}
+
+bool hal_rt_is_intf_lpbk (hal_ifindex_t if_index)
+{
+    interface_ctrl_t    intf_ctrl;
+
+    memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
+    intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF;
+    intf_ctrl.if_index = if_index;
+
+    if ((dn_hal_get_interface_info(&intf_ctrl)) != STD_ERR_OK) {
+        HAL_RT_LOG_INFO("HAL-RT-RIF",
+                        "Invalid interface %d. RIF ID get failed ", if_index);
+        return false;
+    }
+
+    HAL_RT_LOG_DEBUG("HAL-RT-INTF", "intf:%s(%d) type:%d",
+                     intf_ctrl.if_name, if_index, intf_ctrl.int_type);
+
+    return (intf_ctrl.int_type == nas_int_type_LPBK);
+}
+
+/*
+ * This function gets the maximum mtu supported in the base switch configuration
+ */
+static uint_t hal_rt_get_max_mtu()
+{
+   cps_api_get_params_t   get_req;
+   cps_api_object_t       obj;
+   cps_api_object_attr_t  attr;
+   cps_api_key_t          keys[1];
+   size_t                 i, len = 0;
+   static uint_t           mtu=0;
+
+
+   if (mtu >= FIB_MIN_L3_MTU)
+        return mtu;
+   /*
+    * Set mtu to minimum supported mtu, if anything fails
+    * in getting base switch configuration
+    */
+   mtu = FIB_MIN_L3_MTU;
+
+   if (cps_api_get_request_init (&get_req) != cps_api_ret_code_OK)
+   {
+       HAL_RT_LOG_INFO("HAL-RT",  "cps_api_get_request_init in base_switch failed");
+       return mtu;
+   }
+   cps_api_key_from_attr_with_qual(keys, BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY, cps_api_qualifier_TARGET);
+
+    get_req.key_count = 1;
+    get_req.keys=keys;
+
+    if (cps_api_get(&get_req) != cps_api_ret_code_OK)
+    {
+        HAL_RT_LOG_INFO("HAL-RT", "cps_api_get in base_switch failed");
+        cps_api_get_request_close (&get_req);
+        return mtu;
+    }
+
+    len = cps_api_object_list_size(get_req.list);
+
+    for (i=0; i < len; ++i)
+    {
+        obj = cps_api_object_list_get(get_req.list, i);
+        if (cps_api_key_element_at(cps_api_object_key (obj),
+                 CPS_OBJ_KEY_SUBCAT_POS) != BASE_SWITCH_SWITCHING_ENTITIES_OBJ)
+        {
+            HAL_RT_LOG_DEBUG("HAL-RT", "Invalid sub-cat received in base_switch cps get");
+            continue;
+        }
+
+        attr = cps_api_object_attr_get (obj, BASE_SWITCH_SWITCHING_ENTITIES_SWITCHING_ENTITY_MAX_MTU);
+        if (attr != NULL)
+        {
+            mtu = cps_api_object_attr_data_uint(attr);
+            HAL_RT_LOG_DEBUG("HAL-RT", "Max MTU is %d", mtu);
+        }
+    }
+
+    cps_api_get_request_close (&get_req);
+    return mtu;
+}
+
+/*
+ * This function gets the RIF index entry for a given if_index from the RIF entry table.
+ * If entry us not present it creates a new RIF index in hardware via NDI and caches it
+ * in the RIF entry table.
+ */
+
+t_std_error hal_rif_index_get_or_create (npu_id_t npu_id, hal_vrf_id_t vrf_id,
+                                         hal_ifindex_t if_index, ndi_rif_id_t *rif_id)
+{
+    nas_rif_info_t      rif_info;
+    ndi_rif_entry_t     rif_entry;
+    interface_ctrl_t    intf_ctrl;
+    char                buf[HAL_RT_MAX_BUFSZ];
+
+    auto it = g_rif_entry_table.find(if_index);
+
+    if (rif_id == NULL)
+        return STD_ERR(ROUTE,FAIL,0);
+
+    *rif_id = 0;
+    /* return RIF entry if present in the RIF entry table */
+    if (it != g_rif_entry_table.end()) {
+        rif_info = (it->second);
+        *rif_id   = rif_info.rif_id;
+        HAL_RT_LOG_DEBUG("HAL-RT", "RIF id is %d for if_index %d refcnt %d",
+                         *rif_id, if_index, rif_info.ref_count);
+        return STD_ERR_OK;
     }
 
     memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
@@ -253,15 +409,15 @@ ndi_rif_id_t hal_rif_index_get (npu_id_t npu_id, hal_vrf_id_t vrf_id, hal_ifinde
     intf_ctrl.if_index = if_index;
 
     if ((dn_hal_get_interface_info(&intf_ctrl)) != STD_ERR_OK) {
-        HAL_RT_LOG_INFO("HAL-RT",
-                    "Invalid interface %d. RIF ID get failed \r\n", if_index);
-        return 0;
+        HAL_RT_LOG_INFO("HAL-RT-RIF",
+                        "Invalid interface %d. RIF ID get failed ", if_index);
+        return STD_ERR(ROUTE,FAIL,0);
     }
 
     memset (&rif_entry, 0, sizeof (ndi_rif_entry_t));
     rif_entry.npu_id = npu_id;
 
-    HAL_RT_LOG_DEBUG("HAL-RT", "RIF entry creation for intf:%s(%d) type:%d",
+    HAL_RT_LOG_DEBUG("HAL-RT-RIF", "RIF entry creation for intf:%s(%d) type:%d",
                      intf_ctrl.if_name, if_index, intf_ctrl.int_type);
     if(intf_ctrl.int_type == nas_int_type_PORT) {
         rif_entry.rif_type = NDI_RIF_TYPE_PORT;
@@ -273,18 +429,18 @@ ndi_rif_id_t hal_rif_index_get (npu_id_t npu_id, hal_vrf_id_t vrf_id, hal_ifinde
         if(hal_rt_lag_obj_id_get(if_index, obj_id) == STD_ERR_OK)
             rif_entry.attachment.lag_id = obj_id;
         else
-            return 0;
+            return STD_ERR(ROUTE,FAIL,0);
     } else if(intf_ctrl.int_type == nas_int_type_VLAN) {
         rif_entry.rif_type = NDI_RIF_TYPE_VLAN;
         rif_entry.attachment.vlan_id = intf_ctrl.vlan_id;
     } else if(intf_ctrl.int_type == nas_int_type_LPBK) {
         /* Loopback intf - valid L3 interface but RIF creation is not required as we dont use
          * the loopback MAC to lift the loopback address destined packets in the NPU */
-        return 0;
+        return STD_ERR_OK;
     } else {
-        HAL_RT_LOG_ERR("HAL-RT", "Invalid RIF entry creation ignored for rif-id:%d intf:%s(%d) type:%d",
-                       rif_id, intf_ctrl.if_name, if_index, intf_ctrl.int_type);
-        return 0;
+        HAL_RT_LOG_ERR("HAL-RT-RIF", "Invalid RIF entry creation ignored for intf:%s(%d) type:%d",
+                       intf_ctrl.if_name, if_index, intf_ctrl.int_type);
+        return STD_ERR(ROUTE,FAIL,0);
     }
 
     rif_entry.vrf_id = hal_vrf_obj_get(npu_id, vrf_id);
@@ -302,41 +458,55 @@ ndi_rif_id_t hal_rif_index_get (npu_id_t npu_id, hal_vrf_id_t vrf_id, hal_ifinde
             memcpy(vr_entry.src_mac, &mac_addr, HAL_MAC_ADDR_LEN);
             memcpy(&p_vrf->router_mac, &mac_addr, HAL_MAC_ADDR_LEN);
             vr_entry.flags = NDI_VR_ATTR_SRC_MAC_ADDRESS;
-            vr_entry.vrf_id = p_vrf->vrf_id;
+            vr_entry.vrf_id = p_vrf->vrf_obj_id;
 
             t_std_error     rc = STD_ERR_OK;
             /* Create default VRF and other vrfs as per FIB_MAX_VRF */
             if ((rc = ndi_route_vr_set_attribute(&vr_entry))!= STD_ERR_OK) {
-                HAL_RT_LOG_ERR("HAL-RT", "VR set for router MAC:%s change failed rc:%d",
-                               hal_rt_mac_to_str (&mac_addr, buf, HAL_RT_MAX_BUFSZ), rc);
+                HAL_RT_LOG_ERR("HAL-RT-RIF", "VR set for VRF-id:%d router MAC:%s change failed rc:%d",
+                               vrf_id, hal_rt_mac_to_str (&mac_addr, buf, HAL_RT_MAX_BUFSZ),
+                               rc);
             } else {
-                HAL_RT_LOG_INFO("HAL-RT", "RIF Mac is %s set as Router MAC",
-                                hal_rt_mac_to_str (&mac_addr, buf, HAL_RT_MAX_BUFSZ));
+                HAL_RT_LOG_INFO("HAL-RT-RIF", "VRF:%d RIF Mac is %s set as Router MAC",
+                                vrf_id, hal_rt_mac_to_str (&mac_addr, buf, HAL_RT_MAX_BUFSZ));
             }
         }
         rif_entry.flags = NDI_RIF_ATTR_SRC_MAC_ADDRESS;
         memcpy(&rif_entry.src_mac, &mac_addr, sizeof(hal_mac_addr_t));
-        HAL_RT_LOG_DEBUG("HAL-RT", "RIF Mac is %s",
-                      hal_rt_mac_to_str (&mac_addr, buf, HAL_RT_MAX_BUFSZ));
+        HAL_RT_LOG_DEBUG("HAL-RT-RIF", "RIF Mac is %s",
+                         hal_rt_mac_to_str (&mac_addr, buf, HAL_RT_MAX_BUFSZ));
     }
 
-    if (ndi_rif_create(&rif_entry, &rif_id)!= STD_ERR_OK) {
-        HAL_RT_LOG_ERR("NAS-ROUTE", "%s ():RIF id creation "
-                " failed for if_index = %d", __FUNCTION__, if_index);
-        return (0);
+    if (ndi_rif_create(&rif_entry, rif_id)!= STD_ERR_OK) {
+        HAL_RT_LOG_ERR("NAS-RT-RIF", "%s ():RIF id creation "
+                       " failed for if_index = %d", __FUNCTION__, if_index);
+        return STD_ERR(ROUTE,FAIL,0);
+    }
+
+    /*
+     * Configure RIF MTU
+     */
+    rif_entry.rif_id = *rif_id;
+    rif_entry.flags = NDI_RIF_ATTR_MTU;
+    rif_entry.mtu = hal_rt_get_max_mtu();
+    HAL_RT_LOG_INFO("HAL-RT-RIF", "RIF MTU for if_index %d is %d", if_index, rif_entry.mtu);
+    if (ndi_rif_set_attribute(&rif_entry) != STD_ERR_OK) {
+        HAL_RT_LOG_DEBUG("NAS-RT-RIF",
+                    "%s ():RIF update MTU " " failed for if_index = %d",
+                    __FUNCTION__, if_index);
     }
 
     /*
      * Save the RIF ID in the rif entry table
      */
-    rif_info.rif_id = rif_id;
+    rif_info.rif_id = *rif_id;
     rif_info.ref_count = 0;
     g_rif_entry_table.insert(std::make_pair(if_index, rif_info));
 
-    HAL_RT_LOG_DEBUG("HAL-RT-RIF", "RIF entry created for rif-id:%d intf:%s(%d) mac:%s type:%d",
-                     rif_id, intf_ctrl.if_name, if_index,
-                     hal_rt_mac_to_str (&mac_addr, buf, HAL_RT_MAX_BUFSZ), intf_ctrl.int_type);
-    return (rif_id);
+    HAL_RT_LOG_INFO("HAL-RT-RIF", "RIF entry created for rif-id:%d intf:%s(%d) mac:%s type:%d",
+                    *rif_id, intf_ctrl.if_name, if_index,
+                    hal_rt_mac_to_str (&mac_addr, buf, HAL_RT_MAX_BUFSZ), intf_ctrl.int_type);
+    return STD_ERR_OK;
 }
 
 t_std_error hal_rif_index_remove (npu_id_t npu_id, hal_vrf_id_t vrf_id, hal_ifindex_t if_index)
@@ -347,7 +517,7 @@ t_std_error hal_rif_index_remove (npu_id_t npu_id, hal_vrf_id_t vrf_id, hal_ifin
 
     /*  RIF entry if not present in the RIF able, return error */
     if (it == g_rif_entry_table.end()) {
-        HAL_RT_LOG_DEBUG("HAL-RT", "RIF id not present for if_index %d",
+        HAL_RT_LOG_DEBUG("HAL-RT-RIF", "RIF id not present for if_index %d",
                       if_index);
         return (STD_ERR(ROUTE, PARAM, 0));
     }
@@ -355,7 +525,7 @@ t_std_error hal_rif_index_remove (npu_id_t npu_id, hal_vrf_id_t vrf_id, hal_ifin
     rif_id = (it->second).rif_id;
 
     if (ndi_rif_delete(npu_id, rif_id) != STD_ERR_OK) {
-        HAL_RT_LOG_ERR("NAS-ROUTE", "%s ():RIF id Deletion "
+        HAL_RT_LOG_ERR("NAS-RT-RIF", "%s ():RIF id Deletion "
                 " failed for if_index = %d", __FUNCTION__, if_index);
         return (STD_ERR(ROUTE, PARAM, 0));
     }
@@ -364,7 +534,7 @@ t_std_error hal_rif_index_remove (npu_id_t npu_id, hal_vrf_id_t vrf_id, hal_ifin
      * Erase the RIF ID from the rif entry table
      */
     g_rif_entry_table.erase(if_index);
-    HAL_RT_LOG_DEBUG("HAL-RT", "RIF entry deleted: %d for if_index %d",
+    HAL_RT_LOG_INFO("HAL-RT-RIF", "RIF entry deleted: %d for if_index %d",
                  rif_id, if_index);
     return STD_ERR_OK;
 }
@@ -437,15 +607,17 @@ int fib_msg_main(void) {
             continue;
         auto p_msg = p_msg_uptr.get();
         switch(p_msg->type) {
-            case FIB_MSG_TYPE_INTF:
-                HAL_RT_LOG_DEBUG("HAL-RT-MSG-THREAD", "Interface msg processing");
-                hal_rt_process_intf_state_msg(&(p_msg->intf));
+            case FIB_MSG_TYPE_NL_INTF:
+            case FIB_MSG_TYPE_NBR_MGR_INTF:
+                HAL_RT_LOG_DEBUG("HAL-RT-MSG-THREAD",
+                                 "Interface msg processing type:%d", p_msg->type);
+                hal_rt_process_intf_state_msg(p_msg->type, &(p_msg->intf));
                 break;
-            case FIB_MSG_TYPE_ROUTE:
+            case FIB_MSG_TYPE_NL_ROUTE:
                 HAL_RT_LOG_DEBUG("HAL-RT-MSG-THREAD", "Route msg processing");
                 fib_proc_dr_download(&(p_msg->route));
                 break;
-            case FIB_MSG_TYPE_NBR:
+            case FIB_MSG_TYPE_NBR_MGR_NBR_INFO:
                 HAL_RT_LOG_DEBUG("HAL-RT-MSG-THREAD", "Nbr msg processing");
                 fib_proc_nbr_download(&(p_msg->nbr));
                 break;
@@ -481,6 +653,10 @@ std::string hal_rt_queue_stats ()
     return ss.str();
 }
 
+void hal_rt_sort_array(uint64_t data[], uint32_t count) {
+
+    std::sort(data,data+count);
+}
 #ifdef __cplusplus
 }
 #endif

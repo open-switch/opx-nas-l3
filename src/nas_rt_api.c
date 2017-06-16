@@ -23,6 +23,7 @@
 #include "nas_rt_api.h"
 #include "nas_os_l3.h"
 #include "hal_rt_util.h"
+#include "hal_if_mapping.h"
 #include "event_log_types.h"
 #include "event_log.h"
 #include "std_mutex_lock.h"
@@ -35,6 +36,7 @@
 #include "limits.h"
 #include <stdio.h>
 #include <stdint.h>
+#include "dell-base-neighbor.h"
 
 BASE_ROUTE_OBJ_t nas_route_check_route_key_attr(cps_api_object_t obj) {
 
@@ -220,9 +222,12 @@ cps_api_return_code_t  nas_route_process_cps_route(cps_api_transaction_params_t 
 
     cps_api_operation_types_t op = cps_api_object_type_operation(cps_api_object_key(obj));
 
-    if (nas_route_validate_route_attr(obj, (op == cps_api_oper_DELETE)? true:false) == false) {
-        HAL_RT_LOG_DEBUG("NAS-RT-CPS-SET", "Missing route key params");
-        return cps_api_ret_code_ERR;
+    /* for CPS ACTION, caller has validated the route attribute */
+    if (op != cps_api_oper_ACTION) {
+        if (nas_route_validate_route_attr(obj, (op == cps_api_oper_DELETE)? true:false) == false) {
+            HAL_RT_LOG_DEBUG("NAS-RT-CPS-SET", "Missing route key params");
+            return cps_api_ret_code_ERR;
+        }
     }
 
     /*
@@ -259,6 +264,12 @@ cps_api_return_code_t  nas_route_process_cps_route(cps_api_transaction_params_t 
         HAL_RT_LOG_DEBUG("NAS-RT-CPS-SET", "In Route update ");
         if(nas_os_set_route(obj) != STD_ERR_OK){
             HAL_RT_LOG_DEBUG("NAS-RT-CPS-SET", " OS Route update failed");
+            rc = cps_api_ret_code_ERR;
+        }
+    } else if (op == cps_api_oper_ACTION) {
+        HAL_RT_LOG_DEBUG("NAS-RT-CPS-SET", "In Route NH update ");
+        if(nas_os_update_route_nexthop(obj) != STD_ERR_OK){
+            HAL_RT_LOG_DEBUG("NAS-RT-CPS-SET", " OS Route NH update failed");
             rc = cps_api_ret_code_ERR;
         }
     }
@@ -339,7 +350,7 @@ static inline bool nas_rt_is_route_npu_prg_done(t_fib_dr *p_entry) {
     return true;
 }
 
-static inline bool nas_rt_is_nh_npu_prg_done(t_fib_nh *p_entry) {
+bool nas_rt_is_nh_npu_prg_done(t_fib_nh *p_entry) {
     int unit = 0;
     for (unit = 0; unit < hal_rt_access_fib_config()->max_num_npu; unit++) {
         if(p_entry->a_is_written [unit] == false)
@@ -404,10 +415,14 @@ static cps_api_object_t nas_route_info_to_cps_object(t_fib_dr *entry){
         cps_api_object_e_add(obj, parent_list, 3,
                              cps_api_object_ATTR_T_U32, &p_nh->key.if_index, sizeof(p_nh->key.if_index));
 
-        char if_name[HAL_IF_NAME_SZ];
-        if (hal_rt_get_intf_name(p_nh->key.if_index, if_name) == STD_ERR_OK) {
-            cps_api_object_attr_add(obj, BASE_ROUTE_OBJ_ENTRY_NH_LIST_IFNAME, (const void *)if_name,
-                                    strlen(if_name)+1);
+        t_fib_intf *p_intf = fib_get_intf (p_nh->key.if_index, p_nh->vrf_id,
+                               p_nh->key.ip_addr.af_index);
+        if (p_intf != NULL) {
+            HAL_RT_LOG_DEBUG("HAL-RT-API","get the interface name for :%d (%s)",
+                           p_nh->key.if_index, p_intf->if_name);
+            cps_api_object_attr_add(obj, BASE_ROUTE_OBJ_ENTRY_NH_LIST_IFNAME,
+                                    (const void *)p_intf->if_name,
+                                    strlen(p_intf->if_name)+1);
         } else {
             HAL_RT_LOG_ERR("HAL-RT-API","Failed to get the interface name for :%d", p_nh->key.if_index);
             cps_api_object_delete(obj);
@@ -452,7 +467,7 @@ cps_api_object_t nas_route_nh_to_arp_cps_object(t_fib_nh *entry, cps_api_operati
     memset(mac_addr, '\0', sizeof(mac_addr));
     hal_rt_mac_to_str (&entry->p_arp_info->mac_addr, mac_addr, HAL_RT_MAX_BUFSZ);
 
-    HAL_RT_LOG_DEBUG("HAL-RT-NH-PUB", "VRF %d. Addr: %s, Interface: %d MAC:%s age-out:%d op:%d\r\n",
+    HAL_RT_LOG_DEBUG("HAL-RT-NH-PUB", "VRF %d. Addr: %s, Interface: %d MAC:%s age-out:%d op:%d",
                      entry->vrf_id, FIB_IP_ADDR_TO_STR (&entry->key.ip_addr),
                      entry->key.if_index, mac_addr, entry->reachable_state_time_stamp, op);
 
@@ -479,15 +494,18 @@ cps_api_object_t nas_route_nh_to_arp_cps_object(t_fib_nh *entry, cps_api_operati
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_AF,entry->key.ip_addr.af_index);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_IFINDEX,entry->key.if_index);
 
-    char if_name[HAL_IF_NAME_SZ];
-    if (hal_rt_get_intf_name(entry->key.if_index, if_name) == STD_ERR_OK) {
-        cps_api_object_attr_add(obj, BASE_ROUTE_OBJ_NBR_IFNAME, (const void *)if_name,
-                                strlen(if_name)+1);
-    } else if (op != cps_api_oper_DELETE) {
+    t_fib_intf *p_intf = fib_get_intf (entry->key.if_index, entry->vrf_id,
+                                       entry->key.ip_addr.af_index);
+    if (p_intf != NULL) {
+        HAL_RT_LOG_DEBUG("HAL-RT-API","NH to ARP - get the interface name for :%d(%s)",
+                       entry->key.if_index, p_intf->if_name);
+        cps_api_object_attr_add(obj, BASE_ROUTE_OBJ_NBR_IFNAME, (const void *)p_intf->if_name,
+                                strlen(p_intf->if_name)+1);
+    } else {
         /* While publishing the Neighbor del, it's expected to get the get_intf_name failure,
          * because interface (VLAN/LAG) delete could have triggered the neighbor delete(s) */
         HAL_RT_LOG_ERR("HAL-RT-ARP","Failed to get the interface name for :%d",
-               entry->p_arp_info->if_index);
+                       entry->p_arp_info->if_index);
         cps_api_object_delete(obj);
         return NULL;
     }
@@ -525,7 +543,6 @@ cps_api_object_t nas_route_nh_to_arp_cps_object(t_fib_nh *entry, cps_api_operati
 
     return obj;
 }
-
 
 t_std_error nas_route_get_all_route_info(cps_api_object_list_t list, uint32_t vrf_id, uint32_t af,
                                          hal_ip_addr_t *p_prefix, uint32_t pref_len, bool is_specific_prefix_get) {
@@ -581,7 +598,7 @@ static void nas_route_nht_add_nh_info_to_cps_object (cps_api_object_t obj, t_fib
                              cps_api_object_ATTR_T_BIN, &p_nh->key.ip_addr.u.v6_addr, addr_len);
     }
 
-    HAL_RT_LOG_DEBUG("HAL-RT-NHT", "Get NHT: Adding NH info to NH-List vrf_id: %d, af: %d, dest: %s \r\n",
+    HAL_RT_LOG_DEBUG("HAL-RT-NHT", "Get NHT: Adding NH info to NH-List vrf_id: %d, af: %d, dest: %s ",
                  p_nh->vrf_id, p_nh->key.ip_addr.af_index, FIB_IP_ADDR_TO_STR (&(p_nh->key.ip_addr)));
 
     parent_list[2] = BASE_ROUTE_NH_TRACK_NH_INFO_MAC_ADDR;
@@ -652,7 +669,7 @@ static cps_api_object_t nas_route_nht_info_to_cps_object(t_fib_nht *entry, cps_a
                               addr_len);
     }
 
-    HAL_RT_LOG_DEBUG("HAL-RT-NHT", "Get NHT: vrf_id: %d, af: %d, dest: %s best_match_addr: %s\r\n",
+    HAL_RT_LOG_DEBUG("HAL-RT-NHT", "Get NHT: vrf_id: %d, af: %d, dest: %s best_match_addr: %s",
                  entry->vrf_id, entry->key.dest_addr.af_index, FIB_IP_ADDR_TO_STR (&(entry->key.dest_addr)),
                  FIB_IP_ADDR_TO_STR (&(entry->fib_match_dest_addr)));
 
@@ -666,7 +683,7 @@ static cps_api_object_t nas_route_nht_info_to_cps_object(t_fib_nht *entry, cps_a
 
         /* for create or delete, either p_best_dr or p_nh will be valid,
          * so no need to lookup nh/dr again. lookup only if it's called from GET flow */
-        if (((op != cps_api_oper_CREATE) && (op != cps_api_oper_DELETE))) {
+        if (op == cps_api_oper_NULL) {
             /* Check if this dest_addr is already resolved in NextHop or Route table */
             p_nh = fib_get_next_nh(entry->vrf_id, &entry->fib_match_dest_addr, 0);
         }
@@ -681,7 +698,7 @@ static cps_api_object_t nas_route_nht_info_to_cps_object(t_fib_nht *entry, cps_a
         } else {
             /* for create or delete, either p_best_dr or p_nh will be valid,
              * so no need to lookup nh/dr again. lookup only if it's called from GET flow */
-            if (((op != cps_api_oper_CREATE) && (op != cps_api_oper_DELETE))) {
+            if (op == cps_api_oper_NULL) {
                 p_best_dr = fib_get_dr(entry->vrf_id, &entry->fib_match_dest_addr, entry->prefix_len);
             }
             if (p_best_dr != NULL) {
@@ -697,18 +714,18 @@ static cps_api_object_t nas_route_nht_info_to_cps_object(t_fib_nht *entry, cps_a
             }
         }
     }
-    HAL_RT_LOG_DEBUG("HAL-RT-NHT", "Get NHT: NH Count %d\r\n", nh_count);
+    HAL_RT_LOG_DEBUG("HAL-RT-NHT", "Get NHT: NH Count %d", nh_count);
     cps_api_object_attr_add_u32(obj, BASE_ROUTE_NH_TRACK_NH_COUNT, nh_count);
 
 
     if (FIB_IS_AFINDEX_VALID (entry->fib_match_dest_addr.af_index)) {
         HAL_RT_LOG_DEBUG("HAL-RT-NHT",
-                     "NHT Event publish for nht_dest:%s, nh_count:%d, nht_best_match_dest:%s/%d \r\n",
+                     "NHT Event publish for nht_dest:%s, nh_count:%d, nht_best_match_dest:%s/%d ",
                      FIB_IP_ADDR_TO_STR (&entry->key.dest_addr), nh_count,
                      FIB_IP_ADDR_TO_STR (&entry->fib_match_dest_addr), entry->prefix_len);
     } else {
         HAL_RT_LOG_DEBUG("HAL-RT-NHT",
-                     "NHT Event publish for nht_dest:%s, nh_count:%d, nht_best_match_dest:-\r\n",
+                     "NHT Event publish for nht_dest:%s, nh_count:%d, nht_best_match_dest:-",
                      FIB_IP_ADDR_TO_STR (&entry->key.dest_addr), nh_count);
 
     }
@@ -724,7 +741,7 @@ t_std_error nas_route_get_all_nht_info(cps_api_object_list_t list,
 
     t_fib_nht *p_nht = NULL;
 
-    HAL_RT_LOG_DEBUG("HAL-RT-NHT", "Get NHT: vrf_id: %d, af: %d \r\n",
+    HAL_RT_LOG_DEBUG("HAL-RT-NHT", "Get NHT: vrf_id: %d, af: %d ",
                  vrf_id, af);
 
     if (af >= FIB_MAX_AFINDEX)
@@ -734,7 +751,7 @@ t_std_error nas_route_get_all_nht_info(cps_api_object_list_t list,
     }
 
     if (p_dest_addr != NULL) {
-        HAL_RT_LOG_DEBUG("HAL-RT-NHT", "Get NHT: for dest:%s \r\n",
+        HAL_RT_LOG_DEBUG("HAL-RT-NHT", "Get NHT: for dest:%s ",
                      FIB_IP_ADDR_TO_STR (p_dest_addr));
         p_nht = fib_get_nht (vrf_id, p_dest_addr);
     } else {
@@ -743,7 +760,7 @@ t_std_error nas_route_get_all_nht_info(cps_api_object_list_t list,
 
     while (p_nht != NULL) {
 
-        HAL_RT_LOG_DEBUG("HAL-RT-NHT", "Get NHT: vrf_id: %d, af: %d, dest: %s \r\n",
+        HAL_RT_LOG_DEBUG("HAL-RT-NHT", "Get NHT: vrf_id: %d, af: %d, dest: %s ",
                      vrf_id, af, FIB_IP_ADDR_TO_STR (&(p_nht->key.dest_addr)));
 
         cps_api_operation_types_t op = cps_api_oper_NULL; // for now action is dummy for get request
@@ -765,16 +782,24 @@ t_std_error nas_route_get_all_nht_info(cps_api_object_list_t list,
 
 int nas_rt_publish_nht(t_fib_nht *p_nht, t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
 
-    HAL_RT_LOG_DEBUG("HAL-RT-NHT", "Publishing a NHT information dest_addr:%s p_dr:%p p_nh:%p is_add:%d\r\n",
-                 FIB_IP_ADDR_TO_STR (&p_nht->key.dest_addr), p_dr, p_nh, is_add);
+    HAL_RT_LOG_DEBUG("HAL-RT-NHT", "Publishing a NHT information dest_addr:%s p_dr:%p p_nh:%p is_add:%d",
+                     FIB_IP_ADDR_TO_STR (&p_nht->key.dest_addr), p_dr, p_nh, is_add);
 
-    if ((p_nht == NULL) || ((p_dr == NULL) && (p_nh == NULL)))
-    {
+    if (p_nht == NULL)
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
+
+    cps_api_operation_types_t op;
+
+    if (is_add) {
+        if (p_nht->is_create_pub == false) {
+            op = cps_api_oper_CREATE;
+            p_nht->is_create_pub = true;
+        } else {
+            op = cps_api_oper_SET;
+        }
+    } else {
+        op = cps_api_oper_DELETE;
     }
-
-    cps_api_operation_types_t op = (is_add) ? cps_api_oper_CREATE :cps_api_oper_DELETE;
-
     cps_api_object_t obj = nas_route_nht_info_to_cps_object(p_nht, op, p_dr, p_nh);
     if(obj != NULL){
         if(nas_route_nht_publish_object(obj)!= STD_ERR_OK){
@@ -782,8 +807,71 @@ int nas_rt_publish_nht(t_fib_nht *p_nht, t_fib_dr *p_dr, t_fib_nh *p_nh, bool is
         }
     }
 
-
     return STD_ERR_OK;
 }
 
+cps_api_object_t nas_route_nh_to_nbr_cps_object(t_fib_nh *entry, cps_api_operation_types_t op, bool is_pub){
 
+    cps_api_object_t obj = cps_api_object_create();
+    if(obj == NULL){
+        HAL_RT_LOG_ERR("HAL-RT-ARP","Failed to allocate memory to cps object");
+        return NULL;
+    }
+
+    cps_api_key_t key;
+    cps_api_key_from_attr_with_qual(&key, BASE_NEIGHBOR_BASE_ROUTE_OBJ_NBR_OBJ,
+                                    (is_pub ? cps_api_qualifier_OBSERVED : cps_api_qualifier_TARGET));
+    if (is_pub)
+        cps_api_object_set_type_operation(&key,op);
+
+    cps_api_object_set_key(obj,&key);
+
+    if(entry->key.ip_addr.af_index == HAL_INET4_FAMILY){
+        cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_ADDRESS,entry->key.ip_addr.u.ipv4.s_addr);
+    }else{
+        cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_NBR_ADDRESS,(void *)entry->key.ip_addr.u.ipv6.s6_addr,HAL_INET6_LEN);
+    }
+    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_VRF_ID,entry->vrf_id);
+    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_AF,entry->key.ip_addr.af_index);
+    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_IFINDEX,entry->key.if_index);
+
+    HAL_RT_LOG_INFO("HAL-RT-NH-PUB", "op:%d Resolve ARP for VRF %d. Addr: %s, Interface: %d "
+                   "route-cnt:%d nht-active:%d",
+                   op, entry->vrf_id, FIB_IP_ADDR_TO_STR (&entry->key.ip_addr),
+                   entry->key.if_index, entry->rtm_ref_count, entry->is_nht_active);
+    return obj;
+}
+
+
+/* Publish the NH to Nbr-mgr for proactive resolution */
+bool nas_route_resolve_nh(t_fib_nh *entry, bool is_add) {
+
+    if(entry == NULL){
+        HAL_RT_LOG_ERR("HAL-RT-ARP","Null NH entry pointer passed to convert it to cps object");
+        return NULL;
+    }
+
+    HAL_RT_LOG_DEBUG("HAL-RT-NH-PUB", "Resolve ARP for VRF %d. Addr: %s, Interface: %d route-cnt:%d nht-active:%d is_add:%d",
+                   entry->vrf_id, FIB_IP_ADDR_TO_STR (&entry->key.ip_addr),
+                   entry->key.if_index, entry->rtm_ref_count, entry->is_nht_active, is_add);
+    cps_api_object_t obj = nas_route_nh_to_nbr_cps_object(entry, (is_add ? cps_api_oper_CREATE: cps_api_oper_DELETE), true);
+    if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
+        HAL_RT_LOG_ERR("HAL-RT-NH-PUB","Failed to publish NH entry for resolution");
+        return false;
+    }
+    return true;
+}
+
+bool nas_route_is_rsvd_intf(hal_ifindex_t if_index) {
+
+    interface_ctrl_t intf_ctrl;
+    memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
+    intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF;
+    intf_ctrl.if_index = if_index;
+
+    if(dn_hal_get_interface_info(&intf_ctrl) != STD_ERR_OK) {
+        return false;
+    }
+
+    return false;
+}

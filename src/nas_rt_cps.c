@@ -29,9 +29,12 @@
 #include "cps_api_events.h"
 #include "hal_rt_util.h"
 #include "std_utils.h"
+#include "hal_if_mapping.h"
+#include "dell-base-l2-mac.h"
 
 #include <stdlib.h>
 #include "std_mac_utils.h"
+#include "dell-base-neighbor.h"
 
 static cps_api_event_service_handle_t handle;
 static cps_api_event_service_handle_t handle_nht;
@@ -77,9 +80,76 @@ static cps_api_return_code_t nas_route_cps_route_set_func(void *ctx,
     return rc;
 }
 
+/* This function is used to process route nexthop append/delete operation RPC */
+static cps_api_return_code_t nas_route_nh_operation_handler (void * context,
+                                                    cps_api_transaction_params_t * param,
+                                                    size_t ix) {
+    cps_api_object_attr_t route_af;
+    cps_api_object_attr_t prefix;
+    cps_api_object_attr_t pref_len;
+    cps_api_object_attr_t route_nh_op;
+    cps_api_object_attr_t nh_count;
+    cps_api_return_code_t rc = cps_api_ret_code_ERR;
+    uint32_t nhc = 0;
+
+    if(param == NULL){
+        HAL_RT_LOG_ERR("NAS-RT-CPS-ACTION", "Route NH Operation with no param");
+        return cps_api_ret_code_ERR;
+    }
+
+    cps_api_object_t obj = cps_api_object_list_get(param->change_list,ix);
+    if (obj == NULL) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS-ACTION","Route NH Operation object is not present");
+        return cps_api_ret_code_ERR;
+    }
+
+    cps_api_operation_types_t op = cps_api_object_type_operation(cps_api_object_key(obj));
+
+    if (op != cps_api_oper_ACTION) {
+        HAL_RT_LOG_DEBUG("NAS-RT-CPS-ACTION", "Invalid Route NH operation action");
+        return cps_api_ret_code_ERR;
+    }
+
+    /*
+     * Check mandatory key attributes
+     */
+    route_af     = cps_api_get_key_data(obj, BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_AF);
+    prefix       = cps_api_get_key_data(obj, BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_ROUTE_PREFIX);
+    pref_len     = cps_api_get_key_data(obj, BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_PREFIX_LEN);
+    route_nh_op  = cps_api_get_key_data(obj, BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_OPERATION);
+    nh_count     = cps_api_get_key_data(obj, BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_NH_COUNT);
+
+    /*
+     * for route nh append/delete operation check the mandatory attrs
+     */
+    if (route_af == CPS_API_ATTR_NULL || prefix == CPS_API_ATTR_NULL ||
+        pref_len == CPS_API_ATTR_NULL || route_nh_op == CPS_API_ATTR_NULL ||
+        nh_count == CPS_API_ATTR_NULL)
+    {
+        HAL_RT_LOG_ERR("NAS-RT-CPS-ACTION", "Missing route nh operation key params");
+        return cps_api_ret_code_ERR;
+    }
+
+    nhc = cps_api_object_attr_data_u32(nh_count);
+
+    /*
+     * for route nh append/delete operation nh count should be non-zero.
+     */
+    if (nhc == 0)
+    {
+        HAL_RT_LOG_ERR("NAS-RT-CPS-ACTION", "NH Count cannot be zero for route nh append/delete operation");
+        return cps_api_ret_code_ERR;
+    }
+
+    rc = nas_route_process_cps_route(param,ix);
+
+    return rc;
+}
+
+
 static cps_api_return_code_t nas_route_cps_all_route_get_func (void *ctx,
                               cps_api_get_params_t * param, size_t ix) {
-    uint32_t af = 0, vrf = 0, pref_len = 0;
+    uint32_t af = HAL_INET4_FAMILY, vrf = 0, pref_len = 0;
     hal_ip_addr_t ip;
     bool is_specific_prefix_get = false;
 
@@ -94,18 +164,17 @@ static cps_api_return_code_t nas_route_cps_all_route_get_func (void *ctx,
     cps_api_object_attr_t prefix_attr = cps_api_get_key_data(filt,BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX);
     cps_api_object_attr_t pref_len_attr = cps_api_get_key_data(filt,BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN);
 
-    if(af_attr == NULL){
-        HAL_RT_LOG_ERR("NAS-RT-CPS","No address family passed to get Route entries");
-        return cps_api_ret_code_ERR;
-    } else if (((prefix_attr != NULL) && (pref_len_attr == NULL)) ||
-               ((prefix_attr == NULL) && (pref_len_attr != NULL))) {
-        HAL_RT_LOG_ERR("NAS-RT-CPS","Invalid prefix info prefix:%s len:%s",
-               ((prefix_attr == NULL) ? "Not Present" : "Present"),
-               ((pref_len_attr == NULL) ? "Not Present" : "Present"));
+    if (((prefix_attr != NULL) && (pref_len_attr == NULL)) ||
+        ((prefix_attr == NULL) && (pref_len_attr != NULL))) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS","Invlaid prefix info prefix:%s len:%s",
+                       ((prefix_attr == NULL) ? "Not Present" : "Present"),
+                       ((pref_len_attr == NULL) ? "Not Present" : "Present"));
         return cps_api_ret_code_ERR;
     }
 
-    af = cps_api_object_attr_data_u32(af_attr);
+    if (af_attr)
+        af = cps_api_object_attr_data_u32(af_attr);
+
     if (vrf_attr != NULL) {
         vrf = cps_api_object_attr_data_u32(vrf_attr);
         if (!(FIB_IS_VRF_ID_VALID (vrf))) {
@@ -114,6 +183,10 @@ static cps_api_return_code_t nas_route_cps_all_route_get_func (void *ctx,
         }
     }
     if (pref_len_attr != NULL) {
+        if (af_attr == NULL) {
+            HAL_RT_LOG_ERR("NAS-RT-CPS","Error - Route address family is not present");
+            return cps_api_ret_code_ERR;
+        }
         is_specific_prefix_get = true;
         pref_len = cps_api_object_attr_data_u32(pref_len_attr);
         if(af == AF_INET) {
@@ -124,15 +197,28 @@ static cps_api_return_code_t nas_route_cps_all_route_get_func (void *ctx,
             std_ip_from_inet6(&ip,inp6);
         }
     }
-    t_std_error rc;
+    cps_api_return_code_t rc = cps_api_ret_code_OK;
 
     nas_l3_lock();
-    if((rc = nas_route_get_all_route_info(param->list,vrf, af, &ip, pref_len, is_specific_prefix_get)) != STD_ERR_OK){
-        nas_l3_unlock();
-        return cps_api_ret_code_ERR;
-    }
+    do {
+        /* if address family is not given, get all family routes */
+        if ((af_attr == NULL) || (af == HAL_INET4_FAMILY)) {
+            if(nas_route_get_all_route_info(param->list,vrf, HAL_INET4_FAMILY,
+                                            &ip, pref_len, is_specific_prefix_get) != STD_ERR_OK){
+                rc = cps_api_ret_code_ERR;
+                break;
+            }
+        }
+        if ((af_attr == NULL) || (af == HAL_INET6_FAMILY)) {
+            if(nas_route_get_all_route_info(param->list,vrf, HAL_INET6_FAMILY,
+                                            &ip, pref_len, is_specific_prefix_get) != STD_ERR_OK){
+                rc = cps_api_ret_code_ERR;
+                break;
+            }
+        }
+    } while(0);
     nas_l3_unlock();
-    return cps_api_ret_code_OK;
+    return rc;
 }
 
 static cps_api_return_code_t nas_route_cps_route_get_func (void *ctx,
@@ -195,8 +281,7 @@ static cps_api_return_code_t nas_route_cps_nht_get_func (void * ctx,
     cps_api_object_attr_t dest_attr;
     t_fib_ip_addr  dest_addr;
     unsigned int vrf_id =0;
-    unsigned int af = 0;
-    t_std_error rc;
+    unsigned int af = HAL_INET4_FAMILY;
 
     if (filt == NULL) {
         HAL_RT_LOG_ERR("NAS-RT-CPS","NHT object is not present");
@@ -214,11 +299,7 @@ static cps_api_return_code_t nas_route_cps_nht_get_func (void * ctx,
         HAL_RT_LOG_DEBUG("NAS-RT-CPS","Get NHT entries: vrf_id %d", vrf_id);
     }
 
-    if(af_attr == NULL) {
-        HAL_RT_LOG_DEBUG(
-                     "NAS-RT-CPS","Get NHT entries: No address family given");
-        return cps_api_ret_code_ERR;
-    } else {
+    if (af_attr) {
         af = cps_api_object_attr_data_u32(af_attr);
         HAL_RT_LOG_DEBUG("NAS-RT-CPS","Get NHT entries: af %d", af);
     }
@@ -226,8 +307,13 @@ static cps_api_return_code_t nas_route_cps_nht_get_func (void * ctx,
     memset (&dest_addr, 0, sizeof (t_fib_ip_addr));
 
     if (dest_attr != NULL) {
-        HAL_RT_LOG_DEBUG("HAL-RT-NHT", "Get NHT: input for specific dest_addr\r\n");
-        if(af == AF_INET) {
+        if (af_attr == NULL) {
+            HAL_RT_LOG_ERR("NAS-RT-CPS","Error - NHT address family is not present");
+            return cps_api_ret_code_ERR;
+        }
+
+        HAL_RT_LOG_DEBUG("HAL-RT-NHT", "Get NHT: input for specific dest_addr");
+        if(af == HAL_INET4_FAMILY) {
             struct in_addr *inp = (struct in_addr *) cps_api_object_attr_data_bin(dest_attr);
             std_ip_from_inet(&dest_addr,inp);
         } else {
@@ -236,16 +322,27 @@ static cps_api_return_code_t nas_route_cps_nht_get_func (void * ctx,
         }
     }
 
-
+    cps_api_return_code_t rc = cps_api_ret_code_OK;
     nas_l3_lock();
-    if((rc = nas_route_get_all_nht_info(param->list, vrf_id, af,
-                                        ((dest_attr != NULL) ? (&dest_addr): NULL))) != STD_ERR_OK){
-        nas_l3_unlock();
-        return (cps_api_return_code_t)rc;
-    }
-
+    do {
+        /* if address family is not given, get all family nhts */
+        if ((af_attr == NULL) || (af == HAL_INET4_FAMILY)) {
+            if (nas_route_get_all_nht_info(param->list, vrf_id, HAL_INET4_FAMILY,
+                                                ((dest_attr != NULL) ? (&dest_addr): NULL)) != STD_ERR_OK){
+                rc = cps_api_ret_code_ERR;
+                break;
+            }
+        }
+        if ((af_attr == NULL) || (af == HAL_INET6_FAMILY)) {
+            if (nas_route_get_all_nht_info(param->list, vrf_id, HAL_INET6_FAMILY,
+                                                ((dest_attr != NULL) ? (&dest_addr): NULL)) != STD_ERR_OK){
+                rc = cps_api_ret_code_ERR;
+                break;
+            }
+        }
+    } while(0);
     nas_l3_unlock();
-    return cps_api_ret_code_OK;
+    return rc;
 }
 
 static cps_api_return_code_t nas_route_cps_nht_rollback_func (void * ctx,
@@ -257,10 +354,9 @@ static cps_api_return_code_t nas_route_cps_nht_rollback_func (void * ctx,
 
 static cps_api_return_code_t nas_route_cps_arp_get_func(void *context,
                                 cps_api_get_params_t * param, size_t ix) {
-    uint32_t af = 0, vrf = 0;
+    uint32_t af = HAL_INET4_FAMILY, vrf = 0;
     hal_ip_addr_t ip;
     bool is_specific_nh_get = false;
-    t_std_error rc;
 
     cps_api_object_t filt = cps_api_object_list_get(param->filters,ix);
     if (filt == NULL) {
@@ -272,12 +368,9 @@ static cps_api_return_code_t nas_route_cps_arp_get_func(void *context,
     cps_api_object_attr_t nh_attr = cps_api_get_key_data(filt,BASE_ROUTE_OBJ_NBR_ADDRESS);
 
     HAL_RT_LOG_DEBUG("NAS-RT-CPS", "All ARP get function");
-    if(af_attr == NULL){
-        HAL_RT_LOG_ERR("NAS-RT-CPS","No address family passed to get ARP entries");
-        return cps_api_ret_code_ERR;
-    }
+    if (af_attr)
+        af = cps_api_object_attr_data_u32(af_attr);
 
-    af = cps_api_object_attr_data_u32(af_attr);
     if (vrf_attr != NULL) {
         vrf = cps_api_object_attr_data_u32(vrf_attr);
         if (!(FIB_IS_VRF_ID_VALID (vrf))) {
@@ -286,8 +379,13 @@ static cps_api_return_code_t nas_route_cps_arp_get_func(void *context,
         }
     }
     if (nh_attr != NULL) {
+        if (af_attr == NULL) {
+            HAL_RT_LOG_ERR("NAS-RT-CPS","Error - Neighbor address family is not present!");
+            return cps_api_ret_code_ERR;
+        }
+
         is_specific_nh_get = true;
-        if(af == AF_INET) {
+        if(af == HAL_INET4_FAMILY) {
             struct in_addr *inp = (struct in_addr *) cps_api_object_attr_data_bin(nh_attr);
             std_ip_from_inet(&ip,inp);
         } else {
@@ -296,14 +394,28 @@ static cps_api_return_code_t nas_route_cps_arp_get_func(void *context,
         }
     }
 
+    cps_api_return_code_t rc = cps_api_ret_code_OK;
     nas_l3_lock();
-    if((rc = nas_route_get_all_arp_info(param->list,vrf, af, &ip, is_specific_nh_get)) != STD_ERR_OK){
-        nas_l3_unlock();
-        return (cps_api_return_code_t)rc;
-    }
+    do {
+        /* if address family is not given, get all family neighbors  */
+        if ((af_attr == NULL) || (af == HAL_INET4_FAMILY)) {
+            if (nas_route_get_all_arp_info(param->list,vrf, HAL_INET4_FAMILY,
+                                           &ip, is_specific_nh_get, false) != STD_ERR_OK){
+                rc = cps_api_ret_code_ERR;
+                break;
+            }
+        }
+        if ((af_attr == NULL) || (af == HAL_INET6_FAMILY)) {
+            if (nas_route_get_all_arp_info(param->list,vrf, HAL_INET6_FAMILY,
+                                           &ip, is_specific_nh_get, false) != STD_ERR_OK){
+                rc = cps_api_ret_code_ERR;
+                break;
+            }
+        }
 
+    } while (0);
     nas_l3_unlock();
-    return cps_api_ret_code_OK;
+    return rc;
 }
 
 static cps_api_return_code_t nas_route_cps_peer_routing_set_func(void *ctx,
@@ -525,6 +637,173 @@ static t_std_error nas_route_nht_event_handle_init(){
     return STD_ERR_OK;
 }
 
+t_std_error nas_route_process_cps_nbr_intf_msg(cps_api_transaction_params_t * param, size_t ix) {
+
+    cps_api_object_t obj = cps_api_object_list_get(param->change_list,ix);
+    cps_api_return_code_t rc = cps_api_ret_code_OK;
+
+    cps_api_object_attr_t if_index_attr =
+        cps_api_object_attr_get(obj, BASE_NEIGHBOR_IF_INTERFACES_STATE_INTERFACE_IF_INDEX);
+    cps_api_object_attr_t enabled_attr = cps_api_object_attr_get(obj,
+                                                                 IF_INTERFACES_INTERFACE_ENABLED);
+    if (if_index_attr == NULL) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS", "Missing Nbr Intf Object");
+        return cps_api_ret_code_ERR;
+    }
+    bool is_admin_up = (bool)cps_api_object_attr_data_u32(enabled_attr);
+    hal_ifindex_t if_index = cps_api_object_attr_data_u32(if_index_attr);
+
+    t_fib_msg *p_msg = hal_rt_alloc_mem_msg();
+    if (p_msg) {
+        memset(p_msg, 0, sizeof(t_fib_msg));
+        p_msg->type = FIB_MSG_TYPE_NBR_MGR_INTF;
+        p_msg->intf.if_index = if_index;
+        p_msg->intf.admin_status = (is_admin_up ? RT_INTF_ADMIN_STATUS_UP : RT_INTF_ADMIN_STATUS_DOWN);
+        if (cps_api_object_type_operation(cps_api_object_key(obj)) == cps_api_oper_DELETE)
+            p_msg->intf.is_op_del = true;
+
+        nas_rt_process_msg(p_msg);
+    }
+
+    return rc;
+}
+
+t_std_error nas_route_process_cps_nbr_msg(cps_api_transaction_params_t * param, size_t ix) {
+
+    cps_api_object_t obj = cps_api_object_list_get(param->change_list,ix);
+    cps_api_return_code_t rc = cps_api_ret_code_OK;
+
+    t_fib_msg *p_msg = NULL;
+    //g_fib_gbl_info.num_nei_msg++;
+    p_msg = hal_rt_alloc_mem_msg();
+    if (p_msg) {
+        memset(p_msg, 0, sizeof(t_fib_msg));
+        p_msg->type = FIB_MSG_TYPE_NBR_MGR_NBR_INFO;
+        hal_rt_cps_obj_to_neigh(obj, &(p_msg->nbr));
+        nas_rt_process_msg(p_msg);
+    }
+    return rc;
+}
+
+static cps_api_return_code_t nas_route_cps_nbr_set_func(void *ctx,
+                                                        cps_api_transaction_params_t * param,
+                                                        size_t ix) {
+    cps_api_object_t          obj;
+
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS-SET", "NBR configuration set");
+    if(param == NULL){
+        HAL_RT_LOG_ERR("NAS-RT-CPS", "Nbr set with no param: ");
+        return cps_api_ret_code_ERR;
+    }
+
+    obj = cps_api_object_list_get (param->change_list, ix);
+    if (obj == NULL) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS", "Missing Nbr Object");
+        return cps_api_ret_code_ERR;
+    }
+
+    cps_api_return_code_t rc = cps_api_ret_code_OK;
+    rc = nas_route_process_cps_nbr_msg(param,ix);
+
+    return rc;
+}
+
+static cps_api_return_code_t nas_route_cps_nbr_get_func (void *ctx,
+                                                         cps_api_get_params_t * param,
+                                                         size_t ix) {
+    uint32_t af = 0, vrf = 0;
+    hal_ip_addr_t ip;
+    bool is_specific_nh_get = false;
+    t_std_error rc;
+
+    cps_api_object_t filt = cps_api_object_list_get(param->filters,ix);
+    if (filt == NULL) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS","Neighbor object is not present");
+        return cps_api_ret_code_ERR;
+    }
+    cps_api_object_attr_t vrf_attr = cps_api_get_key_data(filt,BASE_ROUTE_OBJ_NBR_VRF_ID);
+    cps_api_object_attr_t af_attr = cps_api_get_key_data(filt,BASE_ROUTE_OBJ_NBR_AF);
+    cps_api_object_attr_t nh_attr = cps_api_get_key_data(filt,BASE_ROUTE_OBJ_NBR_ADDRESS);
+
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS", "All neighbor get function");
+    if(af_attr == NULL){
+        HAL_RT_LOG_ERR("NAS-RT-CPS","No address family passed to get ARP entries");
+        return cps_api_ret_code_ERR;
+    }
+
+    af = cps_api_object_attr_data_u32(af_attr);
+    if (vrf_attr != NULL) {
+        vrf = cps_api_object_attr_data_u32(vrf_attr);
+        if (!(FIB_IS_VRF_ID_VALID (vrf))) {
+            HAL_RT_LOG_ERR("NAS-RT-CPS-GET", "VRF-id:%d is not valid!", vrf);
+            return cps_api_ret_code_ERR;
+        }
+    }
+    if (nh_attr != NULL) {
+        is_specific_nh_get = true;
+        if(af == AF_INET) {
+            struct in_addr *inp = (struct in_addr *) cps_api_object_attr_data_bin(nh_attr);
+            std_ip_from_inet(&ip,inp);
+        } else {
+            struct in6_addr *inp6 = (struct in6_addr *) cps_api_object_attr_data_bin(nh_attr);
+            std_ip_from_inet6(&ip,inp6);
+        }
+    }
+
+    nas_l3_lock();
+    if((rc = nas_route_get_all_arp_info(param->list,vrf, af, &ip, is_specific_nh_get, true)) != STD_ERR_OK){
+        nas_l3_unlock();
+        return (cps_api_return_code_t)rc;
+    }
+
+    nas_l3_unlock();
+
+    return cps_api_ret_code_OK;
+}
+
+static cps_api_return_code_t nas_route_cps_nbr_rollback_func(void * ctx,
+                                                             cps_api_transaction_params_t * param, size_t ix){
+
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS", "NBR configuration Rollback function");
+    return cps_api_ret_code_OK;
+}
+
+static cps_api_return_code_t nas_route_cps_nbr_intf_set_func(void *ctx,
+                                                             cps_api_transaction_params_t * param,
+                                                             size_t ix) {
+    cps_api_object_t          obj;
+
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS-SET", "NBR Intf set");
+    if(param == NULL){
+        HAL_RT_LOG_ERR("NAS-RT-CPS", "Nbr set with no param: ");
+        return cps_api_ret_code_ERR;
+    }
+
+    obj = cps_api_object_list_get (param->change_list, ix);
+    if (obj == NULL) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS", "Missing Nbr Object");
+        return cps_api_ret_code_ERR;
+    }
+
+    cps_api_return_code_t rc = cps_api_ret_code_OK;
+    rc = nas_route_process_cps_nbr_intf_msg(param,ix);
+
+    return rc;
+}
+
+static cps_api_return_code_t nas_route_cps_nbr_intf_get_func (void *ctx,
+                                                              cps_api_get_params_t * param,
+                                                              size_t ix) {
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS", "Neighbor interface get function");
+    return cps_api_ret_code_OK;
+}
+
+static cps_api_return_code_t nas_route_cps_nbr_intf_rollback_func(void * ctx,
+                                                                  cps_api_transaction_params_t * param, size_t ix){
+
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS", "NBR Interface Rollback function");
+    return cps_api_ret_code_OK;
+}
 
 static t_std_error nas_route_object_entry_init(cps_api_operation_handle_t nas_route_cps_handle ) {
 
@@ -575,6 +854,27 @@ static t_std_error nas_route_object_entry_init(cps_api_operation_handle_t nas_ro
 
     f.handle = nas_route_cps_handle;
     f._write_function = nas_route_flush_handler;
+
+    if (cps_api_register(&f)!=cps_api_ret_code_OK) {
+        return STD_ERR(ROUTE,FAIL,0);
+    }
+
+
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS", "Registering for ROUTE NH OPERATION");
+
+    memset(&f,0,sizeof(f));
+    memset(buff,0,sizeof(buff));
+
+    /* Register route flush object with CPS */
+    if (!cps_api_key_from_attr_with_qual(&f.key,BASE_ROUTE_ROUTE_NH_OPERATION_OBJ,
+                                         cps_api_qualifier_TARGET)) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS","Could not translate %d to key %s",
+                   (int)(BASE_ROUTE_ROUTE_NH_OPERATION_OBJ),cps_api_key_print(&f.key,buff,sizeof(buff)-1));
+        return STD_ERR(ROUTE,FAIL,0);
+    }
+
+    f.handle = nas_route_cps_handle;
+    f._write_function = nas_route_nh_operation_handler;
 
     if (cps_api_register(&f)!=cps_api_ret_code_OK) {
         return STD_ERR(ROUTE,FAIL,0);
@@ -722,6 +1022,64 @@ static t_std_error nas_route_object_fib_config_init(cps_api_operation_handle_t n
     return STD_ERR_OK;
 }
 
+static t_std_error nas_route_object_nbr_init(cps_api_operation_handle_t nas_route_cps_handle ) {
+
+    cps_api_registration_functions_t f;
+    char buff[CPS_API_KEY_STR_MAX];
+
+    memset(&f,0,sizeof(f));
+
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS", "NBR CPS Initialization");
+
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS", "Registering for %s",
+                 cps_api_key_print(&f.key,buff,sizeof(buff)-1));
+
+    f.handle                 = nas_route_cps_handle;
+    f._read_function         = nas_route_cps_nbr_get_func;
+    f._write_function        = nas_route_cps_nbr_set_func;
+    f._rollback_function     = nas_route_cps_nbr_rollback_func;
+
+    if (!cps_api_key_from_attr_with_qual(&f.key,BASE_NEIGHBOR_BASE_ROUTE_OBJ_NBR_OBJ,cps_api_qualifier_TARGET)) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS","Could not translate %d to key %s",
+                   (int)(BASE_NEIGHBOR_BASE_ROUTE_OBJ_NBR_OBJ),cps_api_key_print(&f.key,buff,sizeof(buff)-1));
+        return STD_ERR(ROUTE,FAIL,0);
+    }
+
+    if (cps_api_register(&f)!=cps_api_ret_code_OK) {
+        return STD_ERR(ROUTE,FAIL,0);
+    }
+    return STD_ERR_OK;
+}
+
+static t_std_error nas_route_object_nbr_intf_init(cps_api_operation_handle_t nas_route_cps_handle ) {
+
+    cps_api_registration_functions_t f;
+    char buff[CPS_API_KEY_STR_MAX];
+
+    memset(&f,0,sizeof(f));
+
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS", "NBR Interface CPS Initialization");
+
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS", "Registering for %s",
+                 cps_api_key_print(&f.key,buff,sizeof(buff)-1));
+
+    f.handle                 = nas_route_cps_handle;
+    f._read_function         = nas_route_cps_nbr_intf_get_func;
+    f._write_function        = nas_route_cps_nbr_intf_set_func;
+    f._rollback_function     = nas_route_cps_nbr_intf_rollback_func;
+
+    if (!cps_api_key_from_attr_with_qual(&f.key,BASE_NEIGHBOR_IF_INTERFACES_STATE_INTERFACE_OBJ,cps_api_qualifier_TARGET)) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS","Could not translate %d to key %s",
+                   (int)(BASE_NEIGHBOR_IF_INTERFACES_STATE_INTERFACE_OBJ),cps_api_key_print(&f.key,buff,sizeof(buff)-1));
+        return STD_ERR(ROUTE,FAIL,0);
+    }
+
+    if (cps_api_register(&f)!=cps_api_ret_code_OK) {
+        return STD_ERR(ROUTE,FAIL,0);
+    }
+    return STD_ERR_OK;
+}
+
 t_std_error nas_routing_cps_init(cps_api_operation_handle_t nas_route_cps_handle) {
 
     t_std_error ret;
@@ -744,8 +1102,16 @@ t_std_error nas_routing_cps_init(cps_api_operation_handle_t nas_route_cps_handle
 
     if((ret = nas_route_object_fib_config_init(nas_route_cps_handle)) != STD_ERR_OK){
         return ret;
-
     }
+
+    if((ret = nas_route_object_nbr_init(nas_route_cps_handle)) != STD_ERR_OK){
+        return ret;
+    }
+
+    if((ret = nas_route_object_nbr_intf_init(nas_route_cps_handle)) != STD_ERR_OK){
+        return ret;
+    }
+
     if((ret = nas_route_event_handle_init()) != STD_ERR_OK){
         return ret;
     }
@@ -850,7 +1216,7 @@ t_std_error nas_route_process_cps_peer_routing(cps_api_transaction_params_t * pa
     }
     if (if_name_attr)
         safestrncpy(peer_routing_config.if_name, (const char *)cps_api_object_attr_data_bin(if_name_attr),
-                    cps_api_object_attr_len(if_name_attr));
+                    sizeof(peer_routing_config.if_name));
 
     addr = cps_api_object_attr_data_bin(mac_addr_attr);
     std_string_to_mac(&peer_routing_config.mac, (const char *)addr, sizeof(mac_addr));
@@ -864,8 +1230,6 @@ t_std_error nas_route_process_cps_peer_routing(cps_api_transaction_params_t * pa
     }
     return rc;
 }
-
-
 
 t_std_error nas_route_process_cps_nht(cps_api_transaction_params_t * param, size_t ix) {
 
@@ -931,4 +1295,15 @@ t_std_error nas_route_process_cps_nht(cps_api_transaction_params_t * param, size
     nas_l3_unlock();
     return rc;
 }
+
+bool nas_route_fdb_add_cps_msg (t_fib_nh *p_nh) {
+    /* Dont program the MAC since SAI is taking care of learning
+     * the MAC from ARP response.
+     *
+     * @@TODO This function needs to be removed once the complete
+     * testing is done successfully with new SAI changes
+     * that enqueue the MAC updates from NPU into the SAI FIFO queue */
+    return false;
+}
+
 

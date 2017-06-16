@@ -924,6 +924,7 @@ void fib_dump_intf_node_key (t_fib_intf *p_intf)
     printf ("  if_index          :  0x%x\r\n", p_intf->key.if_index);
     printf ("  vrf_id            :  %d\r\n", p_intf->key.vrf_id);
     printf ("  af_index          :  %d\r\n", p_intf->key.af_index);
+    printf ("  admin             :  %d\r\n", p_intf->admin_status);
 
     return;
 }

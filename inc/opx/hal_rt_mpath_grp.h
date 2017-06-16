@@ -127,9 +127,7 @@ t_fib_mp_obj *hal_rt_fib_create_mp_obj (t_fib_dr *p_dr, ndi_nh_group_t *entry, u
                                  bool is_with_id, uint32_t sai_ecmp_gid,
                                  bool *p_out_is_mp_table_full);
 void hal_rt_fib_form_md5_key (uint8_t t_md5_digest [], next_hop_id_t a_nh_obj_id [],
-                        uint32_t ecmp_count, uint32_t debug);
-void hal_rt_fib_sort_nh_obj_id (next_hop_id_t a_nh_obj_id [], t_fib_nh_obj *ap_nh_obj [],
-                          uint32_t ecmp_count, uint32_t debug);
+                        uint32_t ecmp_count, bool debug);
 t_std_error hal_rt_fib_check_and_delete_old_groupid(t_fib_dr *p_dr, npu_id_t  unit);
 void hal_dump_ecmp_route_entry(ndi_nh_group_t *p_route_entry);
 void hal_rt_format_nh_list(next_hop_id_t nh_list[],  int count, char *buf, int s_buf);

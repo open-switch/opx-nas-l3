@@ -51,6 +51,8 @@
 
 #define FIB_IS_FH_IP_TUNNEL(_p_fh)     false
 
+#define FIB_MIN_L3_MTU                 NDI_RIF_MIN_MTU
+
 #define FIB_GET_NH_FROM_LINK_NODE_GLUE(_p_dll) \
         ((t_fib_nh *) (((t_fib_link_node *)(((char *) (_p_dll)) - offsetof (t_fib_link_node, glue)))->self))
 
@@ -355,6 +357,9 @@
 #define FIB_IS_NH_OWNER_ARP(_p_nh)                                            \
         FIB_IS_NH_OWNER ((_p_nh), FIB_NH_OWNER_TYPE_ARP, 0)
 
+#define FIB_IS_NH_OWNER_CLIENT(_p_nh)                                            \
+        FIB_IS_NH_OWNER ((_p_nh), FIB_NH_OWNER_TYPE_CLIENT, 0)
+
 #define FIB_IS_NH_REQ_RESOLVE(_p_nh)                                          \
         ((((_p_nh)->status_flag) & FIB_NH_STATUS_REQ_RESOLVE))
 
@@ -429,6 +434,8 @@ typedef struct _t_fib_arp_info {
     hal_ifindex_t if_index;
     uint8_t       is_l2_fh;
     uint8_t       arp_status; /* various ARP/ND status i.e RT_NUD_REACHABLE/RT_NUD_PERMANENT etc...*/
+    hal_ifindex_t mbr_if_index; /* Incase of VLAN, this holds
+                                        the port thru which the MAC is learnt */
 } t_fib_arp_info;
 
 typedef struct _t_fib_dr_key {
@@ -454,6 +461,8 @@ typedef struct _t_fib_nht {
     uint8_t          prefix_len; /* Prefix len of the route, incase of exact match in NH,
                                     it has the value /32(IPv4) or /128 (IPv6)*/
     uint32_t         ref_count; /* no. of clients interested in the route/next hop */
+    bool             is_create_pub; /* TRUE - NHT info. with CPS OP CREATE has been published
+                                       to the App and FALSE otherwise */
 }t_fib_nht;
 
 typedef struct _t_fib_dr {
@@ -480,6 +489,8 @@ typedef struct _t_fib_dr {
     bool               is_nh_resolved; /* true if ARP is resolved for this route */
     uint32_t           ofh_cnt; /* Old fh list count to detect the Non-ECMP to ECMP route */
     void              *p_hal_dr_handle; /* mp_obj details per SAI instance */
+    uint32_t           num_ipv6_link_local; /* No. of RIF entries created
+                                               for link local IPv6 addresses */
 } t_fib_dr;
 
 typedef struct _t_fib_nh_key {
@@ -524,6 +535,8 @@ typedef struct _t_fib_nh {
     void              *p_hal_nh_handle; /* Lower NPU Handle */
     uint32_t           reachable_state_time_stamp; /* Reachable state received
                                                       from the kernel */
+    bool               is_nht_active; /* true - if this NH is being tracked
+                                        for PBR and ER-SPAN, false otherwise */
 } t_fib_nh;
 
 /*
@@ -587,8 +600,11 @@ typedef struct _t_fib_intf {
      */
     std_dll_head   pending_fh_list;
 
-    /* admin status of the interface; true - up, false - down */
-    bool admin_status; /* this status is received from the kernel directly */
+    /* admin status of the interface;
+     * RT_INTF_ADMIN_STATUS_NONE/RT_INTF_ADMIN_STATUS_UP/RT_INTF_ADMIN_STATUS_DOWN */
+    int admin_status; /* this status is received from the kernel directly */
+    hal_mac_addr_t mac_addr;
+    char if_name[HAL_IF_NAME_SZ]; /* interface name */
 } t_fib_intf;
 
 /* Function signatures for route.c - Start */
@@ -634,7 +650,7 @@ t_fib_dr *fib_get_next_dr(uint32_t vrf_id, t_fib_ip_addr *prefix, uint8_t prefix
 
 int fib_del_dr (t_fib_dr *p_dr);
 
-t_fib_dr_nh *fib_add_dr_nh (t_fib_dr *p_dr, t_fib_nh *p_nh, uint8_t *p_cur_nh_tlv, uint32_t nh_tlv_len);
+t_fib_dr_nh *fib_add_dr_nh (t_fib_dr *p_dr, t_fib_nh *p_nh, uint8_t *p_cur_nh_tlv, uint32_t nh_tlv_len, bool *p_is_dup);
 
 t_fib_dr_nh *fib_get_dr_nh (t_fib_dr *p_dr, t_fib_nh *p_nh);
 
@@ -869,8 +885,10 @@ t_fib_cmp_result fib_arp_info_cmp (t_fib_nh *p_fh, t_fib_arp_msg_info *p_fib_arp
 
 int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool isAdd);
 int nas_rt_handle_nht (t_fib_nht *p_nht_info, bool isAdd);
-int fib_handle_intf_admin_status_change(int if_index, int vrf_id, int af_index, bool is_admin_up);
+int fib_handle_intf_admin_status_change(int vrf_id, int af_index, t_fib_intf_entry *p_intf_chg);
 int nas_route_process_nbr_refresh(cps_api_object_t obj);
 cps_api_object_t nas_route_nh_to_arp_cps_object(t_fib_nh *entry, cps_api_operation_types_t op);
+bool nas_route_resolve_nh(t_fib_nh *entry, bool is_add);
+int fib_nbr_del_on_intf_down (int if_index, int vrf_id, int af_index);
 
 #endif /* __HAL_RT_ROUTE_H__ */

@@ -344,7 +344,7 @@ int hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac_config_
 
             if ((dn_hal_get_interface_info(&intf_ctrl)) != STD_ERR_OK) {
                 HAL_RT_LOG_ERR("HAL-RT",
-                               "Invalid interface %s interface get failed \r\n", p_status->if_name);
+                               "Invalid interface %s interface get failed ", p_status->if_name);
                 return 0;
             }
 
@@ -496,12 +496,13 @@ static bool hal_rt_process_msg(cps_api_object_t obj, void *param)
     if (cps_api_key_matches (&linux_if_obj_key, cps_api_object_key(obj), true) == 0) {
         g_fib_gbl_info.num_int_msg++;
         t_fib_intf_entry intf;
+        memset(&intf, 0, sizeof(t_fib_intf_entry));
         /* Enqueue the intf messages for further processing
          * only it has the admin attribute.*/
         if (hal_rt_cps_obj_to_intf(obj,&intf)) {
             p_msg = hal_rt_alloc_mem_msg();
             if (p_msg) {
-                p_msg->type = FIB_MSG_TYPE_INTF;
+                p_msg->type = FIB_MSG_TYPE_NL_INTF;
                 memcpy(&(p_msg->intf), &intf, sizeof(intf));
                 nas_rt_process_msg(p_msg);
             }
@@ -517,21 +518,12 @@ static bool hal_rt_process_msg(cps_api_object_t obj, void *param)
             g_fib_gbl_info.num_route_msg++;
             p_msg = hal_rt_alloc_mem_msg();
             if (p_msg) {
-                p_msg->type = FIB_MSG_TYPE_ROUTE;
+                p_msg->type = FIB_MSG_TYPE_NL_ROUTE;
                 hal_rt_cps_obj_to_route(obj, &(p_msg->route));
                 nas_rt_process_msg(p_msg);
             }
             break;
 
-        case cps_api_route_obj_NEIBH:
-            g_fib_gbl_info.num_nei_msg++;
-            p_msg = hal_rt_alloc_mem_msg();
-            if (p_msg) {
-                p_msg->type = FIB_MSG_TYPE_NBR;
-                hal_rt_cps_obj_to_neigh(obj, &(p_msg->nbr));
-                nas_rt_process_msg(p_msg);
-            }
-            break;
 
         default:
             g_fib_gbl_info.num_unk_msg++;
@@ -548,18 +540,16 @@ t_std_error hal_rt_main(void)
     cps_api_event_reg_t reg;
 
     memset(&reg,0,sizeof(reg));
-    const uint_t NUM_KEYS=3;
+    const uint_t NUM_KEYS=2;
     cps_api_key_t key[NUM_KEYS];
 
     cps_api_key_init(&key[0],cps_api_qualifier_TARGET,
             cps_api_obj_cat_ROUTE,cps_api_route_obj_ROUTE,0);
-    cps_api_key_init(&key[1],cps_api_qualifier_TARGET,
-            cps_api_obj_cat_ROUTE,cps_api_route_obj_NEIBH,0);
     // Register with NAS-Linux object for interface state change notifications
-    cps_api_key_from_attr_with_qual(&key[2],
+    cps_api_key_from_attr_with_qual(&key[1],
                                     BASE_IF_LINUX_IF_INTERFACES_INTERFACE_OBJ,
                                     cps_api_qualifier_OBSERVED);
-    memcpy(&linux_if_obj_key, &key[2], sizeof(cps_api_key_t));
+    memcpy(&linux_if_obj_key, &key[1], sizeof(cps_api_key_t));
 
     reg.number_of_objects = NUM_KEYS;
     reg.objects = key;

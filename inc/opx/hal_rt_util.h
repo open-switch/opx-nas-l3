@@ -100,15 +100,24 @@ bool hal_rt_is_reserved_ipv4(hal_ip_addr_t *p_ip_addr);
 
 bool hal_rt_is_reserved_ipv6(hal_ip_addr_t *p_ip_addr);
 
-ndi_rif_id_t hal_rif_index_get (npu_id_t npu_id, hal_vrf_id_t vrf_id, hal_ifindex_t if_index);
+bool hal_rif_update (hal_vrf_id_t vrf_id, t_fib_intf_entry *p_intf);
+
+t_std_error hal_rif_index_get_or_create (npu_id_t npu_id, hal_vrf_id_t vrf_id,
+                                         hal_ifindex_t if_index, ndi_rif_id_t *p_rif_id);
 
 t_std_error hal_rif_index_remove (npu_id_t npu_id, hal_vrf_id_t vrf_id, hal_ifindex_t if_index);
+
+ndi_rif_id_t hal_rif_id_get (npu_id_t npu_id, hal_vrf_id_t vrf_id, hal_ifindex_t if_index);
 
 ndi_vrf_id_t hal_vrf_obj_get (npu_id_t npu_id, hal_vrf_id_t vrf_id);
 
 uint32_t hal_rt_rif_ref_inc(hal_ifindex_t if_index);
 
-uint32_t hal_rt_rif_ref_dec(hal_ifindex_t if_index);
+bool hal_rt_rif_ref_dec(hal_ifindex_t if_index);
+int hal_rt_rif_ref_get(hal_ifindex_t if_index);
+
+bool hal_rt_is_intf_lpbk (hal_ifindex_t if_index);
+
 
 BASE_CMN_AF_TYPE_t nas_route_af_to_cps_af(unsigned short af);
 t_std_error nas_rt_fill_opaque_data(cps_api_object_t obj, uint64_t attr, int npu_id, next_hop_id_t *p_ndi_id);
@@ -124,4 +133,6 @@ bool nas_rt_peer_mac_get (const nas_rt_peer_mac_config_t* req,
 bool nas_rt_peer_mac_db_del (nas_rt_peer_mac_config_t* mac_info);
 cps_api_object_t nas_route_peer_routing_config_to_cps_object(uint32_t vrf_id,
                                                              nas_rt_peer_mac_config_t *p_status);
+bool nas_rt_is_nh_npu_prg_done(t_fib_nh *p_entry);
+void hal_rt_sort_array(uint64_t data[], uint32_t count);
 #endif /* __HAL_RT_UTIL_H__ */

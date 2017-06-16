@@ -136,7 +136,7 @@ static void fib_update_mp_obj_info (t_fib_dr *p_dr, npu_id_t unit, t_fib_hal_dr_
 
 inline void hal_dump_ecmp_nh_list(next_hop_id_t a_nh_obj_id [], int count) {
 
-    char buf[HAL_RT_MAX_BUFSZ * 10];
+    static char buf[HAL_RT_MAX_BUFSZ * 10];
 
     hal_rt_format_nh_list(a_nh_obj_id, count, buf, HAL_RT_MAX_BUFSZ * 10);
     HAL_RT_LOG_DEBUG("HAL-RT-NDI",
@@ -194,27 +194,20 @@ t_std_error hal_rt_find_or_create_ecmp_group(t_fib_dr *p_dr, ndi_nh_group_t *ent
 
         }
 
-
         /*
-         * Sort the NH list in ascending order
-         * @@TODO: make it a nlog(n) function
+         * Sort the NH list for optimal ECMP groups allocation
          */
-        size_t j;
-        next_hop_id_t tmp;
-        for (i=0; i<p_dr->nh_count; i++) {
-            for (j=i+1; j<p_dr->nh_count; j++) {
-                if (a_nh_obj_id[i]  > a_nh_obj_id[j]) {
-                    tmp = a_nh_obj_id[j];
-                    a_nh_obj_id[j] = a_nh_obj_id[i];
-                    a_nh_obj_id[i] = tmp;
-                }
-            }
-
-        }
+        hal_rt_sort_array(a_nh_obj_id, p_dr->nh_count);
         entry->nhop_count = ecmp_count;
 
-        hal_dump_ecmp_nh_list(a_nh_obj_id, ecmp_count);
-        hal_rt_fib_form_md5_key(aui1_md5_digest, a_nh_obj_id, HAL_RT_MAX_ECMP_PATH, 1);
+        /*
+         * Disable ECMP MD5 debugging and enable only when needed by
+         * setting hal_rt_fib_form_md5_key 'debug' to true, when needed
+         * Dump ECMP list entries using:
+         * hal_dump_ecmp_nh_list(a_nh_obj_id, ecmp_count);
+         */
+
+        hal_rt_fib_form_md5_key(aui1_md5_digest, a_nh_obj_id, HAL_RT_MAX_ECMP_PATH, false);
 
         p_mp_obj = hal_rt_fib_get_mp_obj (p_dr, entry, aui1_md5_digest, ecmp_count, a_nh_obj_id);
         HAL_RT_LOG_DEBUG ("HAL-RT-NDI",
@@ -333,7 +326,7 @@ t_std_error hal_rt_delete_ecmp_group(t_fib_dr *p_dr, ndi_route_t  *entry,
     if (p_mp_obj == NULL)
     {
         HAL_RT_LOG_ERR("HAL-RT-NDI",
-                   "Multipath Object is NULL. Vrf_id: %ld, Unit: "
+                   "Multipath Object is NULL. Vrf_id: %d, Unit: "
                    "%d.\n", entry->vrf_id, unit);
         return (STD_ERR(ROUTE, FAIL, 0));
     }
@@ -348,7 +341,7 @@ t_std_error hal_rt_delete_ecmp_group(t_fib_dr *p_dr, ndi_route_t  *entry,
         if (rc != STD_ERR_OK) {
             HAL_RT_LOG_DEBUG("HAL-RT-MP",
                     "NH Group: Failed to delete ECMP group:%d mp_obj_id:%d "
-                    "Vrf_id: %d, Unit: %d. Err: %d \r\n", (int) p_dr->nh_handle,
+                    "Vrf_id: %d, Unit: %d. Err: %d ", (int) p_dr->nh_handle,
                     (int) p_mp_obj->sai_ecmp_gid, entry->vrf_id, entry->npu_id, rc);
 
             return (STD_ERR(ROUTE, FAIL, 0));

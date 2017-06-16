@@ -35,7 +35,7 @@
 
 
 void hal_rt_fib_form_md5_key (uint8_t t_md5_digest [], next_hop_id_t a_nh_obj_id [],
-                    uint32_t ecmp_count, uint32_t debug)
+                    uint32_t ecmp_count, bool debug)
 {
     MD5_CTX      md5_context;
 
@@ -233,7 +233,7 @@ t_fib_mp_obj *hal_rt_fib_create_mp_obj (t_fib_dr *p_dr, ndi_nh_group_t *entry,
     if (rc != STD_ERR_OK) {
         HAL_RT_LOG_DEBUG ("HAL-RT-NDI",
                 "NH Group: %s Group ID failed. VRF %d. Prefix: "
-                "%s/%d, Unit: %d, Err: %d\r\n",
+                "%s/%d, Unit: %d, Err: %d",
                 is_with_id ? "Update":"Create", p_dr->vrf_id,
                 FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                 p_dr->prefix_len, entry->npu_id, rc);
@@ -246,7 +246,7 @@ t_fib_mp_obj *hal_rt_fib_create_mp_obj (t_fib_dr *p_dr, ndi_nh_group_t *entry,
     } else {
         HAL_RT_LOG_DEBUG ("HAL-RT-NDI",
                 "NH Group: %s New Group ID: %d Old GID=%d. VRF %d. Prefix: "
-                "%s/%d,Unit: %d, Err: %d\r\n", is_with_id ? "Updated":"Created",
+                "%s/%d,Unit: %d, Err: %d", is_with_id ? "Updated":"Created",
                         nh_group_handle, sai_ecmp_gid, p_dr->vrf_id,
                 FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                 p_dr->prefix_len,  entry->npu_id, rc);
@@ -255,9 +255,6 @@ t_fib_mp_obj *hal_rt_fib_create_mp_obj (t_fib_dr *p_dr, ndi_nh_group_t *entry,
          * Create new mp_obj and add group_id to it.
          */
         p_mp_obj = hal_rt_fib_calloc_mp_obj_node ();
-        HAL_RT_LOG_DEBUG ("HAL_RT-MPATH", "In Create MP Object: "
-                          "Unit %d.\n", entry->npu_id);
-
         if (p_mp_obj == NULL)
         {
             HAL_RT_LOG_DEBUG ("HAL_RT-MPATH", "Create MP Object: "
@@ -344,7 +341,7 @@ t_fib_mp_obj *hal_rt_fib_get_mp_obj (t_fib_dr *p_dr, ndi_nh_group_t *entry, uint
     {
         p_mp_obj = (t_fib_mp_obj *) std_dll_getfirst (&p_mp_md5_node->mp_node_list);
 
-        if(ecmp_count != p_mp_obj->ecmp_count)
+        if(p_mp_obj && (ecmp_count != p_mp_obj->ecmp_count))
         {
             HAL_RT_LOG_DEBUG ("HAL_RT-MPATH",
                               "Ecmp_count mismatch. ecmp_count: %d,"
@@ -375,7 +372,7 @@ t_std_error hal_rt_fib_check_and_delete_old_groupid(t_fib_dr *p_dr, npu_id_t  un
         if (rc != STD_ERR_OK) {
             HAL_RT_LOG_DEBUG ("HAL-RT-NDI",
                               "NH Group: Old Group ID delete failed. gid %d VRF %d. Prefix: "
-                              "%s/%d, Unit: %d, Err: %d\r\n",
+                              "%s/%d, Unit: %d, Err: %d",
                               p_dr->onh_handle,  p_dr->vrf_id,
                               FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                               p_dr->prefix_len, unit, rc);
@@ -383,7 +380,7 @@ t_std_error hal_rt_fib_check_and_delete_old_groupid(t_fib_dr *p_dr, npu_id_t  un
         } else {
             HAL_RT_LOG_DEBUG ("HAL-RT-NDI",
                               "NH Group: Old Group ID delete SUCCESS. gid %d VRF %d. Prefix: "
-                              "%s/%d, Unit: %d, Err: %d\r\n",
+                              "%s/%d, Unit: %d, Err: %d",
                               p_dr->onh_handle,  p_dr->vrf_id,
                               FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                               p_dr->prefix_len, unit, rc);
@@ -436,20 +433,20 @@ int fib_create_mp_md5_tree (t_fib_vrf_info *p_vrf_info)
 
     if (!p_vrf_info)
     {
-        HAL_RT_LOG_DEBUG ("HAL-RT-MP", "Invalid input param. p_vrf_info: %p\r\n",
+        HAL_RT_LOG_DEBUG ("HAL-RT-MP", "Invalid input param. p_vrf_info: %p",
                           p_vrf_info);
 
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
 
-    HAL_RT_LOG_DEBUG ("HAL-RT-MP", "Vrf_id: %d, af_index: %s\r\n",
+    HAL_RT_LOG_DEBUG ("HAL-RT-MP", "Vrf_id: %d, af_index: %s",
                       p_vrf_info->vrf_id,
                       STD_IP_AFINDEX_TO_STR (p_vrf_info->af_index));
 
     if (p_vrf_info->mp_md5_tree != NULL)
     {
         HAL_RT_LOG_DEBUG ("HAL-RT-MP", "MP MD5 tree already created. "
-                          "vrf_id: %d, af_index: %d\r\n",
+                          "vrf_id: %d, af_index: %d",
                            p_vrf_info->vrf_id, p_vrf_info->af_index);
 
         return STD_ERR_OK;
@@ -467,7 +464,7 @@ int fib_create_mp_md5_tree (t_fib_vrf_info *p_vrf_info)
     {
         HAL_RT_LOG_DEBUG ("HAL-RT-MP",
                           "std_radix_create failed. Vrf_id: %d, "
-                          "af_index: %s\r\n", p_vrf_info->vrf_id,
+                          "af_index: %s", p_vrf_info->vrf_id,
                           STD_IP_AFINDEX_TO_STR (p_vrf_info->af_index));
 
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
@@ -485,7 +482,7 @@ int fib_destroy_mp_md5_tree (t_fib_vrf_info *p_vrf_info)
     if (!p_vrf_info)
     {
         HAL_RT_LOG_DEBUG ("HAL-RT-MP",
-                          "Invalid input param. p_vrf_info: %p\r\n",
+                          "Invalid input param. p_vrf_info: %p",
                           p_vrf_info);
 
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
@@ -495,7 +492,7 @@ int fib_destroy_mp_md5_tree (t_fib_vrf_info *p_vrf_info)
     {
         HAL_RT_LOG_DEBUG ("HAL-RT-MP",
                           "MP MD5 tree not present. "
-                          "vrf_id: %d, af_index: %d\r\n",
+                          "vrf_id: %d, af_index: %d",
                           p_vrf_info->vrf_id, p_vrf_info->af_index);
 
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
