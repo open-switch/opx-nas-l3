@@ -67,8 +67,29 @@ bool nbr_mgr_init() {
     return true;
 }
 
+volatile static bool shutdwn = false;
+/************************************************************************
+ *
+ * Name: sigterm_hdlr
+ *
+ *      This function is to handle the SIGTERM signal
+ *
+ * Input: Integer signo
+ *
+ * Return Values: None
+ * -------------
+ *
+ ************************************************************************/
+static void sigterm_hdlr(int signo)
+{
+    /* Avoid system calls at all cost */
+    shutdwn = true;
+}
+
 /* Nbr Mgr process entry function */
 int main() {
+
+    // signal must install before service init
     (void)signal(SIGTERM, sigterm_hdlr);
 
     if (!nbr_mgr_init()) {

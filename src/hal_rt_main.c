@@ -523,8 +523,6 @@ static bool hal_rt_process_msg(cps_api_object_t obj, void *param)
                 nas_rt_process_msg(p_msg);
             }
             break;
-
-
         default:
             g_fib_gbl_info.num_unk_msg++;
             HAL_RT_LOG_DEBUG( "HAL-RT", "msg sub_class unknown %d",

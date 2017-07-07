@@ -33,5 +33,5 @@ std::string nbr_mac_addr_string (const hal_mac_addr_t& mac)
 std::string nbr_ip_addr_string (const hal_ip_addr_t& ip)
 {
     char buff[HAL_INET6_TEXT_LEN + 1];
-    return (std_ip_to_string(&ip, buff, HAL_INET6_TEXT_LEN));
+    return(std_ip_to_string(&ip, buff, HAL_INET6_TEXT_LEN));
 }

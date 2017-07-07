@@ -104,6 +104,7 @@ typedef bool (*burst_resolvefunc)(nbr_mgr_msg_t*);
 
 class nbr_mgr_msgq_t {
     public:
+        nbr_mgr_msgq_t(){};
         bool enqueue(nbr_mgr_msg_uptr_t msg);
         nbr_mgr_msg_uptr_t dequeue ();
         std::string  queue_stats();

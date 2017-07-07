@@ -89,6 +89,28 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
     } else {
         is_op_del = true;
     }
+    /* Removing the member port from the logical intf(VLAN/LAG) should not be
+     * considered as the logical intf delete, allow only the L2/L3/LAG intfs */
+    cps_api_object_attr_t intf_type =
+        cps_api_object_attr_get(obj, BASE_IF_LINUX_IF_INTERFACES_INTERFACE_DELL_TYPE);
+    if (intf_type) {
+        type = cps_api_object_attr_data_u32(intf_type);
+        NBR_MGR_LOG_INFO("CPS-INTF","Intf:%d status:%s type:%d",
+                         index, (is_admin_up ? "Up" : "Down"), type);
+        /* Allow only the L2 (bridge) and L3 ports for L3 operations */
+        if ((type != BASE_CMN_INTERFACE_TYPE_L2_PORT) && (type != BASE_CMN_INTERFACE_TYPE_L3_PORT) &&
+            (type != BASE_CMN_INTERFACE_TYPE_LAG)) {
+            return false;
+        }
+        cps_api_object_attr_t intf_member_port =
+            cps_api_object_attr_get(obj, DELL_IF_IF_INTERFACES_INTERFACE_MEMBER_PORTS_NAME);
+        /* Incase of LAG member delete, ignore it, allow only LAG intf admin down/up and delete */
+        if (is_op_del && intf_member_port && (type == BASE_CMN_INTERFACE_TYPE_LAG)) {
+            return false;
+        }
+        if (type == BASE_CMN_INTERFACE_TYPE_L2_PORT)
+            is_bridge = true;
+    }
 
     p_intf->if_index = index;
     p_intf->is_admin_up = is_admin_up;

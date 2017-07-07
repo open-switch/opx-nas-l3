@@ -69,10 +69,11 @@ bool nbr_mgr_process_nas_cps_msg(cps_api_object_t obj, void *param)
 
     switch (op) {
         case cps_api_oper_CREATE:
+        case cps_api_oper_SET:
+            p_msg->nbr.msg_type = NBR_MGR_NBR_ADD;
             break;
         case cps_api_oper_DELETE:
-            break;
-        case cps_api_oper_SET:
+            p_msg->nbr.msg_type = NBR_MGR_NBR_DEL;
             break;
         default:
             break;
@@ -81,12 +82,11 @@ bool nbr_mgr_process_nas_cps_msg(cps_api_object_t obj, void *param)
     cps_api_object_it_begin(obj,&it);
 
     for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it) ) {
-#if 0
         id = cps_api_object_attr_id(it.attr);
 
         switch (id) {
             case BASE_ROUTE_OBJ_NBR_VRF_ID:
-                //nbr_mgr_msg->vrf_id = cps_api_object_attr_data_uint(it.attr);
+                p_msg->nbr.vrfid = cps_api_object_attr_data_uint(it.attr);
                 break;
             case BASE_ROUTE_OBJ_NBR_AF:
                 p_msg->nbr.nbr_addr.af_index = cps_api_object_attr_data_uint(it.attr);
@@ -96,11 +96,10 @@ bool nbr_mgr_process_nas_cps_msg(cps_api_object_t obj, void *param)
                 p_msg->nbr.if_index = cps_api_object_attr_data_uint(it.attr);
                 break;
             case BASE_ROUTE_OBJ_NBR_ADDRESS:
-                //memcpy(&nbr_mgr_msg->ip_addr.u, cps_api_object_attr_data_bin(it.attr),
-                //       cps_api_object_attr_len (it.attr));
+                memcpy(&p_msg->nbr.nbr_addr.u, cps_api_object_attr_data_bin(it.attr),
+                       cps_api_object_attr_len (it.attr));
                 break;
         }
-#endif
     }
     char buff[HAL_INET6_TEXT_LEN + 1];
     NBR_MGR_LOG_DEBUG("NAS-MSG", "Nbr resolution request for vrf:%d type:%d family:%d ip:%s if-index:%d",

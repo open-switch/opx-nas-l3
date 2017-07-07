@@ -20,3 +20,20 @@ libopx_hal_routing_la_CXXFLAGS=-std=c++11
 libopx_hal_routing_la_LDFLAGS=-shared -version-info 1:1:0
 
 libopx_hal_routing_la_LIBADD=-lopx_nas_linux -lopx_nas_common -lopx_common -lopx_nas_ndi -lopx_cps_api_common -lopx_logging -lcrypto
+
+bin_PROGRAMS=base_nbr_mgr_svc
+
+base_nbr_mgr_svc_CXXFLAGS=-std=c++11
+
+base_nbr_mgr_svc_SOURCES=nbr-mgr/src/nbr_mgr_main.cpp nbr-mgr/src/nbr_mgr_utils.cpp
+base_nbr_mgr_svc_SOURCES+=nbr-mgr/src/nbr_mgr_cps.cpp nbr-mgr/src/nbr_mgr_msgq.cpp
+base_nbr_mgr_svc_SOURCES+=nbr-mgr/src/nbr_mgr_proc.cpp nbr-mgr/src/nbr_mgr_timer.cpp
+base_nbr_mgr_svc_SOURCES+=nbr-mgr/src/nbr_mgr_nl_evt.cpp nbr-mgr/src/nbr_mgr_rslv.cpp
+
+base_nbr_mgr_svc_LDADD=-lopx_nas_linux -lopx_nas_common -lopx_common -lopx_logging -lopx_cps_api_common -lsystemd
+
+base_nbr_mgr_svc_CPPFLAGS=-I$(top_srcdir)/inc/opx -I$(top_srcdir)/inc/opx/nbr-mgr -I$(includedir)/opx 
+
+systemdconfdir=/lib/systemd/system
+systemdconf_DATA = scripts/init/*.service
+

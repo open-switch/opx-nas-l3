@@ -25,6 +25,7 @@
 #include "std_thread_tools.h"
 #include "std_mac_utils.h"
 #include <exception>
+#include <iostream>
 
 static hal_mac_addr_t g_zero_mac = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 static std_thread_create_param_t nbr_mgr_proc_thr;
@@ -939,9 +940,18 @@ bool nbr_data::handle_fdb_change(db_nbr_event_type_t evt, unsigned long status) 
             return true;
         }
     } else {
-        if(m_mac_data_ptr && (m_mac_data_ptr->get_fdb_type() != FDB_TYPE::FDB_IGNORE))
-            nbr.status = NBR_MGR_NUD_NOARP;
-        else return true;
+         if ((!(m_status & NBR_MGR_NUD_PERMANENT)) &&
+            (m_retry_cnt > 0)) {
+            /* Refresh has been attempted because Nbr learnt before MAC learning,
+             * refresh cnt is incremented, reset the count and REFRESH flag */
+            m_retry_cnt = 0;
+            m_flags &= ~NBR_MGR_NBR_REFRESH;
+        }
+        /* Program the Nbr dependent MAC into the NPU */
+        //if(m_mac_data_ptr && (m_mac_data_ptr->get_fdb_type() != FDB_TYPE::FDB_IGNORE))
+        //    nbr.status = NBR_MGR_NUD_NOARP;
+        /* Dont program the MAC into the NPU, SAI would take care of that */
+        return true;
     }
 
     return publish_entry(NBR_MGR_OP_UPDATE, nbr);
