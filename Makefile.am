@@ -30,7 +30,7 @@ base_nbr_mgr_svc_SOURCES+=nbr-mgr/src/nbr_mgr_cps.cpp nbr-mgr/src/nbr_mgr_msgq.c
 base_nbr_mgr_svc_SOURCES+=nbr-mgr/src/nbr_mgr_proc.cpp nbr-mgr/src/nbr_mgr_timer.cpp
 base_nbr_mgr_svc_SOURCES+=nbr-mgr/src/nbr_mgr_nl_evt.cpp nbr-mgr/src/nbr_mgr_rslv.cpp
 
-base_nbr_mgr_svc_LDADD=-lopx_nas_linux -lopx_nas_common -lopx_common -lopx_logging -lopx_cps_api_common -lsystemd
+base_nbr_mgr_svc_LDADD=-lopx_nas_linux -lopx_common -lopx_logging -lopx_cps_api_common -lsystemd
 
 base_nbr_mgr_svc_CPPFLAGS=-I$(top_srcdir)/inc/opx -I$(top_srcdir)/inc/opx/nbr-mgr -I$(includedir)/opx 
 
