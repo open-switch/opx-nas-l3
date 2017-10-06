@@ -110,4 +110,5 @@ void fib_dbg_clear_all_cntrs (void);
 
 void fib_dump_peer_mac_db_get_all_with_vrf(hal_vrf_id_t vrf_id);
 
+void nas_rt_shell_debug_command_init (void);
 #endif /* __HAL_RT_DEBUG_H__ */

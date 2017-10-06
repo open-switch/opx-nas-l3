@@ -26,10 +26,12 @@
 #include "hal_rt_debug.h"
 #include "hal_rt_util.h"
 #include "nas_rt_api.h"
+#include "hal_shell.h"
 
 #include "std_ip_utils.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <netinet/in.h>
 #include <string.h>
 
@@ -105,6 +107,9 @@ void fib_help (void)
 
     printf ("  fib_dump_nht (vrf_id, af_index, p_dest_addr <NULL - will loop all entries>)\r\n");
 
+    printf ("  fib_dump_all_rif ()\r\n");
+
+    printf ("  fib_dump_intf_rif (uint32_t if_index)\r\n");
     printf ("**************************************************\r\n");
 
     return;
@@ -143,6 +148,8 @@ void fib_dump_gbl_info(void)
             (hal_rt_access_fib_gbl_info())->num_nei_msg);
     printf ("  num_unknown_msg           :  %d\r\n",
             (hal_rt_access_fib_gbl_info())->num_unk_msg);
+    printf ("  num_ip_msg                :  %d\r\n",
+            (hal_rt_access_fib_gbl_info())->num_ip_msg);
     printf ("**************************************************\r\n");
 
     return;
@@ -156,6 +163,7 @@ void fib_dump_gbl_info_clear_cntr(void)
     (hal_rt_access_fib_gbl_info())->num_route_msg = 0;
     (hal_rt_access_fib_gbl_info())->num_nei_msg = 0;
     (hal_rt_access_fib_gbl_info())->num_unk_msg = 0;
+    (hal_rt_access_fib_gbl_info())->num_ip_msg = 0;
 
     return;
 }
@@ -339,6 +347,7 @@ void fib_dump_dr_node (t_fib_dr *p_dr)
     fib_dump_dr_node_key (p_dr);
 
     printf ("  proto            :  %d\r\n", p_dr->proto);
+    printf ("  rt_type          :  %d\r\n", p_dr->rt_type);
     printf ("  default_dr_owner   :  %d\r\n", p_dr->default_dr_owner);
     printf ("  status_flag       :  0x%x\r\n", p_dr->status_flag);
     printf ("  last_update_time   :  %ld\r\n", p_dr->last_update_time);
@@ -979,8 +988,14 @@ void fib_dump_intf_node (t_fib_intf *p_intf)
         count++;
     }
 
+    t_fib_ip_addr    *p_temp_ip = NULL;
+    t_fib_ip_holder  ip_holder;
     printf ("**************************************************\r\n");
 
+    FIB_FOR_EACH_IP_FROM_INTF (p_intf, p_temp_ip, ip_holder)
+    {
+        printf( "IP address: %s \r\n", FIB_IP_ADDR_TO_STR (p_temp_ip));
+    }
     return;
 }
 
@@ -1052,7 +1067,7 @@ void fib_dump_intf_per_if_index (uint32_t if_index)
         count++;
 
         p_intf = (t_fib_intf *)
-            std_radix_getnext (hal_rt_access_intf_tree(), (uint8_t *)&key, FIB_RDX_INTF_KEY_LEN);
+            std_radix_getnext (hal_rt_access_intf_tree(), (uint8_t *)&p_intf->key, FIB_RDX_INTF_KEY_LEN);
     }
 
     if (count != 0)
@@ -1561,3 +1576,331 @@ void fib_dump_nht(int vrf_id, int af_index, char *p_dest_addr)
 }
 
 
+void fib_dump_all_rif ()
+{
+    uint32_t       count = 0;
+    hal_ifindex_t  if_index = 0;
+    ndi_rif_id_t   rif_id = 0;
+    uint32_t       ref_count = 0;
+
+    printf ("%-10s %-10s %-10s\r\n", "Intf", "RIF Id", "Ref count");
+    printf ("*********************************************************\r\n");
+
+    if_index = hal_rt_rif_entry_get_next_if_index (if_index);
+
+    while (if_index)
+    {
+        if (hal_rif_info_get (if_index, &rif_id, &ref_count) == STD_ERR_OK) {
+            printf ("%-10d %-10d %-10d\r\n", if_index, (int) rif_id, ref_count);
+            count++;
+        }
+
+        if_index = hal_rt_rif_entry_get_next_if_index (if_index);
+    }
+
+    if (count != 0)
+    {
+        printf ("************************************************\r\n");
+        printf ("  Total RIF Count: %d\r\n", count);
+        printf ("************************************************\r\n");
+    }
+    return;
+}
+
+void fib_dump_intf_rif (uint32_t if_index)
+{
+    uint32_t      ref_count = 0;
+    ndi_rif_id_t  rif_id = 0;
+
+    if (hal_rif_info_get (if_index, &rif_id, &ref_count) == STD_ERR_OK) {
+        printf ("%-10s %-10s %-10s\r\n", "Intf", "RIF Id", "Ref count");
+        printf ("*********************************************************\r\n");
+        printf ("%-10d %-10d %-10d\r\n", if_index, (int) rif_id, ref_count);
+    }
+    return;
+}
+
+
+static void nas_rt_shell_debug_counters_help(void)
+{
+    printf("::nas-rt-debug counters all\r\n");
+    printf("\t- Dumps the nas-rt all counters\r\n");
+    printf("::nas-rt-debug counters <vrf-id> [af-id]\r\n");
+    printf("\t- Dumps nas-rt VRF counters for given vrf/af\r\n");
+    printf("::nas-rt-debug counters clear\r\n");
+    printf("\t- Clears all nas-rt VRF counters\r\n");
+    return;
+}
+
+static void nas_rt_shell_debug_counters (std_parsed_string_t handle)
+{
+    size_t ix=1;
+    const char *token = NULL;
+
+    if((token = std_parse_string_next(handle,&ix))!= NULL) {
+        if(!strcmp(token,"help")) {
+            nas_rt_shell_debug_counters_help();
+        } else if(!strcmp(token,"all")) {
+            fib_dump_all_cntrs();
+        } else if(!strcmp(token,"clear")) {
+            fib_dbg_clear_all_cntrs();
+        } else if(NULL != token) {
+            uint32_t vrf_id = strtol(token,NULL,0);
+            token = std_parse_string_next(handle,&ix);
+
+            if(NULL != token) {
+                uint8_t af_index = strtol(token,NULL,0);
+                fib_dump_vrf_cntrs_per_vrf_per_af (vrf_id, af_index);
+            } else {
+                fib_dump_vrf_cntrs_per_vrf (vrf_id);
+            }
+        }
+    } else {
+        nas_rt_shell_debug_counters_help();
+    }
+    return;
+}
+
+static void nas_rt_shell_debug_intf_help(void)
+{
+    printf("::nas-rt-debug intf all\r\n");
+    printf("\t- Dumps the nas-rt all interfaces\r\n");
+    printf("::nas-rt-debug intf <if-index>\r\n");
+    printf("\t- Dumps nas-rt interface for given if-index\r\n");
+    return;
+}
+
+static void nas_rt_shell_debug_intf (std_parsed_string_t handle)
+{
+    size_t ix=1;
+    const char *token = NULL;
+
+    if((token = std_parse_string_next(handle,&ix))!= NULL) {
+        if(!strcmp(token,"help")) {
+            nas_rt_shell_debug_intf_help();
+        } else if(!strcmp(token,"all")) {
+            fib_dump_all_intf();
+        } else if(NULL != token) {
+            uint32_t if_index = strtol(token,NULL,0);
+            fib_dump_intf_per_if_index (if_index);
+        }
+    } else {
+        nas_rt_shell_debug_intf_help();
+    }
+    return;
+}
+
+static void nas_rt_shell_debug_vrf_help(void)
+{
+    printf("::nas-rt-debug vrf all\r\n");
+    printf("\t- Dumps the nas-rt all vrf's\r\n");
+    printf("::nas-rt-debug vrf <vrf-id> [af-id]\r\n");
+    printf("\t- Dumps nas-rt VRF info for given vrf/af\r\n");
+    return;
+}
+
+static void nas_rt_shell_debug_vrf(std_parsed_string_t handle)
+{
+    size_t ix=1;
+    const char *token = NULL;
+
+    if((token = std_parse_string_next(handle,&ix))!= NULL) {
+        if(!strcmp(token,"help")) {
+            nas_rt_shell_debug_vrf_help();
+        } else if(!strcmp(token,"all")) {
+            fib_dump_all_vrf_info();
+        } else if(NULL != token) {
+            uint32_t vrf_id = strtol(token,NULL,0);
+            token = std_parse_string_next(handle,&ix);
+
+            if(NULL != token) {
+                uint8_t af_index = strtol(token,NULL,0);
+                fib_dump_vrf_info_per_vrf_per_af (vrf_id, af_index);
+            } else {
+                fib_dump_vrf_info_per_vrf(vrf_id);
+            }
+        }
+    } else {
+        nas_rt_shell_debug_vrf_help();
+    }
+    return;
+}
+
+static void nas_rt_shell_debug_dr_help(void)
+{
+    printf("::nas-rt-debug dr all\r\n");
+    printf("\t- Dumps the nas-rt all dr's\r\n");
+    printf("::nas-rt-debug dr <vrf-id> [af-id] [prefix-string] [prefix-len]\r\n");
+    printf("\t- Dumps nas-rt DR info for given vrf/af/prefix/prefix-len\r\n");
+    return;
+}
+
+static void nas_rt_shell_debug_dr(std_parsed_string_t handle)
+{
+    size_t ix=1;
+    const char *token = NULL;
+    const char *token2 = NULL;
+
+    if((token = std_parse_string_next(handle,&ix))!= NULL) {
+        if(!strcmp(token,"help")) {
+            nas_rt_shell_debug_dr_help();
+        } else if(!strcmp(token,"all")) {
+            fib_dump_all_dr();
+        } else if(NULL != token) {
+            uint32_t vrf_id = strtol(token,NULL,0);
+            token = std_parse_string_next(handle,&ix);
+            if(NULL != token) {
+                uint32_t af_index = strtol(token,NULL,0);
+                token = std_parse_string_next(handle,&ix);
+                if((NULL != token) &&
+                   ((token2 = std_parse_string_next(handle,&ix)) != NULL)) {
+                    uint32_t pref_len = strtol(token2,NULL,0);
+                    fib_dump_dr (vrf_id, af_index, (uint8_t *) token, pref_len);
+                } else {
+                    fib_dump_dr_per_vrf_per_af (vrf_id, af_index);
+                }
+            } else {
+               fib_dump_dr_per_vrf(vrf_id);
+            }
+        }
+    } else {
+        nas_rt_shell_debug_dr_help();
+    }
+    return;
+}
+
+static void nas_rt_shell_debug_nh_help(void)
+{
+    printf("::nas-rt-debug nh all\r\n");
+    printf("\t- Dumps the nas-rt all nh's\r\n");
+    printf("::nas-rt-debug nh <vrf-id> [af-id] [NH-ipaddr] [NH-ifindex]\r\n");
+    printf("\t- Dumps nas-rt NH info for given vrf/af/ip-addr/ifindex\r\n");
+    return;
+}
+
+static void nas_rt_shell_debug_nh(std_parsed_string_t handle)
+{
+    size_t ix=1;
+    const char *token = NULL;
+    const char *token2 = NULL;
+
+    if((token = std_parse_string_next(handle,&ix))!= NULL) {
+        if(!strcmp(token,"help")) {
+            nas_rt_shell_debug_nh_help();
+        } else if(!strcmp(token,"all")) {
+            fib_dump_all_nh();
+        } else if(NULL != token) {
+            uint32_t vrf_id = strtol(token,NULL,0);
+            token = std_parse_string_next(handle,&ix);
+            if(NULL != token) {
+                uint32_t af_index = strtol(token,NULL,0);
+                token = std_parse_string_next(handle,&ix);
+                if((NULL != token) &&
+                   ((token2 = std_parse_string_next(handle,&ix)) != NULL)) {
+                    uint32_t if_index = strtol(token2,NULL,0);
+                    fib_dump_nh (vrf_id, af_index, (uint8_t *) token, if_index);
+                } else {
+                    fib_dump_nh_per_vrf_per_af (vrf_id, af_index);
+                }
+            } else {
+               fib_dump_nh_per_vrf (vrf_id);
+            }
+        }
+    } else {
+        nas_rt_shell_debug_nh_help();
+    }
+    return;
+}
+
+
+static void nas_rt_shell_debug_rif_help(void)
+{
+    printf("::nas-rt-debug rif all\r\n");
+    printf("\t- Dumps all nas-rt rif information\r\n");
+    printf("::nas-rt-debug rif <if-index>\r\n");
+    printf("\t- Dumps nas-rt rif information for given if-index\r\n");
+    return;
+}
+
+static void nas_rt_shell_debug_rif (std_parsed_string_t handle)
+{
+    size_t ix=1;
+    const char *token = NULL;
+
+    if((token = std_parse_string_next(handle,&ix))!= NULL) {
+        if(!strcmp(token,"help")) {
+            nas_rt_shell_debug_rif_help();
+        } else if(!strcmp(token,"all")) {
+            fib_dump_all_rif ();
+        } else if(NULL != token) {
+            uint32_t if_index = strtol(token,NULL,0);
+            fib_dump_intf_rif (if_index);
+        }
+    } else {
+        nas_rt_shell_debug_rif_help();
+    }
+    return;
+}
+
+
+/*Dump nas routing module info*/
+static void nas_rt_shell_debug_help(void)
+{
+    printf("::nas-rt-debug config\r\n");
+    printf("\t- Config dump\r\n");
+    printf("::nas-rt-debug global-info\r\n");
+    printf("\t- Global info dump\r\n");
+    printf("::nas-rt-debug counters\r\n");
+    printf("\t- Counter module commands\r\n");
+    printf("::nas-rt-debug intf\r\n");
+    printf("\t- Intf module commands\r\n");
+    printf("::nas-rt-debug vrf\r\n");
+    printf("\t- Vrf module commands\r\n");
+    printf("::nas-rt-debug dr\r\n");
+    printf("\t- Route module commands\r\n");
+    printf("::nas-rt-debug nh\r\n");
+    printf("\t- NH module commands\r\n");
+    printf("::nas-rt-debug rif\r\n");
+    printf("\t- RIF module commands\r\n");
+
+    return;
+}
+
+void nas_rt_shell_dbg (std_parsed_string_t handle)
+{
+   const char *token = NULL;
+
+    if((token = std_parse_string_at(handle,0)) != NULL) {
+        if(!strcmp(token,"help")) {
+            nas_rt_shell_debug_help();
+        } else if(!strcmp(token,"config")) {
+            fib_dump_config();
+        } else if(!strcmp(token,"global-info")) {
+            fib_dump_gbl_info();
+        } else if(!strcmp(token,"counters")) {
+            nas_rt_shell_debug_counters(handle);
+        } else if(!strcmp(token,"intf")) {
+            nas_rt_shell_debug_intf(handle);
+        } else if(!strcmp(token,"vrf")) {
+            nas_rt_shell_debug_vrf(handle);
+        } else if(!strcmp(token,"dr")) {
+            nas_rt_shell_debug_dr(handle);
+        } else if(!strcmp(token,"nh")) {
+            nas_rt_shell_debug_nh(handle);
+        } else if(!strcmp(token,"rif")) {
+            nas_rt_shell_debug_rif(handle);
+        } else {
+            nas_rt_shell_debug_help();
+        }
+    } else {
+        nas_rt_shell_debug_help();
+    }
+
+    return;
+}
+
+/*Initialize the debug command*/
+void nas_rt_shell_debug_command_init (void) {
+    hal_shell_cmd_add("nas-rt-debug",nas_rt_shell_dbg,
+                      "nas-rt-debug <type> <params> ...");
+}

@@ -134,7 +134,7 @@ static void fib_update_mp_obj_info (t_fib_dr *p_dr, npu_id_t unit, t_fib_hal_dr_
 }
 
 
-inline void hal_dump_ecmp_nh_list(next_hop_id_t a_nh_obj_id [], int count) {
+static inline void hal_dump_ecmp_nh_list(next_hop_id_t a_nh_obj_id [], int count) {
 
     static char buf[HAL_RT_MAX_BUFSZ * 10];
 

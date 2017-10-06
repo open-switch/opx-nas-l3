@@ -606,6 +606,7 @@ int fib_proc_add_intf_fh (t_fib_nh *p_fh, bool add_phy_if_index)
 
         std_dll_init (&p_intf->fh_list);
         std_dll_init (&p_intf->pending_fh_list);
+        std_dll_init (&p_intf->ip_list);
     }
 
     p_link_node = fib_add_intf_fh (p_intf, p_fh);
@@ -749,6 +750,7 @@ int fib_proc_pending_fh_add (t_fib_nh *p_fh)
 
         std_dll_init (&p_intf->fh_list);
         std_dll_init (&p_intf->pending_fh_list);
+        std_dll_init (&p_intf->ip_list);
     }
 
     p_link_node = fib_add_intf_pending_fh (p_intf, p_fh);
@@ -2313,7 +2315,8 @@ int fib_check_and_delete_intf (t_fib_intf *p_intf)
                p_intf->key.af_index);
 
     if ((std_dll_getfirst (&p_intf->fh_list) == NULL) &&
-        (std_dll_getfirst (&p_intf->pending_fh_list) == NULL))
+        (std_dll_getfirst (&p_intf->pending_fh_list) == NULL) &&
+        (std_dll_getfirst (&p_intf->ip_list) == NULL))
     {
         fib_del_intf (p_intf);
     }
@@ -2623,6 +2626,8 @@ int fib_nh_walker_call_back (std_radical_head_t *p_rt_head, va_list ap)
                                 "Vrf_id: %d, prefix %s",  p_nh->vrf_id,
                                 FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr));
 
+                        /* set ADD flag to trigger route download to walker */
+                        p_dr->status_flag |= FIB_DR_STATUS_ADD;
                         fib_mark_dr_for_resolution (p_dr);
                     }
                 }
@@ -2898,8 +2903,11 @@ int fib_mark_nh_dep_dr_for_resolution (t_fib_nh *p_nh)
         /*
          * Mark DR for resolution only for ECMP case
          */
-        if(p_nh_dep_dr->p_dr->num_nh > 1)
+        if(p_nh_dep_dr->p_dr->num_nh > 1) {
+            /* set ADD flag to trigger route download to walker */
+            p_nh_dep_dr->p_dr->status_flag |= FIB_DR_STATUS_ADD;
             fib_mark_dr_for_resolution (p_nh_dep_dr->p_dr);
+        }
 
         p_nh_dep_dr =
             fib_get_next_nh_dep_dr (p_nh, p_nh_dep_dr->key.vrf_id,

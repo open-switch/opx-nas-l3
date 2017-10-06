@@ -115,6 +115,8 @@ uint32_t hal_rt_rif_ref_inc(hal_ifindex_t if_index);
 
 bool hal_rt_rif_ref_dec(hal_ifindex_t if_index);
 int hal_rt_rif_ref_get(hal_ifindex_t if_index);
+t_std_error hal_rif_info_get (hal_ifindex_t if_index, ndi_rif_id_t *rif_id, uint32_t *ref_count);
+hal_ifindex_t hal_rt_rif_entry_get_next_if_index (hal_ifindex_t if_index);
 
 bool hal_rt_is_intf_lpbk (hal_ifindex_t if_index);
 

@@ -37,6 +37,17 @@
 #include <string.h>
 
 
+/* this function is called during route programming to NPU if DR rt_type
+ * is blackhole/unreachable/prohibit.
+ */
+static inline uint32_t hal_rt_type_to_packet_action (t_rt_type rt_type)
+{
+    /* return packet action according to the route type */
+    return ((rt_type == RT_BLACKHOLE) ? NDI_ROUTE_PACKET_ACTION_DROP:
+            (rt_type == RT_UNREACHABLE) ? NDI_ROUTE_PACKET_ACTION_TRAPCPU:
+            (rt_type == RT_PROHIBIT) ? NDI_ROUTE_PACKET_ACTION_TRAPCPU:
+             NDI_ROUTE_PACKET_ACTION_TRAPCPU);
+}
 dn_hal_route_err hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr) {
     t_fib_nh *p_fh;
     t_fib_dr_fh *p_dr_fh;
@@ -192,7 +203,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
     t_std_error rc;
     bool error_occured = false;
     bool rif_update = false;
-    hal_ifindex_t  if_index;
+    hal_ifindex_t  if_index = 0;
 
     if (p_dr_fh != NULL) {
         p_fh = FIB_GET_FH_FROM_DRFH(p_dr_fh);
@@ -267,8 +278,8 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
         }
     } else {
         HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                "VRF %d. Prefix: %s/%d, NULL FH", vrf_id,
-                FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len);
+                "VRF %d. Prefix: %s/%d, rt_type: %d, NULL FH", vrf_id,
+                FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len, p_dr->rt_type);
     }
 
     memset(&route_entry, 0, sizeof(route_entry));
@@ -283,7 +294,11 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
         route_entry.npu_id = npu_id;
         route_entry.vrf_id = hal_vrf_obj_get(npu_id, p_dr->vrf_id);
 
-        if (p_fh == NULL) {
+        if (FIB_IS_RESERVED_RT_TYPE(p_dr->rt_type)) {
+            route_entry.action = hal_rt_type_to_packet_action (p_dr->rt_type);
+            rif_update = false;
+            if_index = 0;
+        } else if (p_fh == NULL) {
             p_nh = FIB_GET_FIRST_NH_FROM_DR(p_dr, nh_holder);
             if (!p_nh) {
                 // @Todo, Need to handle this case
@@ -359,7 +374,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                                "Route Add: Failed. VRF %d. Prefix: %s/%d: NH:%s NH Handle:%d",
                                vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                                p_dr->prefix_len, (p_fh ? FIB_IP_ADDR_TO_STR(&p_fh->key.ip_addr):
-                                                  (p_nh ? FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr): NULL)),
+                                                  (p_nh ? FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr): "N/A")),
                                route_entry.nh_handle);
 
                 error_occured = true;
@@ -377,7 +392,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                                 "Route Add: Successful. VRF %d. Prefix: %s/%d: NH:%s NH Handle %d RIF %d action:%s",
                                 vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                                 p_dr->prefix_len, (p_fh ? FIB_IP_ADDR_TO_STR(&p_fh->key.ip_addr):
-                                                   (p_nh ? FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr): NULL)),
+                                                   (p_nh ? FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr): "N/A")),
                                 route_entry.nh_handle, rif_id,
                                 ((route_entry.action == NDI_ROUTE_PACKET_ACTION_FORWARD) ? "Forward" :
                                  ((route_entry.action == NDI_ROUTE_PACKET_ACTION_TRAPCPU) ? "TrapToCpu" : "Drop")));
@@ -393,11 +408,24 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                     error_occured = true;
                     break;
                 }
+                /* NDI doesn't accept multiple attributes for update;
+                 * Hence set attribute is called for each attribute that is
+                 * updated.
+                 */
+                route_entry.flags = NDI_ROUTE_L3_PACKET_ACTION;
+                rc = ndi_route_set_attribute(&route_entry);
+                if (rc != STD_ERR_OK) {
+                    HAL_RT_LOG_ERR("HAL-RT-NDI",
+                               "Route Attribute Packet Action set failed.Unit: %d, " "Err: %d",
+                               npu_id, rc);
+                    error_occured = true;
+                    break;
+                }
                 HAL_RT_LOG_INFO("HAL-RT-NDI(RT-END)",
                                 "RT modified - VRF %d. Prefix: %s/%d: NH:%s old hdl %d, new hdl %d RIF %d",
                                 vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
                                 (p_fh ? FIB_IP_ADDR_TO_STR(&p_fh->key.ip_addr):
-                                 (p_nh ? FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr): NULL)),
+                                 (p_nh ? FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr): "N/A")),
                                 p_dr->nh_handle, nh_handle, rif_id);
             } else {
                 /* Route changed from ECMP/Non-ECMP to connected route */

@@ -409,6 +409,31 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
                             (ecmp_handle_created && p_dr->ofh_cnt <= 1) ?
                             "(Changed non-ECMP to ECMP)" : "");
             /*
+             * If ECMP group table us full, route will be set as non-ECMP.
+             * So cleanup the reference to old multipath object, so that when
+             * the reference count to this object becomes zero it can be deleted
+             * and used for routes with different nexthop list.
+             */
+            if (is_ecmp_table_full == true) {
+                /*
+                 * Delete the NH group(mostly decrement refcount or delete
+                 * in SAI (decrement ref cnt) and if group rf cnt is 0 delete from HW)
+                 */
+                HAL_RT_LOG_INFO("HAL-RT-NDI",
+                                "NH Group delete (changing from ECMP to Non-ECMP). Deleting old mp_obj Node. "
+                                " VRF %d. Prefix: %s/%d, num_fh: %d, " "nh_group_id =%d \n",
+                                p_dr->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
+                                p_dr->prefix_len, p_dr->num_fh, p_dr->nh_handle);
+
+                rc = hal_rt_delete_ecmp_group(p_dr, &route_entry, p_dr->nh_handle, true);
+
+                if (rc != STD_ERR_OK) {
+                    HAL_RT_LOG_ERR("HAL-RT-MP",
+                                   "NH Group:Failed to delete Route, group:%d. " "Vrf_id: %d, Unit: %d. Err: %d ",
+                                   p_dr->nh_handle, vrf_id, npu_id, rc);
+                }
+            }
+            /*
              * Change to new group handle
              */
             p_dr->nh_handle = route_entry.nh_handle;

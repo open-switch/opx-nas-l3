@@ -56,6 +56,8 @@
 #define FIB_GET_NH_FROM_LINK_NODE_GLUE(_p_dll) \
         ((t_fib_nh *) (((t_fib_link_node *)(((char *) (_p_dll)) - offsetof (t_fib_link_node, glue)))->self))
 
+#define FIB_GET_IP_FROM_LINK_NODE_GLUE(_p_dll) \
+        ((t_fib_ip_addr *) (((t_fib_link_node *)(((char *) (_p_dll)) - offsetof (t_fib_link_node, glue)))->self))
 /* FH node and the NH node typedefs are the same. */
 #define FIB_GET_FH_FROM_LINK_NODE_GLUE(_p_dll) \
         FIB_GET_NH_FROM_LINK_NODE_GLUE (_p_dll)
@@ -85,6 +87,8 @@
 #define FIB_GET_DRFH_NODE_FROM_NH_HOLDER(_nh_holder) \
         ((t_fib_dr_fh *)((_nh_holder).p_dll))
 
+#define FIB_GET_LINK_NODE_FROM_IP_HOLDER(_ip_holder) \
+        ((t_fib_link_node *)(_ip_holder).p_dll)
 #define FIB_GET_FH_FROM_DRFH(_p_dr_fh) \
         (t_fib_nh *)((_p_dr_fh)->link_node.self)
 
@@ -169,6 +173,15 @@
            FIB_DLL_GET_FIRST (&((_p_intf)->pending_fh_list))) != NULL) \
          ? FIB_GET_FH_FROM_LINK_NODE_GLUE ((_nh_holder).p_dll) : NULL)
 
+#define FIB_GET_FIRST_IP_FROM_INTF(_p_intf, _ip_holder) \
+        ((((_ip_holder).p_dll = \
+           FIB_DLL_GET_FIRST (&((_p_intf)->ip_list))) != NULL) \
+         ? FIB_GET_IP_FROM_LINK_NODE_GLUE ((_ip_holder).p_dll) : NULL)
+
+#define FIB_GET_NEXT_IP_FROM_INTF(_p_intf, _ip_holder) \
+        ((((_ip_holder).p_next_dll \
+           = FIB_DLL_GET_NEXT (&((_p_intf)->ip_list), (_ip_holder).p_dll)) != NULL) \
+         ? FIB_GET_IP_FROM_LINK_NODE_GLUE((_ip_holder).p_next_dll) : NULL)
 /*
  * FIB_GET_NEXT_PENDING_FH_FROM_INTF should NOT be used without using
  * FIB_GET_FIRST_PENDING_FH_FROM_INTF
@@ -256,6 +269,16 @@
              _nh_holder.p_next_fh = (((_p_fh) != NULL) ? \
                FIB_GET_NEXT_FH_FROM_INTF ((_p_intf), (_nh_holder)) : NULL))
 
+#define FIB_FOR_EACH_IP_FROM_INTF(_p_intf, _p_ip, _ip_holder) \
+        for ((_p_ip) = \
+             FIB_GET_FIRST_IP_FROM_INTF ((_p_intf), (_ip_holder)), \
+             (_ip_holder).p_next_ip = (((_p_ip) != NULL) ? \
+               FIB_GET_NEXT_IP_FROM_INTF ((_p_intf), (_ip_holder)) : NULL); \
+             (_p_ip) != NULL; \
+             (_p_ip) = (_ip_holder).p_next_ip, \
+             (_ip_holder).p_dll = (_ip_holder).p_next_dll, \
+             _ip_holder.p_next_ip = (((_p_ip) != NULL) ? \
+               FIB_GET_NEXT_IP_FROM_INTF ((_p_intf), (_ip_holder)) : NULL))
 #define FIB_FOR_EACH_PENDING_FH_FROM_INTF(_p_intf, _p_fh, _nh_holder) \
         for ((_p_fh) = \
              FIB_GET_FIRST_PENDING_FH_FROM_INTF ((_p_intf), (_nh_holder)), \
@@ -347,6 +370,10 @@
 #define FIB_IS_DR_REQ_RESOLVE(_p_)                                          \
         ((((_p_)->status_flag) & FIB_DR_STATUS_REQ_RESOLVE))
 
+#define FIB_IS_RESERVED_RT_TYPE(_rt_type_)                                  \
+        ((_rt_type_ == RT_BLACKHOLE) ||                                     \
+         (_rt_type_ == RT_UNREACHABLE) ||                                   \
+         (_rt_type_ == RT_PROHIBIT))
 #define FIB_IS_NH_RESERVED(_p_nh)                                             \
         ((FIB_IS_NH_LOOP_BACK ((_p_nh))) ||                                   \
          (FIB_IS_NH_ZERO ((_p_nh))))
@@ -491,6 +518,8 @@ typedef struct _t_fib_dr {
     void              *p_hal_dr_handle; /* mp_obj details per SAI instance */
     uint32_t           num_ipv6_link_local; /* No. of RIF entries created
                                                for link local IPv6 addresses */
+    t_rt_type          rt_type;     /* route with special nexthop types -
+                                     * blackhole/unreachable/prohibit */
 } t_fib_dr;
 
 typedef struct _t_fib_nh_key {
@@ -556,6 +585,11 @@ typedef struct _t_fib_nh_holder {
     uint32_t         ecmp_count;
 } t_fib_nh_holder;
 
+typedef struct _t_fib_ip_holder {
+    std_dll         *p_dll;
+    std_dll         *p_next_dll;
+    t_fib_ip_addr   *p_next_ip;
+} t_fib_ip_holder;
 typedef struct _t_fib_dr_nh {
     t_fib_link_node  link_node;
     /* Add any new fields above this */
@@ -605,6 +639,7 @@ typedef struct _t_fib_intf {
     int admin_status; /* this status is received from the kernel directly */
     hal_mac_addr_t mac_addr;
     char if_name[HAL_IF_NAME_SZ]; /* interface name */
+    std_dll_head   ip_list; /* List of IP addresses configured on this interface */
 } t_fib_intf;
 
 /* Function signatures for route.c - Start */
@@ -618,7 +653,7 @@ int fib_create_dr_tree (t_fib_vrf_info *p_vrf_info);
 
 int fib_destroy_dr_tree (t_fib_vrf_info *p_vrf_info);
 
-int fib_proc_dr_download (t_fib_route_entry *p_route_msg);
+int fib_proc_dr_download (t_fib_route_entry *p_route_msg, uint32_t nas_num_route_msgs_in_queue);
 
 int fib_proc_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_bytes);
 

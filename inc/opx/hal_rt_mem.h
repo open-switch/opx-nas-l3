@@ -72,6 +72,8 @@
 #define FIB_NHT_MEM_MALLOC()            (t_fib_nht *)FIB_MALLOC(sizeof (t_fib_nht))
 #define FIB_NHT_MEM_FREE(_p_)           FIB_FREE(_p_)
 
+#define FIB_IP_MEM_MALLOC()          (t_fib_ip_addr *)FIB_MALLOC(sizeof (t_fib_ip_addr))
+#define FIB_IP_MEM_FREE(_p_)         FIB_FREE(_p_)
 t_fib_dr *fib_alloc_dr_node (void);
 
 void fib_free_node (t_fib_dr *p_dr);

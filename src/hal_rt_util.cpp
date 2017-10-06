@@ -59,10 +59,17 @@ typedef struct _nas_rif_info_t {
     uint32_t     ref_count;
 }nas_rif_info_t;
 
-typedef std::unordered_map<hal_ifindex_t, nas_rif_info_t> nas_rt_rif_map_t;
+static auto &g_rif_entry_table = *new std::unordered_map<hal_ifindex_t, nas_rif_info_t>;
 using fib_msg_uptr_t = std::unique_ptr<t_fib_msg>;
-static std::deque<fib_msg_uptr_t> hal_rt_msg_list;
-static nas_rt_rif_map_t g_rif_entry_table;
+static auto &hal_rt_msg_list = *new std::deque<fib_msg_uptr_t>;
+/* stats counter for hal_rt_msg_list queue on per msg type basis */
+static auto hal_rt_msg_list_stats = new std::unordered_map<uint32_t,uint32_t> {
+            { FIB_MSG_TYPE_NL_INTF, 0 },
+            { FIB_MSG_TYPE_NBR_MGR_INTF, 0 },
+            { FIB_MSG_TYPE_NL_ROUTE, 0 },
+            { FIB_MSG_TYPE_NBR_MGR_NBR_INFO, 0 },
+            { FIB_MSG_TYPE_NL_NBR, 0 },
+};
 uint_t hal_rt_msg_peak_cnt = 0;
 
 #ifdef __cplusplus
@@ -106,6 +113,12 @@ t_std_error hal_rt_validate_intf(int if_index)
         return (STD_ERR_MK(e_std_err_NPU, e_std_err_code_PARAM, 0));
     }
 
+    /* Add other invalid interfaces here, to skip the route/neighbor updates */
+    /* skip events for manangement vlan */
+    if ((intf_ctrl.int_type == nas_int_type_MGMT) ||
+        ((intf_ctrl.int_type == nas_int_type_VLAN) &&
+         (intf_ctrl.int_sub_type == BASE_IF_VLAN_TYPE_MANAGEMENT)))
+        return (STD_ERR_MK(e_std_err_NPU, e_std_err_code_PARAM, 0));
     return STD_ERR_OK;
 }
 
@@ -241,6 +254,44 @@ int hal_rt_rif_ref_get(hal_ifindex_t if_index)
     return ref_cnt;
 }
 
+/* used by debug routines to retrieve rif information */
+t_std_error hal_rif_info_get (hal_ifindex_t if_index, ndi_rif_id_t *rif_id, uint32_t *ref_count)
+{
+    nas_rif_info_t      rif_info;
+
+    auto it = g_rif_entry_table.find(if_index);
+
+    /* return success if present in the RIF entry table */
+    if (it != g_rif_entry_table.end()) {
+        rif_info = (it->second);
+        *rif_id   = rif_info.rif_id;
+        *ref_count = rif_info.ref_count;
+
+        return STD_ERR_OK;
+    }
+    return STD_ERR(ROUTE,FAIL,0);
+}
+
+
+/* used by debug routines to retrieve next interface for rif entry */
+hal_ifindex_t hal_rt_rif_entry_get_next_if_index (hal_ifindex_t if_index)
+{
+    auto it = (!if_index) ? g_rif_entry_table.begin() :
+                 g_rif_entry_table.find(if_index);
+
+    if (it == g_rif_entry_table.end()) {
+        return 0;
+    }
+    if (!if_index) {
+        return it->first;
+    } else {
+        ++it; /* get the next element */
+        if (it != g_rif_entry_table.end()) {
+            return it->first;
+        }
+    }
+    return 0;
+}
 bool hal_rif_update (hal_vrf_id_t vrf_id, t_fib_intf_entry *p_intf)
 {
     ndi_rif_entry_t     rif_entry;
@@ -302,8 +353,6 @@ bool hal_rt_is_intf_lpbk (hal_ifindex_t if_index)
     intf_ctrl.if_index = if_index;
 
     if ((dn_hal_get_interface_info(&intf_ctrl)) != STD_ERR_OK) {
-        HAL_RT_LOG_INFO("HAL-RT-RIF",
-                        "Invalid interface %d. RIF ID get failed ", if_index);
         return false;
     }
 
@@ -596,10 +645,23 @@ fib_msg_uptr_t nas_rt_read_msg () {
     }
     auto p_msg = std::move(hal_rt_msg_list.front());
     hal_rt_msg_list.pop_front();
+    auto it = hal_rt_msg_list_stats->find(p_msg->type);
+    if (it != hal_rt_msg_list_stats->end())
+        it->second--;
     return p_msg;
 }
 
+uint32_t nas_rt_read_msg_list_stats (t_fib_msg_type msg_type)
+{
+    std::lock_guard<std::mutex> l {m_mtx};
+
+    auto it = hal_rt_msg_list_stats->find(msg_type);
+    if (it == hal_rt_msg_list_stats->end())
+        return 0;
+    return it->second;
+}
 int fib_msg_main(void) {
+    uint32_t nas_num_route_msgs_in_queue = 0;
     /* Process the messages from queue */
     for(;;) {
         fib_msg_uptr_t p_msg_uptr = nas_rt_read_msg();
@@ -615,7 +677,8 @@ int fib_msg_main(void) {
                 break;
             case FIB_MSG_TYPE_NL_ROUTE:
                 HAL_RT_LOG_DEBUG("HAL-RT-MSG-THREAD", "Route msg processing");
-                fib_proc_dr_download(&(p_msg->route));
+                nas_num_route_msgs_in_queue = nas_rt_read_msg_list_stats (p_msg->type);
+                fib_proc_dr_download(&(p_msg->route), nas_num_route_msgs_in_queue);
                 break;
             case FIB_MSG_TYPE_NBR_MGR_NBR_INFO:
                 HAL_RT_LOG_DEBUG("HAL-RT-MSG-THREAD", "Nbr msg processing");
@@ -634,6 +697,9 @@ int nas_rt_process_msg(t_fib_msg *p_msg) {
         std::lock_guard<std::mutex> l {m_mtx};
         hal_rt_msg_thr_wakeup = hal_rt_msg_list.empty();
         hal_rt_msg_list.emplace_back(p_msg);
+        auto it = hal_rt_msg_list_stats->find(p_msg->type);
+        if (it != hal_rt_msg_list_stats->end())
+            it->second++;
         if (hal_rt_msg_peak_cnt < hal_rt_msg_list.size())
             hal_rt_msg_peak_cnt = hal_rt_msg_list.size();
     }
@@ -650,6 +716,15 @@ std::string hal_rt_queue_stats ()
     std::lock_guard<std::mutex> l {m_mtx};
     std::stringstream ss;
     ss << "Current:" << hal_rt_msg_list.size() << "Peak:" << hal_rt_msg_peak_cnt;
+    return ss.str();
+}
+
+std::string hal_rt_queue_msg_type_stats ()
+{
+    std::lock_guard<std::mutex> l {m_mtx};
+    std::stringstream ss;
+    for (auto it = hal_rt_msg_list_stats->begin(); it != hal_rt_msg_list_stats->end(); ++it)
+        ss << "MsgType:" << it->first << "Msg Count:" << it->second;
     return ss.str();
 }
 

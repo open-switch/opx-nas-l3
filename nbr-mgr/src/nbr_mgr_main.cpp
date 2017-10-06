@@ -89,13 +89,13 @@ static void sigterm_hdlr(int signo)
 /* Nbr Mgr process entry function */
 int main() {
 
-    // signal must install before service init
     (void)signal(SIGTERM, sigterm_hdlr);
 
     if (!nbr_mgr_init()) {
         exit(1);
     }
 
+    /* Service is in ready state */
     sd_notify(0,"READY=1");
 
     /* @@TODO threads join to be done */

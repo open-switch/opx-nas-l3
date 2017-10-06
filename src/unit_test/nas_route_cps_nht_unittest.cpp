@@ -393,7 +393,7 @@ void nht_intf_admin_set(const char *p_b2b_intf, bool is_up)
 
 void nht_log_clear()
 {
-    if(system("echo 0 > /var/log/syslog"));
+    if(system("echo 0 > /var/log/messages"));
 }
 
 int nas_rt_nht_validate (const char *nht_dest, uint32_t nh_count,
@@ -414,16 +414,16 @@ int nas_rt_nht_validate (const char *nht_dest, uint32_t nh_count,
     }
     snprintf (pattern_str, 49, "%s", "NHT Event publish for ");
 
-    snprintf (cmd_str, 499, "grep \"%s\" /var/log/syslog |  grep \"%s\"", pattern_str, find_str);
+    snprintf (cmd_str, 499, "grep \"%s\" /var/log/messages |  grep \"%s\"", pattern_str, find_str);
     ret = system(cmd_str);
     return ret;
 }
 
 void nas_rt_nht_print_result (const char *tc_str, int ret) {
     if (ret == 0) {
-        printf("\r\n %s : PASSED\r\n\n", tc_str);
+        printf("\r %s : PASSED\r\n", tc_str);
     } else {
-        printf("\r\n %s : FAILED\r\n\n", tc_str);
+        printf("\r %s : FAILED\r\n", tc_str);
     }
     fflush(stdout);
 }
@@ -592,12 +592,14 @@ int nas_rt_nht_ut_1_3 (bool is_prereq) {
 
     ret = nas_rt_nht_validate (p_tr_ip3_intf1, 1, p_tr_ip3_intf1, ((af == AF_INET) ? 32 : 128));
     nas_rt_nht_print_result ( "TC_1_3: STEP-1 Direct NH case (static) ARP delete", ret);
-    if ((ret != 0) || (is_prereq) )
+    if (is_prereq)
         return ret;
+    if (ret == 0) {
     nht_log_clear();
     nht_del_static_arp (p_tr_ip3_intf1, p_dut_intf1);
     ret = nas_rt_nht_validate (p_tr_ip3_intf1, 0, p_tr_ip3_intf1, ((af == AF_INET) ? 32 : 128));
     nas_rt_nht_print_result ( "TC_1_3: Direct NH case (static) ARP delete", ret);
+    }
     /* clean-up */
     nht_config(p_tr_ip3_intf1, af, 0);
     nht_del_route (rt1, pref_len2, p_tr_ip3_intf1);
@@ -617,13 +619,16 @@ int nas_rt_nht_ut_1_4 (bool is_prereq) {
 
     ret = nas_rt_nht_validate (p_tr_ip_intf2, 1, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
     nas_rt_nht_print_result ("TC_1_4: STEP 1 Direct NH case (dynamic arp) ARP resolved before NHT add", ret);
-    if ((ret != 0) || (is_prereq))
+    if (is_prereq)
         return ret;
-    /* clean-up */
+    if (ret == 0) {
     nht_log_clear();
     nht_intf_admin_set(p_dut_intf2,0);
     ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
     nas_rt_nht_print_result ("TC_1_4: Direct NH case (dynamic arp) ARP resolved before NHT add", ret);
+    }
+
+    /* clean-up */
     nht_intf_admin_set(p_dut_intf2,1);
     nht_config(p_tr_ip_intf2, af, 0);
     nht_del_route (rt1, pref_len1,p_tr_ip_intf2);
@@ -643,8 +648,9 @@ int nas_rt_nht_ut_1_5 (bool is_prereq) {
     ret = nas_rt_nht_validate (p_tr_ip_intf2, 1, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
     nas_rt_nht_print_result ("TC_1_5: STEP1 Direct NH case (dynamic arp) ARP resolved after NHT add", ret);
 
-    if ((ret != 0) || (is_prereq))
+    if (is_prereq)
         return ret;
+    if (ret == 0) {
     nht_log_clear();
     nht_del_route (rt1, pref_len1,p_tr_ip_intf2);
     ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
@@ -652,11 +658,13 @@ int nas_rt_nht_ut_1_5 (bool is_prereq) {
     if (ret != 0)
         ret = 0;
     nas_rt_nht_print_result ("TC_1_5: STEP2 Direct NH case (dynamic arp) ARP resolved after NHT add", ret);
-    /* clean-up */
     nht_log_clear();
     nht_intf_admin_set(p_dut_intf2,0);
     ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
     nas_rt_nht_print_result ("TC_1_5: Direct NH case (dynamic arp) ARP resolved after NHT add", ret);
+    }
+
+    /* clean-up */
     nht_config(p_tr_ip_intf2, af, 0);
     nht_intf_admin_set(p_dut_intf2,1);
     return ret;
@@ -673,13 +681,16 @@ int nas_rt_nht_ut_1_6 (bool is_prereq) {
     ret = nas_rt_nht_validate (p_tr_ip_intf2, 1, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
     nas_rt_nht_print_result ("TC_1_6: STEP 1 Direct NH case (dynamic arp) ARP moved to unresolved (interface down)", ret);
 
-    if ((ret != 0) || (is_prereq))
+    if (is_prereq)
         return ret;
-    /* clean-up */
+    if (ret == 0) {
     nht_log_clear();
     nht_intf_admin_set(p_dut_intf2,0);
     ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
     nas_rt_nht_print_result ("TC_1_6: Direct NH case (dynamic arp) ARP moved to unresolved (interface down)", ret);
+    }
+
+    /* clean-up */
     nht_intf_admin_set(p_dut_intf2,1);
     nht_config(p_tr_ip_intf2, af, 0);
     nht_del_route (rt1, pref_len1,p_tr_ip_intf2);
@@ -710,7 +721,6 @@ int nas_rt_nht_ut_1_7 (bool is_prereq) {
         ret = 0;
     nas_rt_nht_print_result ("TC_1_7: STEP3 Direct NH case (dynamic arp) NHT add for same dest from multiple clients", ret);
     nht_log_clear();
-    /* clean-up */
     nht_config(p_tr_ip_intf2, af, 0);
     ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
     /* If there is no publish, mark as success */
@@ -722,6 +732,7 @@ int nas_rt_nht_ut_1_7 (bool is_prereq) {
     ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
     nas_rt_nht_print_result ("TC_1_7: Direct NH case (dynamic arp) NHT add for same dest from multiple clients", ret);
 
+    /* clean-up */
     nht_config(p_tr_ip_intf2, af, 0);
     nht_intf_admin_set(p_dut_intf2,1);
     return ret;
@@ -738,8 +749,9 @@ int nas_rt_nht_ut_1_8 (bool is_prereq) {
     ret = nas_rt_nht_validate (p_tr_ip3_intf2, 1, p_tr_ip3_intf2, ((af == AF_INET) ? 32 : 128));
     nas_rt_nht_print_result ("TC_1_8: STEP1 Re-run TC_1_6", ret);
 
-    if ((ret != 0) || (is_prereq))
+    if (is_prereq)
         return ret;
+    if (ret == 0) {
     nht_log_clear();
     nht_intf_admin_set(p_dut_intf2,0);
     ret = nas_rt_nht_validate (p_tr_ip3_intf2, 0, p_tr_ip3_intf2, ((af == AF_INET) ? 32 : 128));
@@ -761,6 +773,7 @@ int nas_rt_nht_ut_1_8 (bool is_prereq) {
     if (ret != 0)
         ret = 0;
     nas_rt_nht_print_result ("TC_1_8: Re-run TC_1_6", ret);
+    }
 
     /* Cleanup */
     nht_del_static_arp (p_tr_ip3_intf2, p_dut_intf2);
@@ -2284,7 +2297,36 @@ int main(int argc, char **argv) {
   }
   printf("___________________________________________\n");
 
-  if(system("opx_logging_cli enable ROUTE DEBUG MINOR"));
+  /* Please update journal settings to disable log suppression/rate-limiting
+   * so that the required logs are logged in /var/log/messages file.
+   * Edit /etc/systemd/journald.conf for following settings to
+   * disable rate-limiting and restart journal service
+   * #RateLimitInterval=30s   ==> RateLimitInterval=0s
+   * #RateLimitInterval=30s      ==> RateLimitBurst=0
+   * SystemMaxUse=50M         ==> SystemMaxUse=250M
+   */
+  if(system("sed -i '/SystemMaxUse=50M/c SystemMaxUse=250M' /etc/systemd/journald.conf"));
+  if(system("sed -i '/#RateLimitInterval=30s/c RateLimitInterval=0s' /etc/systemd/journald.conf"));
+  if(system("sed -i '/#RateLimitBurst=1000/c RateLimitBurst=0' /etc/systemd/journald.conf"));
+  if(system("service systemd-journald restart"));
 
-  return RUN_ALL_TESTS();
+  if(system("os10-logging enable ROUTE DEBUG"));
+  if(system("kill -USR1 `pidof base_nas`"));
+
+  if (RUN_ALL_TESTS())
+  {
+    printf ("\r\n Test Failed\r\n");
+  }
+
+  printf ("\r\n !!! Test Completed !!! \r\n");
+
+  /* revert back logging related changes done for executing the UT */
+  if(system("os10-logging disable ROUTE DEBUG"));
+  if(system("kill -USR1 `pidof base_nas`"));
+
+  if(system("sed -i '/SystemMaxUse=250M/c SystemMaxUse=50M' /etc/systemd/journald.conf"));
+  if(system("sed -i '/RateLimitInterval=0s/c #RateLimitInterval=30s' /etc/systemd/journald.conf"));
+  if(system("sed -i '/RateLimitBurst=0/c #RateLimitBurst=1000' /etc/systemd/journald.conf"));
+  if(system("service systemd-journald restart"));
+  return 0;
 }

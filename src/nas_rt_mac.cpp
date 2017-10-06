@@ -51,7 +51,7 @@ using nas_rt_mac_uptr_t = std::unique_ptr<nas_rt_peer_mac_config_t>;
 
 /* Vrf, Peer MAC based map*/
 using nas_rt_mac_addr_list_t = std::unordered_map <std::string, nas_rt_mac_uptr_t>;
-static std::unordered_map <hal_vrf_id_t, nas_rt_mac_addr_list_t> peer_mac_list;
+static auto &peer_mac_list = *new std::unordered_map <hal_vrf_id_t, nas_rt_mac_addr_list_t>;
 
 #ifdef __cplusplus
 extern "C" {

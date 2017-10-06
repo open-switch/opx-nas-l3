@@ -308,6 +308,10 @@ int nas_rt_find_next_best_dr_for_nht(t_fib_nht *p_fib_nht, int vrf_id, t_fib_ip_
         if (STD_IP_IS_AFINDEX_V4 (dest_addr->af_index)) {
             mask.u.v4_addr = htonl(mask.u.v4_addr);
         }
+    } else {
+        HAL_RT_LOG_DEBUG("HAL-RT-NHT", "Not a valid address family %d",
+                         dest_addr->af_index);
+        return STD_ERR_OK;
     }
     HAL_RT_LOG_DEBUG("HAL-RT-NHT", "vrf_id:%d, Route/NH/NHT:%s/%d NHT:%p ",
                  vrf_id, FIB_IP_ADDR_TO_STR (dest_addr), prefix_len, p_fib_nht);

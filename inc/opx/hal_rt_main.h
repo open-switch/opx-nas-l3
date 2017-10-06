@@ -83,6 +83,19 @@ enum _rt_proto {
     RT_PROTO_MAX,
 };
 
+typedef enum _rt_type {
+    RT_UNSPEC = 0,
+    RT_UNICAST,
+    RT_LOCAL,
+    RT_BROADCAST,
+    RT_ANYCAST,
+    RT_MULTICAST,
+    RT_BLACKHOLE,
+    RT_UNREACHABLE,
+    RT_PROHIBIT,
+    // MAX value for range check. MUST BE LAST.
+    RT_TYPE_MAX,
+} t_rt_type;
 enum {
     RT_INTF_ADMIN_STATUS_NONE,
     RT_INTF_ADMIN_STATUS_UP,
@@ -148,6 +161,7 @@ typedef struct _t_fib_gbl_info {
     uint32_t         num_route_msg;
     uint32_t         num_nei_msg;
     uint32_t         num_unk_msg;
+    uint32_t         num_ip_msg;
 } t_fib_gbl_info;
 
 typedef struct _t_fib_tnl_key {
@@ -166,6 +180,7 @@ typedef struct _t_fib_dr_msg_info {
     t_fib_ip_addr  prefix;
     uint8_t        prefix_len;
     rt_proto       proto;
+    t_rt_type      rt_type;
 } t_fib_dr_msg_info;
 
 typedef struct _t_fib_nh_msg_info {
@@ -310,6 +325,7 @@ typedef struct  {
     unsigned long   vrfid;
     hal_ip_addr_t       prefix;
     unsigned short      prefix_masklen;
+    t_rt_type       rt_type;
     hal_ifindex_t   nh_if_index;
     unsigned long   nh_vrfid;
     hal_ip_addr_t         nh_addr;
@@ -628,5 +644,6 @@ int hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac_config_
 int fib_create_nht_tree (t_fib_vrf_info *p_vrf_info);
 int fib_destroy_nht_tree (t_fib_vrf_info *p_vrf_info);
 bool hal_rt_process_intf_state_msg(t_fib_msg_type type, t_fib_intf_entry *p_intf);
+bool hal_rt_ip_addr_cps_obj_to_route (cps_api_object_t obj, t_fib_route_entry *p_route);
 
 #endif /* __HAL_RT_MAIN_H__ */

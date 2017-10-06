@@ -584,21 +584,34 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf) {
     int admin_status = RT_INTF_ADMIN_STATUS_NONE;
     bool is_op_del = false;
 
-    HAL_RT_LOG_DEBUG("HAL-RT","Interface admin status change notification");
+    HAL_RT_LOG_DEBUG("HAL-RT-INTF","Interface admin status change notification");
 
     /* Get the IfIndex and admin status attributes */
     cps_api_object_attr_t ifix_attr = cps_api_object_attr_get(obj,DELL_BASE_IF_CMN_IF_INTERFACES_INTERFACE_IF_INDEX);
     if (ifix_attr == NULL) {
-        HAL_RT_LOG_ERR("HAL-RT","If-Index is not present");
+        HAL_RT_LOG_ERR("HAL-RT-INTF","If-Index is not present");
         return false;
     }
     hal_ifindex_t index = cps_api_object_attr_data_u32(ifix_attr);
     cps_api_object_attr_t if_master_attr = cps_api_object_attr_get(obj,BASE_IF_LINUX_IF_INTERFACES_INTERFACE_IF_MASTER);
     if (if_master_attr) {
+        /* allow processing of admin status/interface delete notifications
+         * for bridged interfaces; these notifications are needed to cache
+         * the current admin status so that on interface mode change/admin
+         * status changes route/nh information can be deleted/re-programmed
+         * to hardware as required.
+         */
         hal_ifindex_t if_master_index = cps_api_object_attr_data_u32(if_master_attr);
-        HAL_RT_LOG_DEBUG("HAL-RT","Intf:%d Master intf:%d, L3 can be configured on master interfaces, not on member ports, ignored!",
+        cps_api_object_attr_t if_name_attr = cps_api_object_attr_get(obj,IF_INTERFACES_INTERFACE_NAME);
+        if (if_name_attr != NULL) {
+            const char *name = (const char*)cps_api_object_attr_data_bin(if_name_attr);
+
+            HAL_RT_LOG_INFO ("HAL-RT-INTF", "Intf:%d name:%s Master intf:%d.",
+                             index, name, if_master_index);
+        } else {
+            HAL_RT_LOG_INFO ("HAL-RT-INTF", "Intf:%d Master intf:%d.",
                          index, if_master_index);
-        return false;
+        }
     }
 
     /* If the interface VLAN/LAG deleted, flush all the neighbors and routes associated with it */

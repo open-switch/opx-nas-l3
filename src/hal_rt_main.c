@@ -44,6 +44,8 @@
 #include "cps_api_operation.h"
 #include "cps_api_events.h"
 #include "cps_class_map.h"
+#include "cps_api_object_key.h"
+#include "dell-base-ip.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -63,6 +65,8 @@ static t_fib_vrf        *ga_fib_vrf [FIB_MAX_VRF];
 static cps_api_operation_handle_t nas_rt_cps_handle;
 static cps_api_operation_handle_t nas_rt_nht_cps_handle;
 static cps_api_key_t linux_if_obj_key;
+static cps_api_key_t linux_ipv4_obj_key;
+static cps_api_key_t linux_ipv6_obj_key;
 
 #define NUM_INT_NAS_RT_CPS_API_THREAD 1
 #define NUM_INT_NAS_RT_NHT_CPS_API_THREAD 1
@@ -509,6 +513,24 @@ static bool hal_rt_process_msg(cps_api_object_t obj, void *param)
         }
         return true;
     }
+    if ((cps_api_key_matches (&linux_ipv4_obj_key, cps_api_object_key(obj), true) == 0) ||
+        (cps_api_key_matches (&linux_ipv6_obj_key, cps_api_object_key(obj), true) == 0)) {
+        g_fib_gbl_info.num_ip_msg++;
+        t_fib_route_entry self_ip;
+        memset(&self_ip, 0, sizeof(t_fib_route_entry));
+        /* Enqueue the IP address messages for further processing
+         * it has the IPv4/IPv6 route attributes.
+         */
+        if (hal_rt_ip_addr_cps_obj_to_route (obj,&self_ip)) {
+            p_msg = hal_rt_alloc_mem_msg();
+            if (p_msg) {
+                p_msg->type = FIB_MSG_TYPE_NL_ROUTE;
+                memcpy(&(p_msg->route), &self_ip, sizeof(self_ip));
+                nas_rt_process_msg(p_msg);
+            }
+        }
+        return true;
+    }
     if (cps_api_key_get_cat(cps_api_object_key(obj)) != cps_api_obj_cat_ROUTE) {
         g_fib_gbl_info.num_err_msg++;
         return true;
@@ -538,7 +560,7 @@ t_std_error hal_rt_main(void)
     cps_api_event_reg_t reg;
 
     memset(&reg,0,sizeof(reg));
-    const uint_t NUM_KEYS=2;
+    const uint_t NUM_KEYS=4;
     cps_api_key_t key[NUM_KEYS];
 
     cps_api_key_init(&key[0],cps_api_qualifier_TARGET,
@@ -549,6 +571,15 @@ t_std_error hal_rt_main(void)
                                     cps_api_qualifier_OBSERVED);
     memcpy(&linux_if_obj_key, &key[1], sizeof(cps_api_key_t));
 
+    cps_api_key_from_attr_with_qual(&key[2],
+                                    BASE_IP_IPV4_OBJ,
+                                    cps_api_qualifier_TARGET);
+    memcpy(&linux_ipv4_obj_key, &key[2], sizeof(cps_api_key_t));
+
+    cps_api_key_from_attr_with_qual(&key[3],
+                                    BASE_IP_IPV6_OBJ,
+                                    cps_api_qualifier_TARGET);
+    memcpy(&linux_ipv6_obj_key, &key[3], sizeof(cps_api_key_t));
     reg.number_of_objects = NUM_KEYS;
     reg.objects = key;
     if (cps_api_event_thread_reg(&reg,hal_rt_process_msg,NULL)!=cps_api_ret_code_OK) {
@@ -653,5 +684,6 @@ t_std_error hal_rt_init(void)
         return STD_ERR(ROUTE,FAIL,0);
     }
 
+    nas_rt_shell_debug_command_init ();
     return STD_ERR_OK;
 }

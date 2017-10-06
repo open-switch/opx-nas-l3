@@ -370,7 +370,7 @@ t_std_error hal_rt_fib_check_and_delete_old_groupid(t_fib_dr *p_dr, npu_id_t  un
     if (p_dr->remove_old_handle) {
         rc = ndi_route_next_hop_group_delete (unit,  p_dr->onh_handle);
         if (rc != STD_ERR_OK) {
-            HAL_RT_LOG_DEBUG ("HAL-RT-NDI",
+            HAL_RT_LOG_ERR ("HAL-RT-NDI",
                               "NH Group: Old Group ID delete failed. gid %d VRF %d. Prefix: "
                               "%s/%d, Unit: %d, Err: %d",
                               p_dr->onh_handle,  p_dr->vrf_id,

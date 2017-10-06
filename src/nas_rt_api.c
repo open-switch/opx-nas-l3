@@ -113,7 +113,7 @@ static inline bool nas_route_validate_route_attr(cps_api_object_t obj, bool del)
     }
 
     /*
-     * If route add/update case, check for NH attributes also
+     * If route add/update case, check for NH attributes or special NH attribute
      */
     nh_count = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_ENTRY_NH_COUNT);
 
@@ -126,7 +126,18 @@ static inline bool nas_route_validate_route_attr(cps_api_object_t obj, bool del)
     ids[2] = BASE_ROUTE_OBJ_ENTRY_NH_LIST_IFINDEX;
     cps_api_object_attr_t gwix = cps_api_object_e_get(obj, ids, ids_len);
 
-    if (nh_count == CPS_API_ATTR_NULL || (gw == CPS_API_ATTR_NULL && gwix == CPS_API_ATTR_NULL)) {
+    cps_api_object_attr_t spl_nexthop_option =
+          cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_ENTRY_SPECIAL_NEXT_HOP);
+
+    if (spl_nexthop_option) {
+        /* for special next hop no other additional params required */
+        return true;
+    }
+
+    ids[2] = BASE_ROUTE_OBJ_ENTRY_NH_LIST_IFNAME;
+    cps_api_object_attr_t gw_if_name = cps_api_object_e_get(obj, ids, ids_len);
+    if ((nh_count == CPS_API_ATTR_NULL) ||
+        ((gw == CPS_API_ATTR_NULL) && (gwix == CPS_API_ATTR_NULL) && (gw_if_name == CPS_API_ATTR_NULL))) {
         HAL_RT_LOG_DEBUG("NAS-RT-CPS-SET", "Missing route nh params");
         return false;
     }
@@ -350,6 +361,15 @@ static inline bool nas_rt_is_route_npu_prg_done(t_fib_dr *p_entry) {
     return true;
 }
 
+static inline uint32_t hal_rt_type_to_cps_obj_type (t_rt_type rt_type)
+{
+    /* return packet action according to the route type */
+    return ((rt_type == RT_BLACKHOLE) ? BASE_ROUTE_SPECIAL_NEXT_HOP_BLACKHOLE:
+            (rt_type == RT_UNREACHABLE) ? BASE_ROUTE_SPECIAL_NEXT_HOP_UNREACHABLE:
+            (rt_type == RT_PROHIBIT) ? BASE_ROUTE_SPECIAL_NEXT_HOP_PROHIBIT:
+            (rt_type == RT_LOCAL) ? BASE_ROUTE_SPECIAL_NEXT_HOP_RECEIVE:
+             0);
+}
 bool nas_rt_is_nh_npu_prg_done(t_fib_nh *p_entry) {
     int unit = 0;
     for (unit = 0; unit < hal_rt_access_fib_config()->max_num_npu; unit++) {
@@ -362,7 +382,7 @@ bool nas_rt_is_nh_npu_prg_done(t_fib_nh *p_entry) {
 static cps_api_object_t nas_route_info_to_cps_object(t_fib_dr *entry){
     t_fib_nh       *p_nh = NULL;
     t_fib_nh_holder nh_holder1;
-    int weight = 0;
+    int weight = 0, is_npu_prg_done;
     int addr_len = 0, nh_itr = 0, is_arp_resolved = false;
 
     if(entry == NULL){
@@ -394,6 +414,11 @@ static cps_api_object_t nas_route_info_to_cps_object(t_fib_dr *entry){
     cps_api_object_attr_add_u32(obj, BASE_ROUTE_OBJ_ENTRY_PROTOCOL, entry->proto);
     cps_api_object_attr_add_u32(obj, BASE_ROUTE_OBJ_ENTRY_OWNER, entry->default_dr_owner);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_NPU_PRG_DONE,nas_rt_is_route_npu_prg_done(entry));
+    if (FIB_IS_RESERVED_RT_TYPE (entry->rt_type)) {
+        cps_api_object_attr_add_u32 (obj,
+                BASE_ROUTE_OBJ_ENTRY_SPECIAL_NEXT_HOP,
+                hal_rt_type_to_cps_obj_type(entry->rt_type));
+    }
 
     FIB_FOR_EACH_NH_FROM_DR (entry, p_nh, nh_holder1)
     {
@@ -440,7 +465,7 @@ static cps_api_object_t nas_route_info_to_cps_object(t_fib_dr *entry){
         cps_api_object_e_add(obj, parent_list, 3,
                              cps_api_object_ATTR_T_U32, &is_arp_resolved, sizeof(is_arp_resolved));
         parent_list[2] = BASE_ROUTE_OBJ_ENTRY_NH_LIST_NPU_PRG_DONE;
-        bool is_npu_prg_done = nas_rt_is_nh_npu_prg_done(p_nh);
+        is_npu_prg_done = nas_rt_is_nh_npu_prg_done(p_nh);
         cps_api_object_e_add(obj, parent_list, 3,
                              cps_api_object_ATTR_T_U32, &is_npu_prg_done, sizeof(is_npu_prg_done));
 
@@ -582,7 +607,7 @@ t_std_error nas_route_get_all_route_info(cps_api_object_list_t list, uint32_t vr
 static void nas_route_nht_add_nh_info_to_cps_object (cps_api_object_t obj, t_fib_nh *p_nh, int nh_count) {
     cps_api_attr_id_t parent_list[3];
     unsigned int       af;
-    int addr_len = 0, is_arp_resolved;
+    int addr_len = 0, is_arp_resolved, is_npu_prg_done;
 
     parent_list[0] = BASE_ROUTE_NH_TRACK_NH_INFO;
     parent_list[1] = nh_count;
@@ -624,7 +649,7 @@ static void nas_route_nht_add_nh_info_to_cps_object (cps_api_object_t obj, t_fib
                          cps_api_object_ATTR_T_U32, &is_arp_resolved, sizeof(is_arp_resolved));
 
     parent_list[2] = BASE_ROUTE_NH_TRACK_NH_INFO_NPU_PRG_DONE;
-    bool is_npu_prg_done = nas_rt_is_nh_npu_prg_done(p_nh);
+    is_npu_prg_done = nas_rt_is_nh_npu_prg_done(p_nh);
     cps_api_object_e_add(obj, parent_list, 3,
                          cps_api_object_ATTR_T_U32, &is_npu_prg_done, sizeof(is_npu_prg_done));
 

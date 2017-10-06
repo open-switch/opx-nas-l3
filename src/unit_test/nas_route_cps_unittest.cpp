@@ -51,6 +51,271 @@
 
 cps_api_object_list_t list_of_objects;
 
+void nas_ut_route_op_spl_nh (bool is_add, const char *ip_addr, uint32_t prefix_len, uint32_t spl_nh_option, uint8_t af)
+{
+    cps_api_object_t obj = cps_api_object_create();
+
+    cps_api_key_from_attr_with_qual(cps_api_object_key(obj),
+           BASE_ROUTE_OBJ_OBJ,cps_api_qualifier_TARGET);
+
+    /*
+     * Check mandatory route attributes
+     *  BASE_ROUTE_OBJ_ENTRY_AF,     BASE_ROUTE_OBJ_ENTRY_VRF_ID);
+     * BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX,   BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN;
+     */
+
+    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_VRF_ID,0);
+    if (af == AF_INET) {
+        cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_AF,AF_INET);
+
+        uint32_t ip;
+        struct in_addr a;
+        inet_aton(ip_addr, &a);
+        ip=a.s_addr;
+
+        cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX,&ip,sizeof(ip));
+    } else if (af == AF_INET6) {
+        cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_AF,AF_INET6);
+
+        struct in6_addr a6;
+        inet_pton(AF_INET6, ip_addr, &a6);
+
+        cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX,&a6,sizeof(struct in6_addr));
+    }
+
+    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN,prefix_len);
+
+    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_SPECIAL_NEXT_HOP,spl_nh_option);
+
+
+    if (spl_nh_option == BASE_ROUTE_SPECIAL_NEXT_HOP_RECEIVE) {
+        cps_api_attr_id_t ids[3];
+        const int ids_len = sizeof(ids)/sizeof(*ids);
+        ids[0] = BASE_ROUTE_OBJ_ENTRY_NH_LIST;
+
+        uint32_t gw_idx = if_nametoindex("br100");
+        ids[1] = 0;
+        ids[2] = BASE_ROUTE_OBJ_ENTRY_NH_LIST_IFINDEX;
+        cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,
+                             (void *)&gw_idx, sizeof(uint32_t));
+
+        cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_NH_COUNT,1);
+    }
+
+    /*
+     * CPS transaction
+     */
+    cps_api_transaction_params_t tr;
+    ASSERT_TRUE(cps_api_transaction_init(&tr)==cps_api_ret_code_OK);
+
+    if (is_add)
+        cps_api_create(&tr,obj);
+    else
+        cps_api_delete(&tr,obj);
+
+    ASSERT_TRUE(cps_api_commit(&tr)==cps_api_ret_code_OK);
+    cps_api_transaction_close(&tr);
+}
+
+TEST(std_nas_route_test, nas_route_add_blackhole) {
+    nas_ut_route_op_spl_nh (1, "44.1.0.0", 16, BASE_ROUTE_SPECIAL_NEXT_HOP_BLACKHOLE, AF_INET);
+}
+
+TEST(std_nas_route_test, nas_route_add_unreachable) {
+    nas_ut_route_op_spl_nh (1, "44.2.0.0", 16, BASE_ROUTE_SPECIAL_NEXT_HOP_UNREACHABLE, AF_INET);
+}
+
+TEST(std_nas_route_test, nas_route_add_prohibit) {
+    nas_ut_route_op_spl_nh (1, "44.3.0.0", 16, BASE_ROUTE_SPECIAL_NEXT_HOP_PROHIBIT, AF_INET);
+}
+
+TEST(std_nas_route_test, nas_route_add_receive) {
+    nas_ut_route_op_spl_nh (1, "44.4.0.0", 16, BASE_ROUTE_SPECIAL_NEXT_HOP_RECEIVE, AF_INET);
+}
+
+TEST(std_nas_route_test, nas_route_del_blackhole) {
+    nas_ut_route_op_spl_nh (0, "44.1.0.0", 16, BASE_ROUTE_SPECIAL_NEXT_HOP_BLACKHOLE, AF_INET);
+}
+
+TEST(std_nas_route_test, nas_route_del_unreachable) {
+    nas_ut_route_op_spl_nh (0, "44.2.0.0", 16, BASE_ROUTE_SPECIAL_NEXT_HOP_UNREACHABLE, AF_INET);
+}
+
+TEST(std_nas_route_test, nas_route_del_prohibit) {
+    nas_ut_route_op_spl_nh (0, "44.3.0.0", 16, BASE_ROUTE_SPECIAL_NEXT_HOP_PROHIBIT, AF_INET);
+}
+
+TEST(std_nas_route_test, nas_route_del_receive) {
+    nas_ut_route_op_spl_nh (0, "44.4.0.0", 16, BASE_ROUTE_SPECIAL_NEXT_HOP_RECEIVE, AF_INET);
+}
+
+TEST(std_nas_route_test, nas_default_route_add_blackhole) {
+    nas_ut_route_op_spl_nh (1, "0.0.0.0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_BLACKHOLE, AF_INET);
+}
+
+TEST(std_nas_route_test, nas_default_route_add_unreachable) {
+    nas_ut_route_op_spl_nh (1, "0.0.0.0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_UNREACHABLE, AF_INET);
+}
+
+TEST(std_nas_route_test, nas_default_route_add_prohibit) {
+    nas_ut_route_op_spl_nh (1, "0.0.0.0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_PROHIBIT, AF_INET);
+}
+
+TEST(std_nas_route_test, nas_default_route_del_blackhole) {
+    nas_ut_route_op_spl_nh (0, "0.0.0.0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_BLACKHOLE, AF_INET);
+}
+
+TEST(std_nas_route_test, nas_default_route_del_unreachable) {
+    nas_ut_route_op_spl_nh (0, "0.0.0.0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_UNREACHABLE, AF_INET);
+}
+
+TEST(std_nas_route_test, nas_default_route_del_prohibit) {
+    nas_ut_route_op_spl_nh (0, "0.0.0.0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_PROHIBIT, AF_INET);
+}
+
+
+TEST(std_nas_route_test, nas_v6_route_add_blackhole) {
+    nas_ut_route_op_spl_nh (1, "1111:1111::", 64, BASE_ROUTE_SPECIAL_NEXT_HOP_BLACKHOLE, AF_INET6);
+}
+
+TEST(std_nas_route_test, nas_v6_route_add_unreachable) {
+    nas_ut_route_op_spl_nh (1, "1111:2222::", 64, BASE_ROUTE_SPECIAL_NEXT_HOP_UNREACHABLE, AF_INET6);
+}
+
+TEST(std_nas_route_test, nas_v6_route_add_prohibit) {
+    nas_ut_route_op_spl_nh (1, "1111:3333::", 64, BASE_ROUTE_SPECIAL_NEXT_HOP_PROHIBIT, AF_INET6);
+}
+
+TEST(std_nas_route_test, nas_v6_route_add_receive) {
+    nas_ut_route_op_spl_nh (1, "1111:4444::", 64, BASE_ROUTE_SPECIAL_NEXT_HOP_RECEIVE, AF_INET6);
+}
+
+TEST(std_nas_route_test, nas_v6_route_del_blackhole) {
+    nas_ut_route_op_spl_nh (0, "1111:1111::", 64, BASE_ROUTE_SPECIAL_NEXT_HOP_BLACKHOLE, AF_INET6);
+}
+
+TEST(std_nas_route_test, nas_v6_route_del_unreachable) {
+    nas_ut_route_op_spl_nh (0, "1111:2222::", 64, BASE_ROUTE_SPECIAL_NEXT_HOP_UNREACHABLE, AF_INET6);
+}
+
+TEST(std_nas_route_test, nas_v6_route_del_prohibit) {
+    nas_ut_route_op_spl_nh (0, "1111:3333::", 64, BASE_ROUTE_SPECIAL_NEXT_HOP_PROHIBIT, AF_INET6);
+}
+
+TEST(std_nas_route_test, nas_v6_route_del_receive) {
+    nas_ut_route_op_spl_nh (0, "1111:4444::", 64, BASE_ROUTE_SPECIAL_NEXT_HOP_RECEIVE, AF_INET6);
+}
+
+void nas_ut_route_test (bool is_add, bool is_set, uint32_t af, const char *prefix, uint32_t prefix_len,
+                        const char *gw, uint32_t gw_index, const char *gw_if_name) {
+    cps_api_object_t obj = cps_api_object_create();
+
+    cps_api_key_from_attr_with_qual(cps_api_object_key(obj),
+                                    BASE_ROUTE_OBJ_OBJ,cps_api_qualifier_TARGET);
+
+    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_AF, af);
+    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_VRF_ID,0);
+    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN,prefix_len);
+
+    if (af == AF_INET) {
+        uint32_t ip;
+        struct in_addr a;
+        inet_aton(prefix,&a);
+        ip=a.s_addr;
+        cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX,&ip,sizeof(ip));
+    } else {
+        struct in6_addr a6;
+        inet_pton(AF_INET6, prefix, &a6);
+        cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX,&a6,sizeof(struct in6_addr));
+    }
+    cps_api_attr_id_t ids[3];
+    const int ids_len = sizeof(ids)/sizeof(*ids);
+    ids[0] = BASE_ROUTE_OBJ_ENTRY_NH_LIST;
+    ids[1] = 0;
+    ids[2] = BASE_ROUTE_OBJ_ENTRY_NH_LIST_NH_ADDR;
+
+    if (gw) {
+        if (af == AF_INET) {
+            uint32_t ip;
+            struct in_addr a;
+            inet_aton(gw,&a);
+            ip=a.s_addr;
+            cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_BIN,
+                                 &ip,sizeof(ip));
+        } else {
+            struct in6_addr a6;
+            inet_pton(AF_INET6, gw, &a6);
+            cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_BIN,
+                                 &a6,sizeof(struct in6_addr));
+        }
+    }
+    //enable below code for route with nexthop interface
+    if (gw_index) {
+        ids[2] = BASE_ROUTE_OBJ_ENTRY_NH_LIST_IFINDEX;
+        cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,
+                             (void *)&gw_index, sizeof(uint32_t));
+    }
+    if (gw_if_name) {
+        ids[2] = BASE_ROUTE_OBJ_ENTRY_NH_LIST_IFNAME;
+        cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_BIN,
+                             gw_if_name, strlen(gw_if_name)+1);
+    }
+    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_NH_COUNT,1);
+
+    /*
+     * CPS transaction
+     */
+    cps_api_transaction_params_t tr;
+    ASSERT_TRUE(cps_api_transaction_init(&tr)==cps_api_ret_code_OK);
+    if (is_set)
+        cps_api_set(&tr,obj);
+    else if (is_add)
+        cps_api_create(&tr,obj);
+    else
+        cps_api_delete(&tr,obj);
+
+    ASSERT_TRUE(cps_api_commit(&tr)==cps_api_ret_code_OK);
+    cps_api_transaction_close(&tr);
+}
+
+TEST(std_nas_route_test, nas_mgmt_route_add) {
+    nas_ut_route_test(1, 0, AF_INET, "60.0.0.0", 16, "10.11.70.254", 0, "eth0");
+    nas_ut_route_test(1, 0, AF_INET, "65.0.0.0", 16, NULL, 0, "eth0");
+    nas_ut_route_test(1, 0, AF_INET6, "6::", 64, NULL, 0, "eth0");
+}
+TEST(std_nas_route_test, nas_mgmt_route_set) {
+    nas_ut_route_test(1, 1, AF_INET, "60.0.0.0", 16, NULL, 0, "eth0");
+    nas_ut_route_test(1, 1, AF_INET, "65.0.0.0", 16, "10.11.70.254", 0, NULL);
+}
+TEST(std_nas_route_test, nas_mgmt_route_del) {
+    nas_ut_route_test(0, 0, AF_INET, "60.0.0.0", 16, NULL, 0, "eth0");
+    nas_ut_route_test(0, 0, AF_INET, "65.0.0.0", 16, "10.11.70.254", 0, NULL);
+    nas_ut_route_test(0, 0, AF_INET6, "6::", 64, NULL, 0, "eth0");
+}
+
+TEST(std_nas_route_test, nas_default_v6_route_add_blackhole) {
+    nas_ut_route_op_spl_nh (1, "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_BLACKHOLE, AF_INET6);
+}
+
+TEST(std_nas_route_test, nas_default_v6_route_add_unreachable) {
+    nas_ut_route_op_spl_nh (1, "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_UNREACHABLE, AF_INET6);
+}
+
+TEST(std_nas_route_test, nas_default_v6_route_add_prohibit) {
+    nas_ut_route_op_spl_nh (1, "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_PROHIBIT, AF_INET6);
+}
+
+TEST(std_nas_route_test, nas_default_v6_route_del_blackhole) {
+    nas_ut_route_op_spl_nh (0, "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_BLACKHOLE, AF_INET6);
+}
+
+TEST(std_nas_route_test, nas_default_v6_route_del_unreachable) {
+    nas_ut_route_op_spl_nh (0, "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_UNREACHABLE, AF_INET6);
+}
+
+TEST(std_nas_route_test, nas_default_v6_route_del_prohibit) {
+    nas_ut_route_op_spl_nh (0, "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_PROHIBIT, AF_INET6);
+}
 TEST(std_nas_route_test, nas_route_add) {
 
     cps_api_object_t obj = cps_api_object_create();
