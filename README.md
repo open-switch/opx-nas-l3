@@ -8,4 +8,4 @@ This repository contains the Layer 3 (L3) component of the network abstraction s
 
 See [NAS-L3](https://github.com/open-switch/opx-docs/wiki/NAS-L3) for more information on the NAS L3 module.
 
-(c) 2017 Dell
+(c) 2017 Dell EMC
