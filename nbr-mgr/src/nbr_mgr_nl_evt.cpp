@@ -26,14 +26,15 @@
 #include "nbr_mgr_log.h"
 #include "std_mac_utils.h"
 #include "std_ip_utils.h"
+#include "std_utils.h"
 #include "ds_common_types.h"
 
 #include "dell-base-if.h"
 #include "dell-base-if-linux.h"
 #include "dell-base-routing.h"
-#include "cps_api_route.h"
+#include "os-routing-events.h"
+#include "dell-base-if-vlan.h"
 
-extern cps_api_key_t linux_if_obj_key;
 char *nbr_mgr_nl_neigh_state_to_str (int state) {
     static char str[18];
         if (state == NBR_MGR_NUD_INCOMPLETE)
@@ -62,7 +63,7 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
     bool is_admin_up = false;
     bool is_op_del = false;
     bool is_bridge = false;
-    uint32_t type = 0;
+    uint32_t type = 0, vlan_id = 0;
 
     NBR_MGR_LOG_DEBUG("CPS-INTF","Interface admin status change notification");
 
@@ -78,14 +79,14 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
     if (cps_api_object_type_operation(cps_api_object_key(obj)) != cps_api_oper_DELETE) {
         cps_api_object_attr_t admin_attr = cps_api_object_attr_get(obj,IF_INTERFACES_INTERFACE_ENABLED);
 
-        if(admin_attr == NULL){
+        if(admin_attr != NULL){
+            is_admin_up = cps_api_object_attr_data_u32(admin_attr);
+            p_intf->flags |= NBR_MGR_INTF_ADMIN_MSG;
+            NBR_MGR_LOG_DEBUG("CPS-INTF","Intf:%d status:%s",
+                              index, (is_admin_up ? "Up" : "Down"));
+        } else {
             NBR_MGR_LOG_DEBUG("CPS-INTF","admin status is not present for intf:%d",index);
-            return false;
         }
-
-        is_admin_up = cps_api_object_attr_data_u32(admin_attr);
-        NBR_MGR_LOG_DEBUG("CPS-INTF","Intf:%d status:%s",
-                          index, (is_admin_up ? "Up" : "Down"));
     } else {
         is_op_del = true;
     }
@@ -95,63 +96,118 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
         cps_api_object_attr_get(obj, BASE_IF_LINUX_IF_INTERFACES_INTERFACE_DELL_TYPE);
     if (intf_type) {
         type = cps_api_object_attr_data_u32(intf_type);
-        NBR_MGR_LOG_INFO("CPS-INTF","Intf:%d status:%s type:%d",
-                         index, (is_admin_up ? "Up" : "Down"), type);
+        NBR_MGR_LOG_INFO("CPS-INTF","Intf:%d is_del:%d flags:0x%x status:%s type:%d",
+                         index, is_op_del, p_intf->flags, (is_admin_up ? "Up" : "Down"), type);
         /* Allow only the L2 (bridge) and L3 ports for L3 operations */
         if ((type != BASE_CMN_INTERFACE_TYPE_L2_PORT) && (type != BASE_CMN_INTERFACE_TYPE_L3_PORT) &&
-            (type != BASE_CMN_INTERFACE_TYPE_LAG)) {
+            (type != BASE_CMN_INTERFACE_TYPE_LAG) && (type != BASE_CMN_INTERFACE_TYPE_VLAN)) {
             return false;
         }
-        cps_api_object_attr_t intf_member_port =
-            cps_api_object_attr_get(obj, DELL_IF_IF_INTERFACES_INTERFACE_MEMBER_PORTS_NAME);
-        /* Incase of LAG member delete, ignore it, allow only LAG intf admin down/up and delete */
-        if (is_op_del && intf_member_port && (type == BASE_CMN_INTERFACE_TYPE_LAG)) {
-            return false;
+        /* Incase of LAG/VLAN member delete, ignore it,
+         * allow only LAG/VLAN intf admin down/up and delete */
+        if (is_op_del) {
+            if (type == BASE_CMN_INTERFACE_TYPE_LAG) {
+                cps_api_object_attr_t intf_member_port =
+                    cps_api_object_attr_get(obj, DELL_IF_IF_INTERFACES_INTERFACE_MEMBER_PORTS_NAME);
+                if (intf_member_port) {
+                    NBR_MGR_LOG_INFO("CPS-INTF","LAG member del Intf:%d flags:0x%x status:%s type:%d mbr-port:%p",
+                                     index, p_intf->flags, (is_admin_up ? "Up" : "Down"), type, intf_member_port);
+                    return false;
+                }
+            } else if (type == BASE_CMN_INTERFACE_TYPE_VLAN) {
+                NBR_MGR_LOG_INFO("CPS-INTF","VLAN member del Intf:%d flags:0x%x status:%s type:%d",
+                                 index, p_intf->flags, (is_admin_up ? "Up" : "Down"), type);
+                return false;
+            }
         }
-        if (type == BASE_CMN_INTERFACE_TYPE_L2_PORT)
+        if (type == BASE_CMN_INTERFACE_TYPE_L2_PORT) {
             is_bridge = true;
+        } else if (type == BASE_CMN_INTERFACE_TYPE_VLAN) {
+            cps_api_object_attr_t vlan_id_attr =
+                cps_api_object_attr_get(obj, BASE_IF_VLAN_IF_INTERFACES_INTERFACE_ID);
+            if (vlan_id_attr) {
+                vlan_id = cps_api_object_attr_data_u32(vlan_id_attr);
+                p_intf->flags |= NBR_MGR_INTF_VLAN_MSG;
+            }
+        }
     }
-
+    /* If add/update case, if none of the flags set, return false */
+    if ((is_op_del == false) && (p_intf->flags == 0)) {
+        return false;
+    }
     p_intf->if_index = index;
     p_intf->is_admin_up = is_admin_up;
     p_intf->is_bridge = is_bridge;
+    p_intf->vlan_id = vlan_id;
     p_intf->is_op_del = is_op_del;
 
-    NBR_MGR_LOG_INFO("CPS-INTF","Intf:%d status:%s type:%d bridge:%d is_op_del:%d",
-                     index, (is_admin_up ? "Up" : "Down"), type, is_bridge, is_op_del);
+    NBR_MGR_LOG_INFO("CPS-INTF","Intf:%d flags:0x%x status:%s type:%d bridge:%d is_op_del:%d vlan-id:%d",
+                     index, p_intf->flags, (is_admin_up ? "Up" : "Down"), type, is_bridge, is_op_del,
+                     vlan_id);
     return true;
 }
 
 bool nbr_mgr_cps_obj_to_neigh(cps_api_object_t obj, nbr_mgr_nbr_entry_t *n) {
-    cps_api_object_attr_t list[cps_api_if_NEIGH_A_MAX];
-    cps_api_object_attr_fill_list(obj,0,list,sizeof(list)/sizeof(*list));
 
-    memset(n,0,sizeof(*n));
+    memset(n, 0, sizeof(nbr_mgr_nbr_entry_t));
+    cps_api_operation_types_t op = cps_api_object_type_operation(cps_api_object_key(obj));
 
-    if (list[cps_api_if_NEIGH_A_FAMILY]!=NULL)
-        n->family = cps_api_object_attr_data_u32(list[cps_api_if_NEIGH_A_FAMILY]);
-    if (list[cps_api_if_NEIGH_A_OPERATION]!=NULL)
-        n->msg_type = (db_nbr_event_type_t)cps_api_object_attr_data_u32(list[cps_api_if_NEIGH_A_OPERATION]);
-    if (list[cps_api_if_NEIGH_A_NBR_ADDR]!=NULL)
-        memcpy(&n->nbr_addr,
-               cps_api_object_attr_data_bin(list[cps_api_if_NEIGH_A_NBR_ADDR]),
-               sizeof(n->nbr_addr));
-    if (list[cps_api_if_NEIGH_A_NBR_MAC]!=NULL)
-        memcpy(n->nbr_hwaddr,
-               cps_api_object_attr_data_bin(list[cps_api_if_NEIGH_A_NBR_MAC]),
-               sizeof(n->nbr_hwaddr));
-    if (list[cps_api_if_NEIGH_A_IFINDEX]!=NULL)
-        n->if_index = cps_api_object_attr_data_u32(list[cps_api_if_NEIGH_A_IFINDEX]);
-    if (list[cps_api_if_NEIGH_A_PHY_IFINDEX]!=NULL)
-        n->mbr_if_index = cps_api_object_attr_data_u32(list[cps_api_if_NEIGH_A_PHY_IFINDEX]);
-    if (list[cps_api_if_NEIGH_A_VRF]!=NULL)
-        n->vrfid = cps_api_object_attr_data_u32(list[cps_api_if_NEIGH_A_VRF]);
-    if (list[cps_api_if_NEIGH_A_EXPIRE]!=NULL)
-        n->expire= cps_api_object_attr_data_u32(list[cps_api_if_NEIGH_A_EXPIRE]);
-    if (list[cps_api_if_NEIGH_A_FLAGS]!=NULL)
-        n->flags = cps_api_object_attr_data_u32(list[cps_api_if_NEIGH_A_FLAGS]);
-    if (list[cps_api_if_NEIGH_A_STATE]!=NULL)
-        n->status = cps_api_object_attr_data_u32(list[cps_api_if_NEIGH_A_STATE]);
+    switch (op) {
+        case cps_api_oper_CREATE:
+            n->msg_type = NBR_MGR_NBR_ADD;
+            break;
+        case cps_api_oper_SET:
+            n->msg_type = NBR_MGR_NBR_UPD;
+            break;
+        case cps_api_oper_DELETE:
+            n->msg_type = NBR_MGR_NBR_DEL;
+            break;
+        default:
+            break;
+    }
+    cps_api_object_it_t it;
+    cps_api_attr_id_t id = 0;
+    cps_api_object_it_begin(obj,&it);
+
+    for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it) ) {
+        id = cps_api_object_attr_id(it.attr);
+
+        switch (id) {
+            case BASE_ROUTE_OBJ_VRF_NAME:
+                safestrncpy((char*)n->vrf_name, (const char*)cps_api_object_attr_data_bin(it.attr),
+                            sizeof(n->vrf_name));
+                break;
+            case BASE_ROUTE_OBJ_NBR_FLAGS:
+                n->flags = cps_api_object_attr_data_uint(it.attr);
+                break;
+            case BASE_ROUTE_OBJ_NBR_AF:
+                n->family = cps_api_object_attr_data_uint(it.attr);
+                n->nbr_addr.af_index = n->family;
+                break;
+            case BASE_ROUTE_OBJ_NBR_ADDRESS:
+                memcpy(&n->nbr_addr.u, cps_api_object_attr_data_bin(it.attr),
+                       cps_api_object_attr_len (it.attr));
+                break;
+            case BASE_ROUTE_OBJ_NBR_MAC_ADDR:
+                std_string_to_mac(&n->nbr_hwaddr, (char*)cps_api_object_attr_data_bin(it.attr),
+                                  cps_api_object_attr_len(it.attr));
+                break;
+            case BASE_ROUTE_OBJ_NBR_IFINDEX:
+                n->if_index = cps_api_object_attr_data_uint(it.attr);
+                break;
+            case OS_RE_BASE_ROUTE_OBJ_NBR_MBR_IFINDEX:
+                n->mbr_if_index= cps_api_object_attr_data_uint(it.attr);
+                break;
+            case BASE_ROUTE_OBJ_NBR_STATE:
+                n->status = cps_api_object_attr_data_uint(it.attr);
+                break;
+        }
+    }
+    if (((n->family == HAL_INET4_FAMILY) || (n->family == HAL_INET6_FAMILY)) &&
+        (n->status == NBR_MGR_NUD_STALE)) {
+        n->auto_refresh_on_stale_enabled = nbr_mgr_get_auto_refresh_status((char*)n->vrf_name,
+                                                                           n->family);
+    }
     return true;
 }
 
@@ -162,41 +218,33 @@ bool nbr_mgr_process_nl_msg(cps_api_object_t obj, void *param)
     char str[NBR_MGR_MAC_STR_LEN];
     char buff[HAL_INET6_TEXT_LEN + 1];
 
-   // g_fib_gbl_info.num_tot_msg++;
-
-    if (cps_api_key_matches (&linux_if_obj_key, cps_api_object_key(obj), true) == 0) {
-        //g_fib_gbl_info.num_int_msg++;
-        nbr_mgr_intf_entry_t intf;
-        /* Enqueue the intf messages for further processing
-         * only it has the admin attribute.*/
-        if (nbr_mgr_cps_obj_to_intf(obj,&intf)) {
-            p_msg_uptr = nbr_mgr_alloc_unique_msg(&p_msg);
-            if (p_msg) {
-                p_msg->type = NBR_MGR_NL_INTF_EVT;
-                memcpy(&(p_msg->intf), &intf, sizeof(nbr_mgr_intf_entry_t));
-                nbr_mgr_enqueue_netlink_nas_msg(std::move(p_msg_uptr));
+    switch (cps_api_key_get_cat(cps_api_object_key(obj))) {
+        case cps_api_obj_CAT_BASE_IF_LINUX:
+            nbr_mgr_intf_entry_t intf;
+            /* Enqueue the intf messages for further processing
+             * only it has the admin attribute.*/
+            memset(&intf, 0, sizeof(intf));
+            if (nbr_mgr_cps_obj_to_intf(obj,&intf)) {
+                p_msg_uptr = nbr_mgr_alloc_unique_msg(&p_msg);
+                if (p_msg) {
+                    p_msg->type = NBR_MGR_NL_INTF_EVT;
+                    memcpy(&(p_msg->intf), &intf, sizeof(nbr_mgr_intf_entry_t));
+                    nbr_mgr_enqueue_netlink_nas_msg(std::move(p_msg_uptr));
+                }
             }
-        }
-        return true;
-    }
+            break;
 
-    if (cps_api_key_get_cat(cps_api_object_key(obj)) != cps_api_obj_cat_ROUTE) {
-     //   g_fib_gbl_info.num_err_msg++;
-        return true;
-    }
-
-    switch (cps_api_key_get_subcat(cps_api_object_key(obj))) {
-        case cps_api_route_obj_NEIBH:
+        case cps_api_obj_CAT_OS_RE:
             //g_fib_gbl_info.num_neigh_msg++;
             p_msg_uptr = nbr_mgr_alloc_unique_msg(&p_msg);
             if (p_msg) {
                 if (nbr_mgr_cps_obj_to_neigh(obj, &(p_msg->nbr))) {
                     NBR_MGR_LOG_DEBUG("NETLINK-EVT", "type:%d family:%d ip:%s mac:%s if-index:%d/phy:%d state:%s(0x%x) processing",
-                                    p_msg->nbr.msg_type, p_msg->nbr.family,
-                                    std_ip_to_string(&(p_msg->nbr.nbr_addr), buff, HAL_INET6_TEXT_LEN),
-                                    std_mac_to_string (&(p_msg->nbr.nbr_hwaddr), str, NBR_MGR_MAC_STR_LEN),
-                                    p_msg->nbr.if_index, p_msg->nbr.mbr_if_index,
-                                    nbr_mgr_nl_neigh_state_to_str(p_msg->nbr.status), p_msg->nbr.status);
+                                      p_msg->nbr.msg_type, p_msg->nbr.family,
+                                      std_ip_to_string(&(p_msg->nbr.nbr_addr), buff, HAL_INET6_TEXT_LEN),
+                                      std_mac_to_string (&(p_msg->nbr.nbr_hwaddr), str, NBR_MGR_MAC_STR_LEN),
+                                      p_msg->nbr.if_index, p_msg->nbr.mbr_if_index,
+                                      nbr_mgr_nl_neigh_state_to_str(p_msg->nbr.status), p_msg->nbr.status);
 
                     /* If AF_INET/AF_INET6 are set, IP nbr otherwise AF_BRIDGE nbr */
                     if ((p_msg->nbr.family == HAL_INET4_FAMILY) || (p_msg->nbr.family == HAL_INET6_FAMILY)) {

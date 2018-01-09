@@ -60,11 +60,12 @@ void nas_ut_route_op_spl_nh (bool is_add, const char *ip_addr, uint32_t prefix_l
 
     /*
      * Check mandatory route attributes
-     *  BASE_ROUTE_OBJ_ENTRY_AF,     BASE_ROUTE_OBJ_ENTRY_VRF_ID);
+     *  BASE_ROUTE_OBJ_ENTRY_AF,     BASE_ROUTE_OBJ_VRF_NAME);
      * BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX,   BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN;
      */
 
-    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_VRF_ID,0);
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, FIB_DEFAULT_VRF_NAME,
+                            sizeof(FIB_DEFAULT_VRF_NAME));
     if (af == AF_INET) {
         cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_AF,AF_INET);
 
@@ -207,14 +208,13 @@ TEST(std_nas_route_test, nas_v6_route_del_receive) {
 }
 
 void nas_ut_route_test (bool is_add, bool is_set, uint32_t af, const char *prefix, uint32_t prefix_len,
-                        const char *gw, uint32_t gw_index, const char *gw_if_name) {
+                        const char *gw, uint32_t gw_index, const char *gw_if_name, const char *vrf_name) {
     cps_api_object_t obj = cps_api_object_create();
 
     cps_api_key_from_attr_with_qual(cps_api_object_key(obj),
                                     BASE_ROUTE_OBJ_OBJ,cps_api_qualifier_TARGET);
-
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_AF, af);
-    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_VRF_ID,0);
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, vrf_name, strlen(vrf_name)+1);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN,prefix_len);
 
     if (af == AF_INET) {
@@ -279,19 +279,35 @@ void nas_ut_route_test (bool is_add, bool is_set, uint32_t af, const char *prefi
 }
 
 TEST(std_nas_route_test, nas_mgmt_route_add) {
-    nas_ut_route_test(1, 0, AF_INET, "60.0.0.0", 16, "10.11.70.254", 0, "eth0");
-    nas_ut_route_test(1, 0, AF_INET, "65.0.0.0", 16, NULL, 0, "eth0");
-    nas_ut_route_test(1, 0, AF_INET6, "6::", 64, NULL, 0, "eth0");
+    nas_ut_route_test(1, 0, AF_INET, "60.0.0.0", 16, "10.11.70.254", 0, "eth0", "default");
+    nas_ut_route_test(1, 0, AF_INET, "65.0.0.0", 16, NULL, 0, "eth0", "default");
+    nas_ut_route_test(1, 0, AF_INET6, "6::", 64, NULL, 0, "eth0", "default");
 }
 TEST(std_nas_route_test, nas_mgmt_route_set) {
-    nas_ut_route_test(1, 1, AF_INET, "60.0.0.0", 16, NULL, 0, "eth0");
-    nas_ut_route_test(1, 1, AF_INET, "65.0.0.0", 16, "10.11.70.254", 0, NULL);
+    nas_ut_route_test(1, 1, AF_INET, "60.0.0.0", 16, NULL, 0, "eth0", "default");
+    nas_ut_route_test(1, 1, AF_INET, "65.0.0.0", 16, "10.11.70.254", 0, NULL, "default");
 }
 TEST(std_nas_route_test, nas_mgmt_route_del) {
-    nas_ut_route_test(0, 0, AF_INET, "60.0.0.0", 16, NULL, 0, "eth0");
-    nas_ut_route_test(0, 0, AF_INET, "65.0.0.0", 16, "10.11.70.254", 0, NULL);
-    nas_ut_route_test(0, 0, AF_INET6, "6::", 64, NULL, 0, "eth0");
+    nas_ut_route_test(0, 0, AF_INET, "60.0.0.0", 16, NULL, 0, "eth0", "default");
+    nas_ut_route_test(0, 0, AF_INET, "65.0.0.0", 16, "10.11.70.254", 0, NULL, "default");
+    nas_ut_route_test(0, 0, AF_INET6, "6::", 64, NULL, 0, "eth0", "default");
 }
+
+TEST(std_nas_route_test, nas_mgmt_route_add_mgmt_vrf) {
+    nas_ut_route_test(1, 0, AF_INET, "60.0.0.0", 16, "10.11.70.254", 0, "eth0", "management");
+    nas_ut_route_test(1, 0, AF_INET, "65.0.0.0", 16, NULL, 0, "eth0", "management");
+    nas_ut_route_test(1, 0, AF_INET6, "6::", 64, NULL, 0, "eth0", "management");
+}
+TEST(std_nas_route_test, nas_mgmt_route_set_mgmt_vrf) {
+    nas_ut_route_test(1, 1, AF_INET, "60.0.0.0", 16, NULL, 0, "eth0", "management");
+    nas_ut_route_test(1, 1, AF_INET, "65.0.0.0", 16, "10.11.70.254", 0, NULL, "management");
+}
+TEST(std_nas_route_test, nas_mgmt_route_del_mgmt_vrf) {
+    nas_ut_route_test(0, 0, AF_INET, "60.0.0.0", 16, NULL, 0, "eth0", "management");
+    nas_ut_route_test(0, 0, AF_INET, "65.0.0.0", 16, "10.11.70.254", 0, NULL, "management");
+    nas_ut_route_test(0, 0, AF_INET6, "6::", 64, NULL, 0, "eth0", "management");
+}
+
 
 TEST(std_nas_route_test, nas_default_v6_route_add_blackhole) {
     nas_ut_route_op_spl_nh (1, "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_BLACKHOLE, AF_INET6);
@@ -328,12 +344,13 @@ TEST(std_nas_route_test, nas_route_add) {
 
     /*
      * Check mandatory route attributes
-     *  BASE_ROUTE_OBJ_ENTRY_AF,     BASE_ROUTE_OBJ_ENTRY_VRF_ID);
+     *  BASE_ROUTE_OBJ_ENTRY_AF,     BASE_ROUTE_OBJ_VRF_NAME);
      * BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX,   BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN;
      */
 
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_AF,AF_INET);
-    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_VRF_ID,0);
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, FIB_DEFAULT_VRF_NAME,
+                            sizeof(FIB_DEFAULT_VRF_NAME));
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN,32);
 
     uint32_t ip;
@@ -389,7 +406,7 @@ TEST(std_nas_route_test, nas_route_set) {
 
     /*
      * Check mandatory route attributes
-     *  BASE_ROUTE_OBJ_ENTRY_AF,     BASE_ROUTE_OBJ_ENTRY_VRF_ID);
+     *  BASE_ROUTE_OBJ_ENTRY_AF,     BASE_ROUTE_OBJ_VRF_NAME);
      * BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX,   BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN;
      * For NH: BASE_ROUTE_OBJ_ENTRY_NH_COUNT, BASE_ROUTE_OBJ_ENTRY_NH_LIST,
      * BASE_ROUTE_OBJ_ENTRY_NH_LIST_NH_ADDR
@@ -397,7 +414,8 @@ TEST(std_nas_route_test, nas_route_set) {
 
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_AF,AF_INET);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN,32);
-    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_VRF_ID,0);
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, FIB_DEFAULT_VRF_NAME,
+                            sizeof(FIB_DEFAULT_VRF_NAME));
 
     uint32_t ip;
     struct in_addr a;
@@ -899,7 +917,8 @@ TEST(std_nas_route_test, nas_route_delete) {
               BASE_ROUTE_OBJ_OBJ,cps_api_qualifier_TARGET);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_AF,AF_INET);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN,32);
-    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_VRF_ID,0);
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, FIB_DEFAULT_VRF_NAME,
+                            sizeof(FIB_DEFAULT_VRF_NAME));
 
     uint32_t ip;
     struct in_addr a;
@@ -931,12 +950,13 @@ TEST(std_nas_route_test, nas_route_mp_add) {
 
     /*
      * Check mandatory route attributes
-     *  BASE_ROUTE_OBJ_ENTRY_AF,     BASE_ROUTE_OBJ_ENTRY_VRF_ID);
+     *  BASE_ROUTE_OBJ_ENTRY_AF,     BASE_ROUTE_OBJ_VRF_NAME);
      * BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX,   BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN;
      */
 
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_AF,AF_INET);
-    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_VRF_ID,0);
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, FIB_DEFAULT_VRF_NAME,
+                            sizeof(FIB_DEFAULT_VRF_NAME));
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN,32);
 
     uint32_t ip;
@@ -997,7 +1017,7 @@ TEST(std_nas_route_test, nas_route_mp_set) {
 
     /*
      * Check mandatory route attributes
-     *  BASE_ROUTE_OBJ_ENTRY_AF,     BASE_ROUTE_OBJ_ENTRY_VRF_ID);
+     *  BASE_ROUTE_OBJ_ENTRY_AF,     BASE_ROUTE_OBJ_VRF_NAME);
      * BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX,   BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN;
      * For NH: BASE_ROUTE_OBJ_ENTRY_NH_COUNT, BASE_ROUTE_OBJ_ENTRY_NH_LIST,
      * BASE_ROUTE_OBJ_ENTRY_NH_LIST_NH_ADDR
@@ -1005,7 +1025,8 @@ TEST(std_nas_route_test, nas_route_mp_set) {
 
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_AF,AF_INET);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN,32);
-    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_VRF_ID,0);
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, FIB_DEFAULT_VRF_NAME,
+                            sizeof(FIB_DEFAULT_VRF_NAME));
 
     uint32_t ip;
     struct in_addr a;
@@ -1063,7 +1084,8 @@ TEST(std_nas_route_test, nas_route_mp_delete) {
               BASE_ROUTE_OBJ_OBJ,cps_api_qualifier_TARGET);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_AF,AF_INET);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN,32);
-    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_VRF_ID,0);
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, FIB_DEFAULT_VRF_NAME,
+                            sizeof(FIB_DEFAULT_VRF_NAME));
 
     uint32_t ip;
     struct in_addr a;
@@ -1094,7 +1116,8 @@ TEST(std_nas_route_test, nas_route_mp_add_ipv6) {
            BASE_ROUTE_OBJ_OBJ,cps_api_qualifier_TARGET);
 
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_AF,AF_INET6);
-    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_VRF_ID,0);
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, FIB_DEFAULT_VRF_NAME,
+                            sizeof(FIB_DEFAULT_VRF_NAME));
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN,64);
 
     struct in6_addr a6;
@@ -1145,7 +1168,8 @@ TEST(std_nas_route_test, nas_route_mp_set_ipv6) {
            BASE_ROUTE_OBJ_OBJ,cps_api_qualifier_TARGET);
 
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_AF,AF_INET6);
-    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_VRF_ID,0);
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, FIB_DEFAULT_VRF_NAME,
+                            sizeof(FIB_DEFAULT_VRF_NAME));
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN,64);
 
     struct in6_addr a6;
@@ -1182,7 +1206,8 @@ TEST(std_nas_route_test, nas_route_mp_del_ipv6) {
            BASE_ROUTE_OBJ_OBJ,cps_api_qualifier_TARGET);
 
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_AF,AF_INET6);
-    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_VRF_ID,0);
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, FIB_DEFAULT_VRF_NAME,
+                            sizeof(FIB_DEFAULT_VRF_NAME));
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN,64);
 
     struct in6_addr a6;
@@ -1250,7 +1275,8 @@ TEST(std_nas_route_test, nas_route_add_scale) {
             cps_api_key_from_attr_with_qual(cps_api_object_key(obj),
                                             BASE_ROUTE_OBJ_OBJ,cps_api_qualifier_TARGET);
             cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_AF,AF_INET);
-            cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_VRF_ID,0);
+            cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, FIB_DEFAULT_VRF_NAME,
+                            sizeof(FIB_DEFAULT_VRF_NAME));
 
             /* 75.x.x.0 network */
             snprintf(ip_addr,256, "75.%d.%d.0",i,j);
@@ -1317,7 +1343,8 @@ TEST(std_nas_route_test, nas_route_delete_scale) {
               BASE_ROUTE_OBJ_OBJ,cps_api_qualifier_TARGET);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_AF,AF_INET);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN,32);
-    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_VRF_ID,0);
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, FIB_DEFAULT_VRF_NAME,
+                            sizeof(FIB_DEFAULT_VRF_NAME));
 
 
     snprintf(ip_addr,256, "11.10.%d.%d",i,j);
@@ -1372,6 +1399,13 @@ void nas_route_dump_arp_object_content(cps_api_object_t obj){
 
         case BASE_ROUTE_OBJ_NBR_IFINDEX:
             std::cout<<"Ifindex "<<cps_api_object_attr_data_u32(it.attr)<<std::endl;
+            break;
+
+        case BASE_ROUTE_OBJ_VRF_NAME:
+            char vrf_name[256];
+            memset(vrf_name,'\0',sizeof(vrf_name));
+            memcpy(vrf_name, cps_api_object_attr_data_bin(it.attr), cps_api_object_attr_len(it.attr));
+            std::cout<<"VRF-name "<<vrf_name<<std::endl;
             break;
 
         case BASE_ROUTE_OBJ_NBR_IFNAME:
@@ -1432,7 +1466,8 @@ TEST(std_nas_route_test, nas_peer_routing_config_enable) {
     cps_api_key_from_attr_with_qual(cps_api_object_key(obj),
                                     BASE_ROUTE_PEER_ROUTING_CONFIG_OBJ,cps_api_qualifier_TARGET);
 
-    cps_api_object_attr_add_u32(obj,BASE_ROUTE_PEER_ROUTING_CONFIG_VRF_ID,0);
+    cps_api_object_attr_add(obj,BASE_ROUTE_PEER_ROUTING_CONFIG_VRF_NAME, FIB_DEFAULT_VRF_NAME,
+                            sizeof(FIB_DEFAULT_VRF_NAME));
 
     hal_mac_addr_t mac_addr = {0x01, 0x12, 0x13, 0x14, 0x15, 0x16};
 
@@ -1454,7 +1489,8 @@ TEST(std_nas_route_test, nas_peer_routing_config_set) {
     cps_api_key_from_attr_with_qual(cps_api_object_key(obj),
                                     BASE_ROUTE_PEER_ROUTING_CONFIG_OBJ,cps_api_qualifier_TARGET);
 
-    cps_api_object_attr_add_u32(obj,BASE_ROUTE_PEER_ROUTING_CONFIG_VRF_ID,0);
+    cps_api_object_attr_add(obj,BASE_ROUTE_PEER_ROUTING_CONFIG_VRF_NAME, FIB_DEFAULT_VRF_NAME,
+                            sizeof(FIB_DEFAULT_VRF_NAME));
 
     hal_mac_addr_t mac_addr = {0x01, 0x22, 0x23, 0x24, 0x25, 0x26};
 
@@ -1477,7 +1513,8 @@ TEST(std_nas_route_test, nas_peer_routing_config_disable) {
     cps_api_key_from_attr_with_qual(cps_api_object_key(obj),
                                     BASE_ROUTE_PEER_ROUTING_CONFIG_OBJ,cps_api_qualifier_TARGET);
 
-    cps_api_object_attr_add_u32(obj,BASE_ROUTE_PEER_ROUTING_CONFIG_VRF_ID,0);
+    cps_api_object_attr_add(obj,BASE_ROUTE_PEER_ROUTING_CONFIG_VRF_NAME, FIB_DEFAULT_VRF_NAME,
+                            sizeof(FIB_DEFAULT_VRF_NAME));
 
     hal_mac_addr_t mac_addr = {0x01, 0x12, 0x13, 0x14, 0x15, 0x16};
 
@@ -1504,6 +1541,13 @@ void nas_route_dump_peer_routing_object_content(cps_api_object_t obj){
 
         case BASE_ROUTE_PEER_ROUTING_CONFIG_VRF_ID:
             std::cout<<"VRF Id: "<<cps_api_object_attr_data_u32(it.attr)<<std::endl;
+            break;
+
+        case BASE_ROUTE_PEER_ROUTING_CONFIG_VRF_NAME:
+            char vrf_name[256];
+            memset(vrf_name,'\0',sizeof(vrf_name));
+            memcpy(vrf_name, cps_api_object_attr_data_bin(it.attr), cps_api_object_attr_len(it.attr));
+            std::cout<<"VRF-name: "<<vrf_name<<std::endl;
             break;
 
         case BASE_ROUTE_PEER_ROUTING_CONFIG_IFNAME:

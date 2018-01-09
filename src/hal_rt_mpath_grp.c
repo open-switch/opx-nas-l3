@@ -148,7 +148,7 @@ static inline void hal_dump_ecmp_nh_list(next_hop_id_t a_nh_obj_id [], int count
  * Create ECMP Group ID: Pass list of nh and get ECMP group ID
  */
 t_std_error hal_rt_find_or_create_ecmp_group(t_fib_dr *p_dr, ndi_nh_group_t *entry,
-        next_hop_id_t *handle, bool *p_out_is_mp_table_full)
+        next_hop_id_t *handle, bool *p_out_is_mp_table_full, ndi_nh_group_t *removed_nh_group_entry)
 {
 
     npu_id_t            unit;
@@ -238,32 +238,48 @@ t_std_error hal_rt_find_or_create_ecmp_group(t_fib_dr *p_dr, ndi_nh_group_t *ent
                                     "Failed to replace Multipath mp_obj Node."
                                     "Vrf_id: %d, Unit: %d.\n", p_dr->vrf_id, unit);
 
+                    /* on failure to create the new NH group,
+                     * NDI will clean-up the NH group if it is created.
+                     */
                     error_occured = true;
                 }
-
-                is_mp_obj_replaced = true;
+                else
+                {
+                    is_mp_obj_replaced = true;
+                }
             }
             else
             {
-                 /*
-                  * Create a new MP node
-                  */
-
-                p_mp_obj = hal_rt_fib_create_mp_obj (p_dr, entry, aui1_md5_digest, ecmp_count,
-                                         a_nh_obj_id, false,
-                                         0, p_out_is_mp_table_full);
+                /* if there are only removed NH's then check if we can reuse the existing MP group */
+                if (removed_nh_group_entry->nhop_count != 0)
+                {
+                    p_mp_obj = hal_rt_check_and_reuse_mp_obj (p_dr, entry,
+                                           p_out_is_mp_table_full, removed_nh_group_entry,
+                                           p_old_mp_obj, a_nh_obj_id, aui1_md5_digest);
+                }
 
                 if (p_mp_obj == NULL)
                 {
-                    HAL_RT_LOG_ERR ("HAL-RT-NDI",
-                                    "Failed to create New Multipath mp_obj Node. "
-                                    "Vrf_id: %d, Unit: %d.\n",
-                                    p_dr->vrf_id, unit);
+                    /*
+                     * Create a new MP node
+                     */
 
-                    error_occured = true;
+                    p_mp_obj = hal_rt_fib_create_mp_obj (p_dr, entry, aui1_md5_digest, ecmp_count,
+                                             a_nh_obj_id, false,
+                                             0, p_out_is_mp_table_full);
+
+                    if (p_mp_obj == NULL)
+                    {
+                        HAL_RT_LOG_ERR ("HAL-RT-NDI",
+                                        "Failed to create New Multipath mp_obj Node. "
+                                        "Vrf_id: %d, Unit: %d.\n",
+                                        p_dr->vrf_id, unit);
+
+                        error_occured = true;
+                    }
+
+                    is_mp_obj_created = true;
                 }
-
-                is_mp_obj_created = true;
             }
         }
 
@@ -307,6 +323,104 @@ t_std_error hal_rt_find_or_create_ecmp_group(t_fib_dr *p_dr, ndi_nh_group_t *ent
 
 
 /*
+ * Check and reuse MP object: Pass list of nh, list of removed nh and old MP object.
+ */
+t_fib_mp_obj *hal_rt_check_and_reuse_mp_obj (t_fib_dr *p_dr,
+                   ndi_nh_group_t *entry, bool *p_out_is_mp_table_full,
+                   ndi_nh_group_t *removed_nh_group_entry,
+                   t_fib_mp_obj *p_old_mp_obj,
+                   next_hop_id_t a_new_nh_obj_id [],
+                   uint8_t *pu1_new_md5_digest)
+{
+    npu_id_t            unit;
+    int                 rc;
+    t_fib_mp_obj       *p_mp_obj = NULL;
+    uint8_t             aui1_tmp_md5_digest [HAL_RT_MD5_DIGEST_LEN];
+    next_hop_id_t       tmp_a_nh_obj_id [HAL_RT_MAX_ECMP_PATH];
+
+    memset (aui1_tmp_md5_digest, 0, sizeof (aui1_tmp_md5_digest));
+    memset (tmp_a_nh_obj_id, 0, sizeof (tmp_a_nh_obj_id));
+
+    unit = entry->npu_id;
+
+    /* if there are only removed NH's then check if we can reuse the existing MP group */
+    if (removed_nh_group_entry->nhop_count != 0)
+    {
+        HAL_RT_LOG_INFO ("HAL-RT-MP",
+                         "ECMP NH removal scenario. No MP obj found. Trying to find one for OLD NH list. "
+                         "VRF %d Prefix: %s/%d "
+                         "New nh_count:%d, Removed nh_count:%d ",
+                         p_dr->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
+                         p_dr->nh_count, removed_nh_group_entry->nhop_count);
+
+        /*
+         * copy nh_list to  tmp list
+         */
+        size_t i;
+        for (i=0; i<p_dr->nh_count; i++) {
+            tmp_a_nh_obj_id[i] = entry->nh_list[i].id;
+
+        }
+        for (i=0; i<removed_nh_group_entry->nhop_count; i++) {
+            tmp_a_nh_obj_id[p_dr->nh_count+i] = removed_nh_group_entry->nh_list[i].id;
+        }
+
+        /*
+         * Sort the NH list for optimal ECMP groups allocation
+         */
+        hal_rt_sort_array(tmp_a_nh_obj_id, (p_dr->nh_count + removed_nh_group_entry->nhop_count));
+
+        hal_rt_fib_form_md5_key(aui1_tmp_md5_digest, tmp_a_nh_obj_id, HAL_RT_MAX_ECMP_PATH, false);
+
+        p_mp_obj = hal_rt_fib_get_mp_obj (p_dr, entry, aui1_tmp_md5_digest,
+                                          (p_dr->nh_count + removed_nh_group_entry->nhop_count), tmp_a_nh_obj_id);
+        if (p_mp_obj != NULL)
+        {
+            HAL_RT_LOG_INFO ("HAL-RT-MP",
+                             "ECMP NH removal scenario. Found MP obj for OLD NH list. "
+                             "VRF %d Prefix: %s/%d "
+                             "mp nh_count:%d, mp GID:%d, ref_cnt:%d",
+                             p_dr->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
+                             p_mp_obj->ecmp_count, p_mp_obj->sai_ecmp_gid, p_mp_obj->ref_count);
+
+            if (p_old_mp_obj == p_mp_obj)
+            {
+                rc = hal_rt_fib_remove_members_from_mp_obj (p_dr, p_mp_obj,
+                                 removed_nh_group_entry,
+                                 pu1_new_md5_digest, entry->nhop_count,
+                                 a_new_nh_obj_id, true,
+                                 p_mp_obj->sai_ecmp_gid,
+                                 p_out_is_mp_table_full);
+                if (rc != STD_ERR_OK)
+                {
+                    HAL_RT_LOG_ERR ("HAL-RT-MP",
+                                    "Failed to update Multipath mp_obj Node for NH removal. "
+                                    "Unit:%d, Vrf_id:%d, Prefix: %s/%d mp GID:%d\n",
+                                    unit, p_dr->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
+                                    p_dr->prefix_len, p_mp_obj->sai_ecmp_gid);
+                    /* failed to update MP group. So switch to regular flow and create a new group */
+                    p_mp_obj = NULL;
+                }
+                else
+                {
+
+                    HAL_RT_LOG_INFO ("HAL-RT-MP",
+                                     "ECMP NH removal scenario. Removed NH's from current MP obj. "
+                                     "VRF %d Prefix: %s/%d "
+                                     "removed nh_count:%d, mp GID:%d, ref_cnt:%d",
+                                     p_dr->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
+                                     removed_nh_group_entry->nhop_count, p_mp_obj->sai_ecmp_gid, p_mp_obj->ref_count);
+                }
+            } else {
+                p_mp_obj = NULL;
+            }
+        }
+    }
+
+    return p_mp_obj;
+}
+
+/*
  * Delete ECMP Group ID: Pass ECMP group ID,
  * route status: update or delete
  */
@@ -325,10 +439,10 @@ t_std_error hal_rt_delete_ecmp_group(t_fib_dr *p_dr, ndi_route_t  *entry,
 
     if (p_mp_obj == NULL)
     {
-        HAL_RT_LOG_ERR("HAL-RT-NDI",
+        HAL_RT_LOG_DEBUG("HAL-RT-NDI",
                    "Multipath Object is NULL. Vrf_id: %d, Unit: "
                    "%d.\n", entry->vrf_id, unit);
-        return (STD_ERR(ROUTE, FAIL, 0));
+        return STD_ERR_OK;
     }
 
         p_hal_dr_info->a_obj_status[unit] = HAL_RT_STATUS_ECMP_INVALID;

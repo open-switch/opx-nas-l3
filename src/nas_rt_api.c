@@ -20,6 +20,7 @@
 
 
 #include "dell-base-routing.h"
+#include "os-icmp-config.h"
 #include "nas_rt_api.h"
 #include "nas_os_l3.h"
 #include "hal_rt_util.h"
@@ -27,6 +28,7 @@
 #include "event_log_types.h"
 #include "event_log.h"
 #include "std_mutex_lock.h"
+#include "std_utils.h"
 
 #include "cps_class_map.h"
 #include "cps_api_object_key.h"
@@ -37,6 +39,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include "dell-base-neighbor.h"
+#include "dell-base-acl.h"
 
 BASE_ROUTE_OBJ_t nas_route_check_route_key_attr(cps_api_object_t obj) {
 
@@ -82,7 +85,6 @@ BASE_ROUTE_OBJ_t nas_route_check_route_key_attr(cps_api_object_t obj) {
 static inline bool nas_route_validate_route_attr(cps_api_object_t obj, bool del) {
 
     cps_api_object_attr_t af;
-    cps_api_object_attr_t vrf_id;
     cps_api_object_attr_t prefix;
     cps_api_object_attr_t pref_len;
     cps_api_object_attr_t nh_count;
@@ -91,7 +93,6 @@ static inline bool nas_route_validate_route_attr(cps_api_object_t obj, bool del)
      * Check mandatory route attributes
      */
     af       = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_ENTRY_AF);
-    vrf_id   = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_ENTRY_VRF_ID);
     prefix   = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX);
     pref_len = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN);
 
@@ -99,8 +100,12 @@ static inline bool nas_route_validate_route_attr(cps_api_object_t obj, bool del)
      * If route delete case, check the key mandatory attrs for delete case first
      */
 
-    if  (af == CPS_API_ATTR_NULL || vrf_id == CPS_API_ATTR_NULL ||
-            prefix == CPS_API_ATTR_NULL || pref_len == CPS_API_ATTR_NULL) {
+    /* @@TODO Mandate the vrf_name once the app updated the CPS route object
+     * with the vrf-name.
+     * const char *vrf_name  = cps_api_object_get_data(obj,BASE_ROUTE_OBJ_VRF_NAME);
+     * */
+    if  ((af == CPS_API_ATTR_NULL) || (prefix == CPS_API_ATTR_NULL) ||
+         (pref_len == CPS_API_ATTR_NULL)) {
         HAL_RT_LOG_DEBUG("NAS-RT-CPS-SET", "Missing route mandatory attr params");
         return false;
     }
@@ -379,6 +384,84 @@ bool nas_rt_is_nh_npu_prg_done(t_fib_nh *p_entry) {
     return true;
 }
 
+static cps_api_object_t nas_intf_ip_unreach_info_to_cps_object(t_fib_intf *p_intf){
+
+    if(p_intf == NULL){
+        HAL_RT_LOG_ERR("HAL-RT-API","Null Intf entry pointer passed to convert it to cps object");
+        return NULL;
+    }
+
+    cps_api_object_t obj = cps_api_object_create();
+    if(obj == NULL){
+        HAL_RT_LOG_ERR("HAL-RT-API","Failed to allocate memory to cps object");
+        return NULL;
+    }
+
+    cps_api_key_t key;
+    cps_api_key_from_attr_with_qual(&key, BASE_ROUTE_IP_UNREACHABLES_CONFIG_OBJ,
+                                    cps_api_qualifier_TARGET);
+    cps_api_object_set_key(obj,&key);
+
+    cps_api_set_key_data (obj, BASE_ROUTE_IP_UNREACHABLES_CONFIG_AF, cps_api_object_ATTR_T_U32,&(p_intf->key.af_index),
+                          sizeof(p_intf->key.af_index));
+    cps_api_set_key_data (obj, BASE_ROUTE_IP_UNREACHABLES_CONFIG_IFNAME, cps_api_object_ATTR_T_BIN,
+                          p_intf->if_name, (strlen(p_intf->if_name)+1));
+    return obj;
+}
+
+cps_api_return_code_t nas_route_get_all_ip_unreach_info(cps_api_object_list_t list, uint32_t af, char *if_name,
+                                                        bool is_specific_get) {
+
+    t_fib_intf *p_intf = NULL;
+
+    if (af >= FIB_MAX_AFINDEX)
+    {
+        HAL_RT_LOG_ERR("HAL-RT-ARP","Invalid Address family");
+        return cps_api_ret_code_ERR;
+    }
+
+    p_intf = fib_get_first_intf();
+    while (p_intf != NULL){
+        if (((p_intf->key.af_index == HAL_RT_V4_AFINDEX) &&
+             (p_intf->is_ipv4_unreachables_set == false)) ||
+            ((p_intf->key.af_index == HAL_RT_V6_AFINDEX) &&
+             (p_intf->is_ipv6_unreachables_set == false))) {
+
+            p_intf = fib_get_next_intf (p_intf->key.if_index,
+                                        p_intf->key.vrf_id, p_intf->key.af_index);
+            continue;
+        }
+        bool is_cps_obj_add_ok = true;
+        if (is_specific_get) {
+            /* Both the keys af and ifname are given in the CPS get */
+            if (af != 0 && if_name && ((af != p_intf->key.af_index) ||
+                                       (strncmp(if_name, p_intf->if_name, strlen(if_name))))) {
+                is_cps_obj_add_ok = false;
+                /* The key af is given in the CPS get */
+            } else if (af != 0 && ((af != p_intf->key.af_index))) {
+                is_cps_obj_add_ok = false;
+                /* The key ifname is given in the CPS get */
+            } else if ((if_name != 0) && (strncmp(if_name, p_intf->if_name, strlen(if_name)))) {
+                is_cps_obj_add_ok = false;
+            }
+        }
+        if (is_cps_obj_add_ok) {
+            cps_api_object_t obj = nas_intf_ip_unreach_info_to_cps_object(p_intf);
+            if(obj != NULL){
+                if (!cps_api_object_list_append(list,obj)) {
+                    cps_api_object_delete(obj);
+                    HAL_RT_LOG_ERR("HAL-RT-API","Failed to append object to object list");
+                    return STD_ERR(ROUTE,FAIL,0);
+                }
+                if (is_specific_get && af && if_name)
+                    break;
+            }
+        }
+        p_intf = fib_get_next_intf (p_intf->key.if_index, p_intf->key.vrf_id, p_intf->key.af_index);
+    }
+    return cps_api_ret_code_OK;
+}
+
 static cps_api_object_t nas_route_info_to_cps_object(t_fib_dr *entry){
     t_fib_nh       *p_nh = NULL;
     t_fib_nh_holder nh_holder1;
@@ -400,8 +483,9 @@ static cps_api_object_t nas_route_info_to_cps_object(t_fib_dr *entry){
     cps_api_key_from_attr_with_qual(&key, BASE_ROUTE_OBJ_ENTRY,
                                     cps_api_qualifier_TARGET);
     cps_api_object_set_key(obj,&key);
-
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_VRF_ID,entry->vrf_id);
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, FIB_DEFAULT_VRF_NAME,
+                            sizeof(FIB_DEFAULT_VRF_NAME));
     if(entry->key.prefix.af_index == HAL_INET4_FAMILY){
         addr_len = HAL_INET4_LEN;
         cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX,&(entry->key.prefix.u.v4_addr), addr_len);
@@ -445,9 +529,10 @@ static cps_api_object_t nas_route_info_to_cps_object(t_fib_dr *entry){
         if (p_intf != NULL) {
             HAL_RT_LOG_DEBUG("HAL-RT-API","get the interface name for :%d (%s)",
                            p_nh->key.if_index, p_intf->if_name);
-            cps_api_object_attr_add(obj, BASE_ROUTE_OBJ_ENTRY_NH_LIST_IFNAME,
-                                    (const void *)p_intf->if_name,
-                                    strlen(p_intf->if_name)+1);
+            parent_list[2] = BASE_ROUTE_OBJ_ENTRY_NH_LIST_IFNAME;
+            cps_api_object_e_add(obj, parent_list, 3, cps_api_object_ATTR_T_BIN,
+                                 (const void *)p_intf->if_name, strlen(p_intf->if_name)+1);
+
         } else {
             HAL_RT_LOG_ERR("HAL-RT-API","Failed to get the interface name for :%d", p_nh->key.if_index);
             cps_api_object_delete(obj);
@@ -516,6 +601,8 @@ cps_api_object_t nas_route_nh_to_arp_cps_object(t_fib_nh *entry, cps_api_operati
     cps_api_object_attr_add(obj, BASE_ROUTE_OBJ_NBR_MAC_ADDR, (const void *)mac_addr,
                             strlen(mac_addr)+1);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_VRF_ID,entry->vrf_id);
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, FIB_DEFAULT_VRF_NAME,
+                            sizeof(FIB_DEFAULT_VRF_NAME));
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_AF,entry->key.ip_addr.af_index);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_IFINDEX,entry->key.if_index);
 
@@ -642,6 +729,18 @@ static void nas_route_nht_add_nh_info_to_cps_object (cps_api_object_t obj, t_fib
     parent_list[2] = BASE_ROUTE_NH_TRACK_NH_INFO_IFINDEX;
     cps_api_object_e_add(obj, parent_list, 3,
                          cps_api_object_ATTR_T_U32, &p_nh->key.if_index, sizeof(p_nh->key.if_index));
+    t_fib_intf *p_intf = fib_get_intf (p_nh->key.if_index, p_nh->vrf_id,
+                                       p_nh->key.ip_addr.af_index);
+    if (p_intf != NULL) {
+        HAL_RT_LOG_DEBUG("HAL-RT-API","get the interface name for :%d (%s)",
+                       p_nh->key.if_index, p_intf->if_name);
+        parent_list[2] = BASE_ROUTE_NH_TRACK_NH_INFO_IFNAME;
+        cps_api_object_e_add(obj, parent_list, 3, cps_api_object_ATTR_T_BIN,
+                             (const void *)p_intf->if_name, strlen(p_intf->if_name)+1);
+    } else {
+        HAL_RT_LOG_ERR("HAL-RT-API","Failed to get the interface name for :%d",
+                       p_nh->key.if_index);
+    }
 
     is_arp_resolved = true;
     parent_list[2] = BASE_ROUTE_OBJ_ENTRY_NH_LIST_RESOLVED;
@@ -857,6 +956,8 @@ cps_api_object_t nas_route_nh_to_nbr_cps_object(t_fib_nh *entry, cps_api_operati
         cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_NBR_ADDRESS,(void *)entry->key.ip_addr.u.ipv6.s6_addr,HAL_INET6_LEN);
     }
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_VRF_ID,entry->vrf_id);
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, FIB_DEFAULT_VRF_NAME,
+                            sizeof(FIB_DEFAULT_VRF_NAME));
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_AF,entry->key.ip_addr.af_index);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_IFINDEX,entry->key.if_index);
 
@@ -900,3 +1001,181 @@ bool nas_route_is_rsvd_intf(hal_ifindex_t if_index) {
 
     return false;
 }
+
+cps_api_return_code_t nas_route_os_ip_unreachable_config(uint32_t af, char *if_name, bool is_del, bool is_enable) {
+    cps_api_transaction_params_t tran;
+
+    memset (&tran, 0, sizeof(tran));
+    if (cps_api_transaction_init(&tran) != cps_api_ret_code_OK) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "CPS Transaction init failed!");
+        return cps_api_ret_code_ERR;
+    }
+    cps_api_object_t obj = cps_api_object_create();
+    if (!obj) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "CPS malloc error");
+        return cps_api_ret_code_ERR;
+    }
+
+    bool is_failed = false;
+    do {
+        if(!cps_api_key_from_attr_with_qual(cps_api_object_key(obj),
+                                            OS_ICMP_CFG_IP_UNREACHABLES_CONFIG_OBJ,
+                                            cps_api_qualifier_TARGET)) {
+            is_failed = true;
+            break;
+        }
+        uint32_t operation = is_del ? BASE_CMN_OPERATION_TYPE_DELETE : BASE_CMN_OPERATION_TYPE_CREATE;
+        if (!cps_api_object_attr_add_u32(obj, OS_ICMP_CFG_IP_UNREACHABLES_CONFIG_INPUT_OPERATION,
+                                         operation)) {
+            is_failed = true;
+            break;
+        }
+
+        if (!cps_api_object_attr_add_u32(obj, OS_ICMP_CFG_IP_UNREACHABLES_CONFIG_INPUT_AF,
+                                         af)) {
+            is_failed = true;
+            break;
+        }
+        if (!cps_api_object_attr_add_u32(obj, OS_ICMP_CFG_IP_UNREACHABLES_CONFIG_INPUT_ENABLE,
+                                         is_enable)) {
+            is_failed = true;
+            break;
+        }
+        if (if_name) {
+            if (!cps_api_object_attr_add(obj, OS_ICMP_CFG_IP_UNREACHABLES_CONFIG_INPUT_IFNAME,
+                                         if_name, strlen(if_name)+1)) {
+                is_failed = true;
+                break;
+            }
+        }
+        if (cps_api_action(&tran, obj) != cps_api_ret_code_OK) {
+            is_failed = true;
+            break;
+        }
+        obj = NULL;
+        if (cps_api_commit(&tran) != cps_api_ret_code_OK) {
+            is_failed = true;
+            break;
+        }
+
+    } while(0);
+    if (is_failed) {
+        cps_api_transaction_close(&tran);
+        if (obj != NULL) {
+            cps_api_object_delete(obj);
+        }
+        HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "CPS OS IP Unreachable configuration failed!");
+        return cps_api_ret_code_ERR;
+    }
+    HAL_RT_LOG_INFO("NAS-RT-CPS-SET", "CPS OS IP Unreachable RPC successful!");
+    cps_api_transaction_close(&tran);
+    return cps_api_ret_code_OK;
+}
+
+cps_api_return_code_t nas_route_process_cps_ip_unreachables_msg(cps_api_transaction_params_t * param, size_t ix) {
+
+    cps_api_object_t obj = cps_api_object_list_get(param->change_list,ix);
+
+    cps_api_object_t cloned = cps_api_object_create();
+    if (!cloned) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "CPS malloc error");
+        return cps_api_ret_code_ERR;
+    }
+
+    cps_api_object_attr_t af_attr = cps_api_get_key_data(obj, BASE_ROUTE_IP_UNREACHABLES_CONFIG_AF);
+    cps_api_object_attr_t if_name_attr = cps_api_get_key_data(obj, BASE_ROUTE_IP_UNREACHABLES_CONFIG_IFNAME);
+    if ((af_attr == NULL) || (if_name_attr == NULL)) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS", "Missing Address family/Intf name attribute");
+        return cps_api_ret_code_ERR;
+    }
+    int32_t af = cps_api_object_attr_data_u32(af_attr);
+    if ((af != BASE_CMN_AF_TYPE_INET) && (af != BASE_CMN_AF_TYPE_INET6)) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS", "Invalid address family!");
+        return cps_api_ret_code_ERR;
+    }
+    char if_name[HAL_IF_NAME_SZ];
+    memset(if_name, '\0', sizeof(if_name));
+    safestrncpy(if_name, (const char *)cps_api_object_attr_data_bin(if_name_attr),
+                sizeof(if_name));
+
+    /* @@TODO We wont be able to get if-index from if-name
+     * if interface does not exist the HAL INTF DB, explore solution. */
+    uint32_t if_index = 0;
+    if (hal_rt_get_if_index_from_if_name(if_name, &if_index) != STD_ERR_OK) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS", "Unable to get if-index from if-name:%s",
+                       if_name);
+        return cps_api_ret_code_ERR;
+    }
+    cps_api_object_clone(cloned,obj);
+    cps_api_object_list_append(param->prev,cloned);
+
+    t_fib_msg *p_msg = hal_rt_alloc_mem_msg();
+    if (p_msg) {
+        memset(p_msg, 0, sizeof(t_fib_msg));
+        p_msg->type = FIB_MSG_TYPE_INTF_IP_UNREACH_CFG;
+        p_msg->ip_unreach_cfg.if_index = if_index;
+        safestrncpy(p_msg->ip_unreach_cfg.if_name, if_name,
+                    sizeof(p_msg->ip_unreach_cfg.if_name));
+        p_msg->ip_unreach_cfg.af_index = ((af == BASE_CMN_AF_TYPE_INET) ?
+                                          HAL_RT_V4_AFINDEX : HAL_RT_V6_AFINDEX);
+        if (cps_api_object_type_operation(cps_api_object_key(obj)) == cps_api_oper_DELETE)
+            p_msg->ip_unreach_cfg.is_op_del = true;
+
+        nas_rt_process_msg(p_msg);
+    }
+    return cps_api_ret_code_OK;
+}
+
+
+cps_api_return_code_t nas_route_flush_acls(next_hop_id_t *next_hop_id) {
+    cps_api_transaction_params_t tran;
+
+    memset (&tran, 0, sizeof(tran));
+    if (cps_api_transaction_init(&tran) != cps_api_ret_code_OK) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "CPS Transaction init failed!");
+        return cps_api_ret_code_ERR;
+    }
+    cps_api_object_t obj = cps_api_object_create();
+    if (!obj) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "CPS malloc error");
+        return cps_api_ret_code_ERR;
+    }
+
+    bool is_failed = false;
+    do {
+        if(!cps_api_key_from_attr_with_qual(cps_api_object_key(obj),
+                                            BASE_ACL_CLEAR_ACL_ENTRIES_FOR_NH_OBJ,
+                                            cps_api_qualifier_TARGET)) {
+            is_failed = true;
+            break;
+        }
+        if (nas_rt_fill_opaque_data(obj, BASE_ACL_CLEAR_ACL_ENTRIES_FOR_NH_INPUT_DATA,
+                                    0, next_hop_id) != STD_ERR_OK) {
+            HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "Filling Opaque data from next-hop id failed!");
+            is_failed = true;
+            break;
+        }
+        if (cps_api_action(&tran, obj) != cps_api_ret_code_OK) {
+            is_failed = true;
+            break;
+        }
+        obj = NULL;
+        if (cps_api_commit(&tran) != cps_api_ret_code_OK) {
+            is_failed = true;
+            break;
+        }
+
+    } while(0);
+    if (is_failed) {
+        cps_api_transaction_close(&tran);
+        if (obj != NULL) {
+            cps_api_object_delete(obj);
+        }
+        HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "CPS flush ACLs failed!");
+        return cps_api_ret_code_ERR;
+    }
+    HAL_RT_LOG_INFO("NAS-RT-CPS-SET", "CPS flush ACLs successful!");
+    cps_api_transaction_close(&tran);
+    return cps_api_ret_code_OK;
+}
+

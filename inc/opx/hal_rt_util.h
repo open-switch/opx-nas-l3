@@ -137,4 +137,7 @@ cps_api_object_t nas_route_peer_routing_config_to_cps_object(uint32_t vrf_id,
                                                              nas_rt_peer_mac_config_t *p_status);
 bool nas_rt_is_nh_npu_prg_done(t_fib_nh *p_entry);
 void hal_rt_sort_array(uint64_t data[], uint32_t count);
+const char *hal_rt_intf_mode_to_str (uint32_t mode);
+t_std_error hal_rt_get_if_index_from_if_name(char *if_name, uint32_t *p_if_index);
+bool hal_rt_is_intf_mac_vlan (hal_ifindex_t if_index);
 #endif /* __HAL_RT_UTIL_H__ */

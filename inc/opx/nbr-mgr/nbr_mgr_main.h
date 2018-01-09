@@ -37,6 +37,21 @@
 
 #define NBR_MGR_BURST_RESOLVE_CNT 300
 #define NBR_MGR_MAX_NBR_RETRY_CNT 10
+#define NBR_MGR_MAX_NBR_REFRESH_MAC_LEARN_RETRY_CNT 100
+#define NBR_MGR_BURST_RESOLVE_DELAY 1 /* Every 1 sec NBR_MGR_BURST_RESOLVE_CNT ARP
+                                         messages will be sent from kernel */
+#define NBR_MGR_DELAY_BURST_RESOLVE_DELAY 5 /* Every 5 sec NBR_MGR_BURST_RESOLVE_CNT ARP
+                                         messages will be sent from kernel,
+                                         this is useful to learn the MAC in the HW */
+
+#define NBR_MGR_INTF_ADMIN_MSG 0x1
+#define NBR_MGR_INTF_VLAN_MSG  0x2
+
+enum {
+    NBR_MGR_AUTO_REFRESH_INIT,
+    NBR_MGR_AUTO_REFRESH_ENABLE,
+    NBR_MGR_AUTO_REFRESH_DISABLE,
+};
 
 bool nbr_mgr_cps_init (void);
 int nbr_mgr_netlink_main(void);
@@ -50,5 +65,8 @@ bool nbr_mgr_notify_intf_status(nbr_mgr_op_t op, const nbr_mgr_intf_entry_t& ent
 bool nbr_mgr_get_all_nh(uint8_t af);
 
 int nbr_mgr_enqueue_flush_msg(uint32_t if_index);
+bool nbr_mgr_get_auto_refresh_status (const char *vrf_name, uint32_t family);
+bool nbr_mgr_is_mac_present_in_hw(hal_mac_addr_t mac, hal_ifindex_t if_index,
+                                  bool& is_mac_present_in_hw);
 
 #endif

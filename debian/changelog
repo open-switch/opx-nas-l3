@@ -1,3 +1,23 @@
+opx-nas-l3 (3.2.0) unstable; urgency=medium
+
+  * Added: Virtual link local address programming into the NPU for VRRPv3 functionality.
+  * Added: Ifname attribute filled for route and NHT objects.
+  * Added: Refresh the neighbor until MAC gets learnt in the NPU, proactive resolution trigger for failed ARPs restricted to finite re-tries.
+  * Bugfix: Address issues in LLA RIF reference count handling for LLA route installation in hardware.
+  * Bugfix: Few issues based on UT testing and modified logs for readability.
+  * Bugfix: Lookup local interface cache for mac addr before fetching it from nas-interface.
+  * Bugfix: Increased the max hop count to ndi max ecmp path set as 256
+  * Bugfix: Removed the VRF_ID from the validation since APP is expected to send VRF_NAME instead of VRF_ID for a route entry.
+  * Bugfix: RIF create with zero MAC avoided.
+  * Bugfix: Nbr to be deleted stored in the temporary variable and incremented to the next nbr in the intf. loop during admin down handling.
+  * Bugfix: Subscribing the IPv4 and IPv6 address events with the qualifer observed since NAS-linux publish the address events with observed.
+  * Bugfix: NHT operation delete publish fixed for route del case where route entry will not have the NH reference.
+  * Bugfix: Upon route delete, the next best route should be selected for the NHT excluding the route that's just deleted.
+  * Bugfix: Modified to use HAL interface cache API to retrieve LAG NDI id instead of CPS get.
+  * Bugfix: Refresh the neighbor until MAC gets learnt in the NPU, proactive resolution trigger for failed ARPs restricted to finite re-tries.
+
+ -- Dell EMC <ops-dev@lists.openswitch.net>  Wed, 12 Dec 2017 11:00:00 -0800
+
 opx-nas-l3 (3.0.1) unstable; urgency=medium
 
   * Update: Added special next-hop type

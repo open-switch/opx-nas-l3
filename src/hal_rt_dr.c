@@ -21,6 +21,7 @@
  * \author Prince Sunny & Satish Mynam
  */
 
+#include "dell-base-routing.h"
 #include "hal_rt_main.h"
 #include "hal_rt_mem.h"
 #include "hal_rt_route.h"
@@ -28,6 +29,7 @@
 #include "hal_rt_api.h"
 #include "hal_rt_debug.h"
 #include "hal_rt_mem.h"
+#include "nas_rt_api.h"
 
 #include "event_log.h"
 #include "std_ip_utils.h"
@@ -48,83 +50,117 @@ pthread_mutex_t fib_dr_mutex;
 pthread_cond_t  fib_dr_cond;
 static bool     is_dr_pending_for_processing = 0; //initialize the predicate for signal
 
-#define ROUTE_NEXT_HOP_DEF_WEIGHT (10)
+void hal_rt_cps_obj_nh_list_to_route_nh_list(cps_api_object_it_t nhit, t_fib_route_entry *r) {
 
-void hal_rt_cps_obj_to_route(cps_api_object_t obj, t_fib_route_entry *r) {
-    memset(r,0,sizeof(*r));
-    cps_api_object_attr_t list[cps_api_if_ROUTE_A_MAX];
-    char buff[1000], buff1[1000];
+    size_t hop = 0;
+    for (cps_api_object_it_inside(&nhit); cps_api_object_it_valid(&nhit);
+         cps_api_object_it_next(&nhit), ++hop) {
+        cps_api_object_it_t node = nhit;
+        for (cps_api_object_it_inside(&node); cps_api_object_it_valid(&node);
+             cps_api_object_it_next(&node)) {
 
-    cps_api_object_attr_fill_list(obj,0,list,sizeof(list)/sizeof(*list));
+            switch(cps_api_object_attr_id(node.attr)) {
+                case BASE_ROUTE_OBJ_ENTRY_NH_LIST_IFINDEX:
+                    r->nh_list[hop].nh_if_index = cps_api_object_attr_data_u32(node.attr);
+                    break;
+                case BASE_ROUTE_OBJ_ENTRY_NH_LIST_NH_ADDR:
+                    memcpy(&r->nh_list[hop].nh_addr.u, cps_api_object_attr_data_bin(node.attr),
+                           cps_api_object_attr_len (node.attr));
+                    break;
+                case BASE_ROUTE_OBJ_ENTRY_NH_LIST_WEIGHT:
+                    r->nh_list[hop].nh_weight = cps_api_object_attr_data_u32(node.attr);
+                    break;
+                default:
+                    break;
+            }
 
-    if (list[cps_api_if_ROUTE_A_MSG_TYPE]!=NULL)
-        r->msg_type = cps_api_object_attr_data_u32(list[cps_api_if_ROUTE_A_MSG_TYPE]);
-    if (list[cps_api_if_ROUTE_A_DISTANCE]!=NULL)
-        r->distance = cps_api_object_attr_data_u32(list[cps_api_if_ROUTE_A_DISTANCE]);
-    if (list[cps_api_if_ROUTE_A_PROTOCOL]!=NULL)
-        r->protocol = cps_api_object_attr_data_u32(list[cps_api_if_ROUTE_A_PROTOCOL]);
-    if (list[cps_api_if_ROUTE_A_RT_TYPE]!=NULL)
-        r->rt_type = cps_api_object_attr_data_u32(list[cps_api_if_ROUTE_A_RT_TYPE]);
-    if (list[cps_api_if_ROUTE_A_VRF]!=NULL)
-        r->vrfid = cps_api_object_attr_data_u32(list[cps_api_if_ROUTE_A_VRF]);
-
-    if (list[cps_api_if_ROUTE_A_PREFIX]!=NULL) {
-        r->prefix = *(hal_ip_addr_t*)cps_api_object_attr_data_bin(list[cps_api_if_ROUTE_A_PREFIX]);
-    } else if (list[cps_api_if_ROUTE_A_FAMILY]!=NULL) {
-        r->prefix.af_index = cps_api_object_attr_data_u32(list[cps_api_if_ROUTE_A_FAMILY]);
-    }
-    if (list[cps_api_if_ROUTE_A_PREFIX_LEN]!=NULL)
-        r->prefix_masklen = cps_api_object_attr_data_u32(list[cps_api_if_ROUTE_A_PREFIX_LEN]);
-   if (list[cps_api_if_ROUTE_A_NH_IFINDEX]!=NULL)
-        r->nh_if_index = cps_api_object_attr_data_u32(list[cps_api_if_ROUTE_A_NH_IFINDEX]);
-    if (list[cps_api_if_ROUTE_A_NEXT_HOP_VRF]!=NULL)
-        r->nh_vrfid = cps_api_object_attr_data_u32(list[cps_api_if_ROUTE_A_NEXT_HOP_VRF]);
-    if (list[cps_api_if_ROUTE_A_NEXT_HOP_ADDR]!=NULL)
-        r->nh_addr = *(hal_ip_addr_t*)cps_api_object_attr_data_bin(list[cps_api_if_ROUTE_A_NEXT_HOP_ADDR]);
-
-    if (list[cps_api_if_ROUTE_A_HOP_COUNT]!=NULL)
-           r->hop_count = cps_api_object_attr_data_u32(list[cps_api_if_ROUTE_A_HOP_COUNT]);
-
-    /*
-     * If multiple NHs are present, check cps_api_if_ROUTE_A_NH attribute
-     */
-    if (list[cps_api_if_ROUTE_A_NH]) {
-       cps_api_object_it_t nhit;
-       cps_api_object_it_from_attr(list[cps_api_if_ROUTE_A_NH],&nhit);
-       cps_api_object_it_inside(&nhit);
-       size_t hop = 0;
-       for ( ; cps_api_object_it_valid(&nhit) ;
-               cps_api_object_it_next(&nhit), ++hop) {
-           cps_api_object_it_t node = nhit;
-           cps_api_object_it_inside(&node);
-           r->nh_list[hop].nh_weight = ROUTE_NEXT_HOP_DEF_WEIGHT;
-           for ( ; cps_api_object_it_valid(&node) ;
-                   cps_api_object_it_next(&node)) {
-
-               switch(cps_api_object_attr_id(node.attr)) {
-               case cps_api_if_ROUTE_A_NH_IFINDEX:
-                   r->nh_list[hop].nh_if_index = cps_api_object_attr_data_u32(node.attr);
-                   break;
-               case cps_api_if_ROUTE_A_NEXT_HOP_ADDR:
-                   r->nh_list[hop].nh_addr = *(hal_ip_addr_t*)cps_api_object_attr_data_bin(node.attr);
-
-                   HAL_RT_LOG_DEBUG("HAL-RT-DR(CPS): ",
-                           "Prefix:%s NH(%d): %s, nhIndex %d ",
-                           std_ip_to_string(&r->prefix,buff,sizeof(buff)), hop,
-                           std_ip_to_string(&r->nh_list[hop].nh_addr, buff1,
-                           sizeof(buff1)), hop);
-
-                   break;
-               case cps_api_if_ROUTE_A_NEXT_HOP_WEIGHT:
-                   r->nh_list[hop].nh_weight = cps_api_object_attr_data_u32(node.attr);
-                   break;
-               default:
-                   break;
-               }
-
-           }
         }
     }
+}
+
+bool hal_rt_cps_obj_to_route(cps_api_object_t obj, t_fib_msg **p_msg_ret) {
+    t_fib_msg *p_msg = NULL;
+    cps_api_object_attr_t nh_count_attr = CPS_API_ATTR_NULL;
+    uint32_t nh_count = 1;
+
+    *p_msg_ret = NULL;
+    nh_count_attr = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_ENTRY_NH_COUNT);
+
+    if (nh_count_attr)
+        nh_count = cps_api_object_attr_data_u32(nh_count_attr);
+
+    /* allocate the memory for the route msg based on the nexthop count
+     * in the received event.
+     */
+    uint32_t buf_size = sizeof(t_fib_msg) + (sizeof (t_fib_nh_info) * nh_count);
+    p_msg = hal_rt_alloc_route_mem_msg(buf_size);
+
+    if (!p_msg) {
+        HAL_RT_LOG_ERR("HAL-RT", "Memory alloc failed for route msg");
+        return false;
+    }
+
+    HAL_RT_LOG_DEBUG("HAL-RT", " allocated buffer for route message:%p"
+                     " bytes:%d nh_count:%d", p_msg, buf_size, nh_count);
+
+    *p_msg_ret = p_msg;
+
+    memset(p_msg, 0, buf_size);
+    p_msg->type = FIB_MSG_TYPE_NL_ROUTE;
+    t_fib_route_entry *r = &(p_msg->route);
+
+    cps_api_operation_types_t op = cps_api_object_type_operation(cps_api_object_key(obj));
+
+    switch (op) {
+        case cps_api_oper_CREATE:
+            r->msg_type = FIB_RT_MSG_ADD;
+            break;
+        case cps_api_oper_SET:
+            r->msg_type = FIB_RT_MSG_UPD;
+            break;
+        case cps_api_oper_DELETE:
+            r->msg_type = FIB_RT_MSG_DEL;
+            break;
+        default:
+            break;
+    }
+    cps_api_object_it_t it;
+    cps_api_attr_id_t id = 0;
+    cps_api_object_it_begin(obj,&it);
+
+    for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it) ) {
+        id = cps_api_object_attr_id(it.attr);
+
+        switch (id) {
+            case BASE_ROUTE_OBJ_ENTRY_PROTOCOL:
+                r->protocol = cps_api_object_attr_data_uint(it.attr);
+                break;
+            case BASE_ROUTE_OBJ_ENTRY_AF:
+                r->prefix.af_index = cps_api_object_attr_data_uint(it.attr);
+                break;
+            case BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX:
+                memcpy(&r->prefix.u, cps_api_object_attr_data_bin(it.attr),
+                       cps_api_object_attr_len (it.attr));
+                break;
+            case BASE_ROUTE_OBJ_VRF_NAME:
+                memcpy(&r->vrf_name, cps_api_object_attr_data_bin(it.attr),
+                       cps_api_object_attr_len (it.attr));
+                break;
+            case BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN:
+                r->prefix_masklen = cps_api_object_attr_data_uint(it.attr);
+                break;
+            case BASE_ROUTE_OBJ_ENTRY_SPECIAL_NEXT_HOP:
+                r->rt_type = cps_api_object_attr_data_uint(it.attr);
+                break;
+            case BASE_ROUTE_OBJ_ENTRY_NH_COUNT:
+                r->hop_count = cps_api_object_attr_data_uint(it.attr);
+                break;
+            case BASE_ROUTE_OBJ_ENTRY_NH_LIST:
+                hal_rt_cps_obj_nh_list_to_route_nh_list(it, r);
+                break;
+        }
+    }
+    return true;
 }
 
 int fib_create_dr_tree (t_fib_vrf_info *p_vrf_info)
@@ -228,8 +264,8 @@ int fib_proc_dr_download (t_fib_route_entry *p_rt_entry, uint32_t nas_num_route_
         fib_resume_dr_walker_thread (af_index);
     HAL_RT_LOG_INFO("HAL-RT", "Route %s vrf_id %d, af-index %d"
                     " prefix %s/%d nh_cnt:%d distance %d type:%d",
-                    ((p_rt_entry->msg_type == ROUTE_ADD) ? "Add" :
-                     ((p_rt_entry->msg_type == ROUTE_DEL) ? "Del" : "Update")),
+                    ((p_rt_entry->msg_type == FIB_RT_MSG_ADD) ? "Add" :
+                     ((p_rt_entry->msg_type == FIB_RT_MSG_DEL) ? "Del" : "Update")),
                     vrf_id, af_index, FIB_IP_ADDR_TO_STR(&p_rt_entry->prefix),
                     p_rt_entry->prefix_masklen, p_rt_entry->hop_count,
                     p_rt_entry->distance, p_rt_entry->rt_type);
@@ -246,7 +282,7 @@ int fib_proc_dr_download (t_fib_route_entry *p_rt_entry, uint32_t nas_num_route_
      * * Since link local is assigned as soon as the interface becomes oper. up,
      * there are vadalition failures for both link-local route add and del
      * because Nas-interface deletes the interface before route cleanup */
-    if ((p_rt_entry->msg_type != ROUTE_DEL) &&
+    if ((p_rt_entry->msg_type != FIB_RT_MSG_DEL) &&
         !(FIB_IS_RESERVED_RT_TYPE(p_rt_entry->rt_type))  &&
         (!(STD_IP_IS_ADDR_LINK_LOCAL(&p_rt_entry->prefix)))) {
         for (ix=0; ix<p_rt_entry->hop_count; ix++) {
@@ -297,15 +333,15 @@ int fib_proc_dr_download (t_fib_route_entry *p_rt_entry, uint32_t nas_num_route_
     }
 
     switch (p_rt_entry->msg_type) {
-        case ROUTE_UPD:
+        case FIB_RT_MSG_UPD:
             is_rt_replace = true;
-        case ROUTE_ADD:
+        case FIB_RT_MSG_ADD:
             FIB_INCR_CNTRS_ROUTE_ADD (vrf_id, af_index);
             fib_proc_dr_add_msg (af_index, p_rt_entry, &nh_info_size, is_rt_replace);
             rt_change = true;
             break;
 
-        case ROUTE_DEL:
+        case FIB_RT_MSG_DEL:
             FIB_INCR_CNTRS_ROUTE_DEL (vrf_id, af_index);
             fib_proc_dr_del_msg (af_index, p_rt_entry);
             rt_change = true;
@@ -341,7 +377,7 @@ t_std_error fib_add_intf_ip (t_fib_intf *p_intf, t_fib_ip_addr *p_ip_conf)
     }
 
     HAL_RT_LOG_INFO("HAL-RT-IP-ADD",
-               "Intf: if_index: 0x%x, vrf_id: %d, af_index: %d, "
+               "Intf: if_index: %d, vrf_id: %d, af_index: %d, "
                "ip_addr: %s",
                p_intf->key.if_index, p_intf->key.vrf_id, p_intf->key.af_index,
                FIB_IP_ADDR_TO_STR (p_ip_conf));
@@ -382,7 +418,7 @@ int fib_del_intf_ip (t_fib_intf *p_intf, t_fib_link_node *p_link_node)
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
 
-    HAL_RT_LOG_INFO("HAL-RT-IP-DEL", "Intf: if_index: 0x%x, vrf_id: %d, af_index: %d IP:%s",
+    HAL_RT_LOG_INFO("HAL-RT-IP-DEL", "Intf: if_index: %d, vrf_id: %d, af_index: %d IP:%s",
                p_intf->key.if_index, p_intf->key.vrf_id,
                p_intf->key.af_index, FIB_IP_ADDR_TO_STR((t_fib_ip_addr *)p_link_node->self));
 
@@ -426,7 +462,9 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
 {
     t_fib_dr           *p_dr = NULL;
     t_fib_dr_msg_info   dr_msg_info;
-    bool is_route_present = false;
+    bool                is_route_present = false;
+    bool                is_skip_route_install = false;
+    ndi_rif_id_t        rif_id = 0;
 
     if (!p_rtm_fib_cmd) {
         HAL_RT_LOG_ERR("HAL-RT-DR", "%s (): Invalid input param. p_rtm_fib_cmd: %p",
@@ -466,11 +504,15 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
     nas_l3_lock();
 
     p_dr = fib_get_dr (dr_msg_info.vrf_id, &dr_msg_info.prefix, dr_msg_info.prefix_len);
-
+    if (p_dr && (FIB_IS_DR_DEFAULT (p_dr)) && (FIB_IS_DEFAULT_DR_OWNER_FIB (p_dr))) {
+        p_dr->status_flag |= FIB_DR_STATUS_DEL;
+        fib_proc_dr_del (p_dr);
+        p_dr = NULL;
+    }
     if (p_dr == NULL)
     {
         HAL_RT_LOG_DEBUG("HAL-RT-DR",
-                   "Adding DR. vrf_id: %d, prefix: %s, "
+                         "Adding DR. vrf_id: %d, prefix: %s, "
                    "prefix_len: %d",
                    dr_msg_info.vrf_id,
                    FIB_IP_ADDR_TO_STR (&dr_msg_info.prefix),
@@ -504,8 +546,9 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
     } else {
         is_route_present = true;
     }
-    if (STD_IP_IS_ADDR_LINK_LOCAL(&dr_msg_info.prefix)) {
-        if (((t_fib_route_entry  *)p_rtm_fib_cmd)->msg_type != ROUTE_ADD) {
+    if ((dr_msg_info.rt_type != RT_UNREACHABLE) &&
+        (STD_IP_IS_ADDR_LINK_LOCAL(&dr_msg_info.prefix))) {
+        if (((t_fib_route_entry  *)p_rtm_fib_cmd)->msg_type != FIB_RT_MSG_ADD) {
             nas_l3_unlock();
             return STD_ERR_OK;
         }
@@ -535,6 +578,8 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
             std_dll_init (&p_intf->fh_list);
             std_dll_init (&p_intf->pending_fh_list);
             std_dll_init (&p_intf->ip_list);
+            /* initialize the mode to none if interface doesn't exists already */
+            p_intf->mode = BASE_IF_MODE_MODE_NONE;
         }
         /* Check if this is LLA is already present in the ip_list,
          * if not, add it to the list*/
@@ -558,11 +603,16 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
             nas_l3_unlock();
             return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
         }
-        if (is_route_present) {
-            /* Create the RIF is not present and increment RIF count */
-            ndi_rif_id_t rif_id = 0;
+        /* increment RIF ref count only when the mode is L3.
+         * In other modes, cache the route and return w/o adding RIF.
+         * RIF for this LLA will be created when the interface mode
+         * changes from L2 to L3.
+         */
+        if (FIB_IS_INTF_MODE_L3(p_intf->mode) &&
+            (p_intf->admin_status == RT_INTF_ADMIN_STATUS_UP)) {
             if (hal_rif_index_get_or_create(0, dr_msg_info.vrf_id, if_index, &rif_id) == STD_ERR_OK) {
                 hal_rt_rif_ref_inc(if_index);
+                p_dr->num_ipv6_rif_link_local++;
             } else {
                 HAL_RT_LOG_ERR("HAL-RT-LLA", " RIF get failed for Route add vrf_id: %d, prefix: %s/%d,"
                                " proto: %d out-if:%d link-local-cnt:%d route-present:%d RIF-ref-cnt:%d",
@@ -570,10 +620,22 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
                                dr_msg_info.prefix_len, dr_msg_info.proto, if_index,
                                p_dr->num_ipv6_link_local, is_route_present, hal_rt_rif_ref_get(if_index));
             }
+        }
 
+        if (is_route_present) {
             p_dr->last_update_time = fib_tick_get ();
             nas_l3_unlock();
             return STD_ERR_OK;
+        }
+
+        /* Don't process route further if the mode is not L3 or
+         * admin status is not UP.
+         * When mode changes to L3 and admin is UP, link local route
+         * would be programmed to NDI.
+         */
+        if ((!FIB_IS_INTF_MODE_L3(p_intf->mode)) ||
+           (p_intf->admin_status != RT_INTF_ADMIN_STATUS_UP)) {
+            is_skip_route_install =  true;
         }
     }
 
@@ -586,10 +648,10 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
     /*
      * @Todo - Temporary work-around to support IPv6 ECMP
      * Multiple Add requests for the same IPv6 routes are treated as ECMP
-     * The following command triggered route replace is handled in the ROUTE_UPD route type
+     * The following command triggered route replace is handled in the FIB_RT_MSG_UPD route type
      * "ip -6 route change", "ip -6 route replace"
      */
-    /* In case of IPv4 when netlink is received with replace flag, then it is handled as ROUTE_UPD */
+    /* In case of IPv4 when netlink is received with replace flag, then it is handled as FIB_RT_MSG_UPD */
     if(is_rt_replace) {
         fib_delete_all_dr_nh (p_dr);
         fib_delete_all_dr_fh (p_dr);
@@ -612,7 +674,9 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
      * assigned, then this route should only be cached and
      * not downloaded to walker thread.
      */
-    p_dr->status_flag |= FIB_DR_STATUS_ADD;
+    if (is_skip_route_install != true) {
+        p_dr->status_flag |= FIB_DR_STATUS_ADD;
+    }
     fib_mark_dr_for_resolution (p_dr);
 
     nas_l3_unlock();
@@ -679,17 +743,10 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
         nas_l3_unlock();
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
-    if (STD_IP_IS_ADDR_LINK_LOCAL(&dr_msg_info.prefix)) {
+    if ((p_dr->rt_type != RT_UNREACHABLE) &&
+        (STD_IP_IS_ADDR_LINK_LOCAL(&dr_msg_info.prefix))) {
         hal_ifindex_t if_index = ((t_fib_route_entry  *)p_rtm_fib_cmd)->nh_list[0].nh_if_index;
-        if ((p_dr->num_ipv6_link_local == 0) ||
-            (hal_rt_rif_ref_get(if_index) == -1)) {
-            /* Looks like duplicate link local route delete,
-             * need to analyse further if the below error is seen in the journal */
-            HAL_RT_LOG_ERR("HAL-RT-DR", "Reference count already 0 while deleting "
-                           "the link local address from intf:%d", if_index);
-            nas_l3_unlock();
-            return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
-        }
+
         t_fib_intf *p_intf = fib_get_intf (if_index, dr_msg_info.vrf_id, af_index);
         if (p_intf == NULL) {
             HAL_RT_LOG_ERR("HAL-RT-LLA", "Invalid intf vrf_id: %d, prefix: %s/%d, "
@@ -699,6 +756,7 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
             nas_l3_unlock();
             return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
         }
+
         t_fib_link_node *p_ip_node = fib_get_intf_ip (p_intf, &dr_msg_info.prefix);
         if (p_ip_node) {
             fib_del_intf_ip(p_intf, p_ip_node);
@@ -710,16 +768,45 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
             nas_l3_unlock();
             return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
         }
-        p_dr->num_ipv6_link_local--;
+
+        if (p_dr->num_ipv6_link_local > 0)
+            p_dr->num_ipv6_link_local--;
+
+        /* RIF ref count would have been decremented when the interface mode
+         * changed from L3 to L2, but num_ipv6_link_local will still be intact
+         * as it is tracking the kernel notification. So validation to be done
+         * accordingly.
+         */
+        if ((p_dr->num_ipv6_link_local > 0) &&
+            (FIB_IS_INTF_MODE_L3 (p_intf->mode)) && (hal_rt_rif_ref_get(if_index) == -1)) {
+            /* Looks like duplicate link local route delete,
+             * need to analyse further if the below error is seen in the journal */
+            HAL_RT_LOG_ERR("HAL-RT-DR", "Reference count already 0 while deleting "
+                           "the link local address from intf:%d", if_index);
+            nas_l3_unlock();
+            return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
+        }
+
+        HAL_RT_LOG_INFO("HAL-RT-LLA", "Route del vrf_id: %d, prefix: %s/%d, "
+                       " proto: %d out-if:%d intf-mode:%s link-local-cnt:%d RIF-ref-cnt:%d", p_dr->vrf_id,
+                        FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
+                       dr_msg_info.proto, if_index, hal_rt_intf_mode_to_str(p_intf->mode),
+                       p_dr->num_ipv6_link_local, hal_rt_rif_ref_get(if_index));
+
+        /* RIF ref count would have been decremented when the interface mode
+         * changed from L3 to L2 or when interface admin changed
+         * from UP to down and RIF would have been deleted.
+         * So check for L3 mode/admin status and remove RIF accordingly.
+         */
+        if (FIB_IS_INTF_MODE_L3(p_intf->mode) &&
+            (p_intf->admin_status == RT_INTF_ADMIN_STATUS_UP)) {
+            if (!hal_rt_rif_ref_dec(if_index))
+                hal_rif_index_remove(0, p_dr->vrf_id, if_index);
+            p_dr->num_ipv6_rif_link_local--;
+        }
+
         /* If there are other interfaces using the link local route,
          * dont delete the route */
-        HAL_RT_LOG_INFO("HAL-RT-LLA", "Route del vrf_id: %d, prefix: %s/%d, "
-                        " proto: %d out-if:%d link-local-cnt:%d RIF-ref-cnt:%d", p_dr->vrf_id,
-                        FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
-                        dr_msg_info.proto, if_index, p_dr->num_ipv6_link_local, hal_rt_rif_ref_get(if_index));
-
-        if (!hal_rt_rif_ref_dec(if_index))
-            hal_rif_index_remove(0, p_dr->vrf_id, if_index);
 
         if (p_dr->num_ipv6_link_local > 0) {
             nas_l3_unlock();
@@ -762,6 +849,27 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
             p_dr->status_flag |= FIB_DR_STATUS_ADD;
             fib_mark_dr_for_resolution (p_dr);
 
+            nas_l3_unlock();
+            return STD_ERR_OK;
+        }
+    } else if ((((t_fib_route_entry  *)p_rtm_fib_cmd)->hop_count == 1) &&
+               (p_dr->num_nh == 1) && (!(STD_IP_IS_ADDR_LINK_LOCAL(&dr_msg_info.prefix)))) {
+        /* If the NH is not present in the DR, return from here. */
+        /* During interface admin down or delete scenarios,
+         * Kernel will send route delete notifications for IPv6,
+         * but not for IPv4. So in such cases, for IPv6 route delete
+         * there might be duplicate events one from Kernel and one from
+         * RTM event published locally from CPS config flow. Due to that
+         * sometimes there is a possibility that this NH would have been
+         * already deleted from this Route, but both NH and Route might
+         * still exists. In such cases, DR will not be present in NH
+         * dep_dr_tree and thus p_nh_dep_dr might be null.
+         * So ignoring this failure here.
+         */
+        t_fib_nh_msg_info  nh_msg_info;
+        fib_form_nh_msg_info (p_dr->key.prefix.af_index, p_rtm_fib_cmd, &nh_msg_info, 0);
+        t_fib_nh *p_nh = fib_get_nh (nh_msg_info.vrf_id, &nh_msg_info.ip_addr, nh_msg_info.if_index);
+        if ((p_nh == NULL) || (fib_get_nh_dep_dr(p_nh, p_dr) == NULL)) {
             nas_l3_unlock();
             return STD_ERR_OK;
         }
@@ -809,7 +917,8 @@ int fib_proc_dr_del (t_fib_dr *p_dr)
         nas_rt_handle_dest_change(p_dr, NULL, false);
         /* Dont delete the RIF count for link route del here
          * since it's already done in the fib_proc_dr_del_msg() */
-        if (!(STD_IP_IS_ADDR_LINK_LOCAL(&p_dr->key.prefix))) {
+        if (FIB_IS_DR_WRITTEN(p_dr) &&
+            !(STD_IP_IS_ADDR_LINK_LOCAL(&p_dr->key.prefix))) {
             if(!hal_rt_rif_ref_dec(if_index))
                 rif_del = true;
         }
@@ -923,7 +1032,8 @@ int fib_proc_dr_del (t_fib_dr *p_dr)
 
         fib_del_dr (p_dr);
 
-        fib_add_default_dr (vrf_id, af_index);
+        if (FIB_GET_CNTRS_CATCH_ALL_ENTRIES(vrf_id, af_index))
+            fib_add_default_dr (vrf_id, af_index);
     }
     else
     {
@@ -1344,9 +1454,11 @@ int fib_add_default_dr (uint32_t vrf_id, uint8_t af_index)
     if (p_dr != NULL)
     {
         HAL_RT_LOG_DEBUG("HAL-RT-DR",
-                   "Duplicate default DR addition. "
-                   "vrf_id: %d, af_index: %d",
-                   vrf_id, af_index);
+                         "Duplicate default DR addition. "
+                         "vrf_id: %d, af_index: %d",
+                         vrf_id, af_index);
+
+        p_dr->rt_type = RT_UNREACHABLE;
 
         p_dr->default_dr_owner = FIB_DEFAULT_DR_OWNER_FIB;
 
@@ -1378,11 +1490,80 @@ int fib_add_default_dr (uint32_t vrf_id, uint8_t af_index)
 
     p_dr->vrf_id = vrf_id;
 
+    p_dr->rt_type = RT_UNREACHABLE;
+
     p_dr->default_dr_owner = FIB_DEFAULT_DR_OWNER_FIB;
 
     FIB_INCR_CNTRS_FIB_ROUTE_ENTRIES (vrf_id, af_index);
 
     fib_update_route_summary (vrf_id, af_index, p_dr->prefix_len, true);
+
+    /* set ADD flag to trigger route download to walker */
+    p_dr->status_flag |= FIB_DR_STATUS_ADD;
+    fib_mark_dr_for_resolution (p_dr);
+
+    fib_resume_dr_walker_thread (af_index);
+
+    return STD_ERR_OK;
+}
+
+int fib_add_default_link_local_route (uint32_t vrf_id)
+{
+    t_fib_dr        *p_dr = NULL;
+    t_fib_ip_addr    ip_addr;
+    uint8_t          af_index = HAL_RT_V6_AFINDEX;
+    /* using link local route prefix length to match first 10 bits of fe80 */
+    uint8_t          prefix_len = 10;
+    /* link local address prefix */
+    char addr[HAL_RT_V6_ADDR_LEN] = {0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+    HAL_RT_LOG_DEBUG("HAL-RT-DR",
+                     "vrf_id: %d, af_index: %d", vrf_id, af_index);
+
+    if (!(FIB_IS_VRF_ID_VALID (vrf_id)))
+    {
+        HAL_RT_LOG_ERR("HAL-RT-DR", "Invalid vrf_id:%d", vrf_id);
+        return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
+    }
+
+    memset (&ip_addr, 0, sizeof (t_fib_ip_addr));
+    ip_addr.af_index = af_index;
+    memcpy (&ip_addr.u.v6_addr, addr, HAL_RT_V6_ADDR_LEN);
+
+    p_dr = fib_get_dr (vrf_id, &ip_addr, prefix_len);
+
+    if (p_dr == NULL)
+    {
+        p_dr = fib_add_dr (vrf_id, &ip_addr, prefix_len);
+
+        if (p_dr == NULL)
+        {
+            HAL_RT_LOG_ERR("HAL-RT-DR", "DR addition failed. "
+                           "vrf_id: %d, af_index: %d", vrf_id, af_index);
+
+            return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
+        }
+
+        std_dll_init (&p_dr->nh_list);
+        std_dll_init (&p_dr->fh_list);
+        std_dll_init (&p_dr->dep_nh_list);
+        std_dll_init (&p_dr->degen_dr_fh.tunnel_fh_list);
+
+        p_dr->vrf_id = vrf_id;
+
+        FIB_INCR_CNTRS_FIB_ROUTE_ENTRIES (vrf_id, af_index);
+
+        fib_update_route_summary (vrf_id, af_index, p_dr->prefix_len, true);
+    }
+    HAL_RT_LOG_DEBUG("HAL-RT-DR",
+                     "Default link local route addition. "
+                     "vrf_id: %d, af_index: %d",
+                     vrf_id, af_index);
+
+    p_dr->rt_type = RT_BLACKHOLE;
+
+    p_dr->default_dr_owner = FIB_DEFAULT_DR_OWNER_FIB;
 
     /* set ADD flag to trigger route download to walker */
     p_dr->status_flag |= FIB_DR_STATUS_ADD;
@@ -3098,314 +3279,106 @@ int fib_update_route_summary (uint32_t vrf_id, uint8_t af_index,
     return STD_ERR_OK;
 }
 
-int fib_nbr_del_on_intf_down (int if_index, int vrf_id, int af_index) {
-    t_fib_nh       *p_fh = NULL;
-    t_fib_nh_holder nh_holder;
-    t_fib_intf  *p_intf = NULL;
+bool hal_rt_handle_ip_unreachable_config (t_fib_intf_ip_unreach_config *p_cfg, bool *p_os_gbl_cfg_req) {
+    /* @@TODO Once the intf to VRF mapping defined,
+     * access the VRF info. for catchall setting */
+    uint32_t vrf_id = FIB_DEFAULT_VRF;
+    bool is_intf_present = false;
+    t_fib_intf *p_db_intf = NULL;
 
-    HAL_RT_LOG_INFO ("HAL-RT-NBR", "Admin status if_index: %d, vrf_id: %d, af_index: %d",
-                     if_index, vrf_id, af_index);
-    /* Get the L3 interface and delete all the associated routes*/
-    p_intf = fib_get_intf (if_index, vrf_id, af_index);
-    if (p_intf == NULL) {
-        return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
+    *p_os_gbl_cfg_req = false;
+    HAL_RT_LOG_INFO("HAL-RT-CATCH_ALL", "IP unreachable is_del:%d if-index:%d af:%d vrf:%d",
+                    p_cfg->is_op_del, p_cfg->if_index, p_cfg->af_index, vrf_id);
+    p_db_intf = fib_get_or_create_intf(p_cfg->if_index, vrf_id,
+                                       p_cfg->af_index, &is_intf_present);
+    if (!p_db_intf) {
+        HAL_RT_LOG_ERR("HAL-RT-CATCH_ALL", "IP unreachable if-index:%d af:%d vrf:%d update failed!",
+                       p_cfg->if_index, p_cfg->af_index, vrf_id);
+        return false;
     }
 
-    /* Loop for all the FH and associated routes for deletion */
-    FIB_FOR_EACH_FH_FROM_INTF (p_intf, p_fh, nh_holder) {
-        fib_proc_nh_delete (p_fh, FIB_NH_OWNER_TYPE_ARP, 0);
+    if (p_cfg->is_op_del == true) {
+        if (((p_cfg->af_index == HAL_RT_V4_AFINDEX) && (!(p_db_intf->is_ipv4_unreachables_set))) ||
+            ((p_cfg->af_index == HAL_RT_V6_AFINDEX) && (!(p_db_intf->is_ipv6_unreachables_set)))) {
+            HAL_RT_LOG_ERR("HAL-RT-CATCH_ALL", "Duplicate IP unreachable if-index:%d af:%d vrf:%d "
+                           "is_del:%d ipv4_unre_set:%d ipv6_unre_set:%d",
+                           p_cfg->if_index, p_cfg->af_index, vrf_id, p_cfg->is_op_del,
+                           p_db_intf->is_ipv4_unreachables_set, p_db_intf->is_ipv6_unreachables_set);
+            return false;
+        }
+    } else {
+        if (((p_cfg->af_index == HAL_RT_V4_AFINDEX) && (p_db_intf->is_ipv4_unreachables_set)) ||
+            ((p_cfg->af_index == HAL_RT_V6_AFINDEX) && (p_db_intf->is_ipv6_unreachables_set))) {
+            HAL_RT_LOG_ERR("HAL-RT-CATCH_ALL", "Duplicate IP unreachable if-index:%d af:%d vrf:%d "
+                           "is_del:%d ipv4_unre_set:%d ipv6_unre_set:%d",
+                           p_cfg->if_index, p_cfg->af_index, vrf_id, p_cfg->is_op_del,
+                           p_db_intf->is_ipv4_unreachables_set, p_db_intf->is_ipv6_unreachables_set);
+            return false;
+        }
     }
-    return STD_ERR_OK;
+    if (p_cfg->af_index == HAL_RT_V4_AFINDEX)
+        p_db_intf->is_ipv4_unreachables_set = ((p_cfg->is_op_del) ? false : true);
+    else if (p_cfg->af_index == HAL_RT_V6_AFINDEX)
+        p_db_intf->is_ipv6_unreachables_set = ((p_cfg->is_op_del) ? false : true);
+
+    if (p_cfg->is_op_del) {
+        HAL_RT_LOG_INFO("HAL-RT-CATCH_ALL", "IP unreachable del if-index:%d af:%d "
+                        "vrf:%d catch-all-cnt:%d",
+                        p_cfg->if_index, p_cfg->af_index,
+                        vrf_id, FIB_GET_CNTRS_CATCH_ALL_ENTRIES(vrf_id, p_cfg->af_index));
+        FIB_DECR_CNTRS_CATCH_ALL_ENTRIES(vrf_id, p_cfg->af_index);
+        if (FIB_GET_CNTRS_CATCH_ALL_ENTRIES(vrf_id, p_cfg->af_index) != 0) {
+            return true;
+        }
+        *p_os_gbl_cfg_req = true;
+        /* If all ip-unreachable interfaces deleted from the VRF and address family i.e
+         * last interface delete configuration from the user,
+         * delete the FIB default route if present. */
+    } else {
+        HAL_RT_LOG_INFO("HAL-RT-CATCH_ALL", "IP unreachable add if-index:%d af:%d "
+                        "vrf:%d catch-all-cnt:%d",
+                        p_cfg->if_index, p_cfg->af_index,
+                        vrf_id, FIB_GET_CNTRS_CATCH_ALL_ENTRIES(vrf_id, p_cfg->af_index));
+        FIB_INCR_CNTRS_CATCH_ALL_ENTRIES(vrf_id, p_cfg->af_index);
+        if (FIB_GET_CNTRS_CATCH_ALL_ENTRIES(vrf_id, p_cfg->af_index) != 1) {
+            return true;
+        }
+        *p_os_gbl_cfg_req = true;
+        /* First ip-unreachable with interface configuration from the user,
+         * install the default route (catch all) FIB into the NPU to lift
+         * all the non-routable packets to CPU to generate the ICMP unreachable messages
+         * on the configured interface if RTM default route is not present. */
+    }
+
+    t_fib_ip_addr ip_addr;
+    memset (&ip_addr, 0, sizeof (t_fib_ip_addr));
+    ip_addr.af_index = p_cfg->af_index;
+
+    t_fib_dr *p_dr = fib_get_dr (vrf_id, &ip_addr, 0);
+    if (p_dr != NULL) {
+        if (FIB_IS_DEFAULT_DR_OWNER_RTM (p_dr)) {
+            /* There is a default route installed by RTM, dont add/del the catchall entry */
+            HAL_RT_LOG_INFO("HAL-RT-CATCH_ALL", "RTM default route already exists! "
+                            "if-index:%d af:%d vrf:%d", p_cfg->if_index, p_cfg->af_index, vrf_id);
+            return true;
+        } else if ((p_cfg->is_op_del) && (FIB_IS_DEFAULT_DR_OWNER_FIB (p_dr))) {
+            HAL_RT_LOG_INFO("HAL-RT-CATCH_ALL", "IP unreachable default route del "
+                           "if-index:%d af:%d vrf:%d",
+                           p_cfg->if_index, p_cfg->af_index, vrf_id);
+            p_dr->status_flag |= FIB_DR_STATUS_DEL;
+            fib_proc_dr_del(p_dr);
+        }
+    } else if (!(p_cfg->is_op_del)) {
+        HAL_RT_LOG_INFO("HAL-RT-CATCH_ALL", "IP unreachable adding defaut route "
+                        "if-index:%d af:%d vrf:%d", p_cfg->if_index,
+                        p_cfg->af_index, vrf_id);
+        fib_add_default_dr (vrf_id, p_cfg->af_index);
+    }
+
+    if (p_cfg->is_op_del) {
+        /* Check if the interface delete is waiting
+         * for the IP unreachable config reset */
+        fib_check_and_delete_intf(p_db_intf);
+    }
+    return true;
 }
-
-int fib_route_add_on_intf_up (t_fib_intf *p_intf, t_fib_intf_entry *p_intf_chg) {
-    t_fib_nh       *p_fh = NULL, *p_nh = NULL;
-    t_fib_nh_holder nh_holder, nh_holder1;
-    t_fib_nh_dep_dr   *p_nh_dep_dr = NULL;
-    t_fib_dr *p_add_dr = NULL;
-    bool is_fib_route_add = false;
-
-    /* Loop for all the FH and associated routes for download */
-    FIB_FOR_EACH_FH_FROM_INTF (p_intf, p_fh, nh_holder) {
-        p_nh_dep_dr = fib_get_first_nh_dep_dr (p_fh);
-        while (p_nh_dep_dr != NULL) {
-            if (p_nh_dep_dr->p_dr == NULL) {
-                p_nh_dep_dr = fib_get_next_nh_dep_dr (p_fh, p_nh_dep_dr->key.vrf_id,
-                                                      &p_nh_dep_dr->key.dr_key.prefix,
-                                                      p_nh_dep_dr->prefix_len);
-                continue;
-            }
-            /* Init the FIB route add to true first,
-             * if there aren't any valid path found in the ECMP,
-             * then don't add the FIB route
-             */
-            is_fib_route_add = true;
-
-            HAL_RT_LOG_DEBUG("HAL-RT-DR",
-                             "DR: vrf_id: %d, prefix: %s, prefix_len: %d, rt_type: %d, "
-                             "Dep NH: vrf_id: %d, ip_addr: %s, if_index: 0x%x status:0x%x",
-                             p_nh_dep_dr->p_dr->vrf_id,
-                             FIB_IP_ADDR_TO_STR (&p_nh_dep_dr->p_dr->key.prefix),
-                             p_nh_dep_dr->p_dr->prefix_len, p_nh_dep_dr->p_dr->rt_type,
-                             p_fh->vrf_id, FIB_IP_ADDR_TO_STR (&p_fh->key.ip_addr),
-                             p_fh->key.if_index, p_fh->status_flag);
-            /* If all the multipaths are dead for the ECMP route, delete the route, otherwise continue for next route */
-            if (p_nh_dep_dr->p_dr->num_nh > 1) {
-                FIB_FOR_EACH_NH_FROM_DR (p_nh_dep_dr->p_dr, p_nh, nh_holder1)
-                {
-                    HAL_RT_LOG_DEBUG("HAL-RT-DR",
-                                     "DR: vrf_id: %d, prefix: %s, prefix_len: %d, "
-                                     "Dep NH: vrf_id: %d, ip_addr: %s, if_index: 0x%x status:0x%x is_nh_dead:%s",
-                                     p_nh_dep_dr->p_dr->vrf_id,
-                                     FIB_IP_ADDR_TO_STR (&p_nh_dep_dr->p_dr->key.prefix),
-                                     p_nh_dep_dr->p_dr->prefix_len, p_nh->vrf_id, FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr),
-                                     p_nh->key.if_index, p_nh->status_flag,
-                                     ((p_nh->status_flag & FIB_NH_STATUS_DEAD) ? "yes": "no"));
-                    if (!(p_nh->status_flag & FIB_NH_STATUS_DEAD)) {
-                        break;
-                    }
-                    /* Valid NH is not found, dont add the ECMP route */
-                    is_fib_route_add = false;
-                }
-            }
-            /* copy the route to be deleted and then get the next dependent dr,
-             * to avoid accessing the invalid dep-dr after route deletion */
-            p_add_dr = p_nh_dep_dr->p_dr;
-            p_nh_dep_dr = fib_get_next_nh_dep_dr (p_fh, p_nh_dep_dr->key.vrf_id,
-                                                  &p_nh_dep_dr->key.dr_key.prefix,
-                                                  p_nh_dep_dr->prefix_len);
-            /* Dont delete the link local route on admin down,
-             * wait for explicit route del from kernel thru netlink
-             * The reason - let's say LAG(bond) has only one member and
-             * upon removing the bond member, bond admin down
-             * and then bond admin up is received from the NAS-linux
-             * though the bond is intact with link local address, to avoid this issue,
-             * link local route is deleted on explicit route del from kernel */
-            if (is_fib_route_add && p_add_dr &&
-                (!(STD_IP_IS_ADDR_LINK_LOCAL(&p_add_dr->key.prefix)))) {
-
-                /* @@TODO - kerel specific event handling.
-                 * on admin up, kernel notifies of ROUTE events for
-                 * /prefix-length and the full length routes (for the address)
-                 * are not notified again. They are notified only during
-                 * IP address assignment.
-                 * Hence on admin down, local routes will only be deleted from NPU
-                 * and retained in nas. They will be configured in NPU again on
-                 * admin UP. So don't set FIB_DR_STATUS_DEL for RT_LOCAL routes.
-                 */
-                if (p_add_dr->rt_type == RT_LOCAL) {
-                    p_add_dr->status_flag &= ~FIB_DR_STATUS_DEL;
-                    HAL_RT_LOG_INFO ("HAL-RT-DR-LOCAL-ADD",
-                                     "Intf Up DR: vrf_id: %d, prefix: %s, prefix_len: %d, rt_type: %d ",
-                                     p_add_dr->vrf_id,
-                                     FIB_IP_ADDR_TO_STR (&p_add_dr->key.prefix),
-                                     p_add_dr->prefix_len, p_add_dr->rt_type);
-
-                    /* set ADD flag to trigger route download to walker */
-                    p_add_dr->status_flag |= FIB_DR_STATUS_ADD;
-                    fib_mark_dr_for_resolution (p_add_dr);
-                }
-            }
-        }
-    }
-    return STD_ERR_OK;
-}
-int fib_route_del_on_intf_down (t_fib_intf *p_intf, t_fib_intf_entry *p_intf_chg) {
-    t_fib_nh       *p_fh = NULL, *p_nh = NULL;
-    t_fib_nh_holder nh_holder, nh_holder1;
-    t_fib_nh_dep_dr   *p_nh_dep_dr = NULL;
-    t_fib_dr *p_del_dr = NULL;
-    bool is_fib_route_del = true;
-
-    /* Loop for all the FH and associated routes for deletion */
-    FIB_FOR_EACH_FH_FROM_INTF (p_intf, p_fh, nh_holder) {
-        p_fh->status_flag |= FIB_NH_STATUS_DEAD;
-        p_nh_dep_dr = fib_get_first_nh_dep_dr (p_fh);
-        while (p_nh_dep_dr != NULL) {
-            if (p_nh_dep_dr->p_dr == NULL) {
-                p_nh_dep_dr = fib_get_next_nh_dep_dr (p_fh, p_nh_dep_dr->key.vrf_id,
-                                                      &p_nh_dep_dr->key.dr_key.prefix,
-                                                      p_nh_dep_dr->prefix_len);
-                continue;
-            }
-            /* Init the FIB route del to true first, if any valid path found in the ECMP, dont delete the FIB route */
-            is_fib_route_del = true;
-            HAL_RT_LOG_DEBUG("HAL-RT-DR",
-                             "DR: vrf_id: %d, prefix: %s, prefix_len: %d, rt_type: %d, "
-                             "Dep NH: vrf_id: %d, ip_addr: %s, if_index: 0x%x status:0x%x",
-                             p_nh_dep_dr->p_dr->vrf_id,
-                             FIB_IP_ADDR_TO_STR (&p_nh_dep_dr->p_dr->key.prefix),
-                             p_nh_dep_dr->p_dr->prefix_len, p_nh_dep_dr->p_dr->rt_type,
-                             p_fh->vrf_id, FIB_IP_ADDR_TO_STR (&p_fh->key.ip_addr),
-                             p_fh->key.if_index, p_fh->status_flag);
-            /* If all the multipaths are dead for the ECMP route, delete the route, otherwise continue for next route */
-            if (p_nh_dep_dr->p_dr->num_nh > 1) {
-                FIB_FOR_EACH_NH_FROM_DR (p_nh_dep_dr->p_dr, p_nh, nh_holder1)
-                {
-                    HAL_RT_LOG_DEBUG("HAL-RT-DR",
-                                     "DR: vrf_id: %d, prefix: %s, prefix_len: %d, "
-                                     "Dep NH: vrf_id: %d, ip_addr: %s, if_index: 0x%x status:0x%x is_nh_dead:%s",
-                                     p_nh_dep_dr->p_dr->vrf_id,
-                                     FIB_IP_ADDR_TO_STR (&p_nh_dep_dr->p_dr->key.prefix),
-                                     p_nh_dep_dr->p_dr->prefix_len, p_nh->vrf_id, FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr),
-                                     p_nh->key.if_index, p_nh->status_flag,
-                                     ((p_nh->status_flag & FIB_NH_STATUS_DEAD) ? "yes": "no"));
-                    if (p_nh->status_flag & FIB_NH_STATUS_DEAD) {
-                        continue;
-                    }
-                    /* Valid NH is found, dont delete the ECMP route */
-                    is_fib_route_del = false;
-                    break;
-                }
-            }
-            /* copy the route to be deleted and then get the next dependent dr,
-             * to avoid accessing the invalid dep-dr after route deletion */
-            p_del_dr = p_nh_dep_dr->p_dr;
-            p_nh_dep_dr = fib_get_next_nh_dep_dr (p_fh, p_nh_dep_dr->key.vrf_id,
-                                                  &p_nh_dep_dr->key.dr_key.prefix,
-                                                  p_nh_dep_dr->prefix_len);
-            /* Dont delete the link local route on admin down,
-             * wait for explicit route del from kernel thru netlink
-             * The reason - let's say LAG(bond) has only one member and
-             * upon removing the bond member, bond admin down
-             * and then bond admin up is received from the NAS-linux
-             * though the bond is intact with link local address, to avoid this issue,
-             * link local route is deleted on explicit route del from kernel */
-            if (is_fib_route_del && p_del_dr &&
-                (!(STD_IP_IS_ADDR_LINK_LOCAL(&p_del_dr->key.prefix)))) {
-                /* @@TODO - kerel specific event handling.
-                 * on admin up, kernel notifies of ROUTE events for
-                 * /prefix-length and the full length routes (for the address)
-                 * are not notified again. They are notified only during
-                 * IP address assignment.
-                 * Hence on admin down, local routes will only be deleted from NPU
-                 * and retained in nas. They will be configured in NPU again on
-                 * admin UP. So don't set FIB_DR_STATUS_DEL for RT_LOCAL routes.
-                 */
-                if (p_del_dr->rt_type != RT_LOCAL) {
-                    p_del_dr->status_flag |= FIB_DR_STATUS_DEL;
-                } else {
-                    HAL_RT_LOG_INFO ("HAL-RT-DR-SKIP-LOCAL",
-                                     "DR: vrf_id: %d, prefix: %s, prefix_len: %d, rt_type: %d ",
-                                     p_del_dr->vrf_id,
-                                     FIB_IP_ADDR_TO_STR (&p_del_dr->key.prefix),
-                                     p_del_dr->prefix_len, p_del_dr->rt_type);
-                }
-                fib_proc_dr_del (p_del_dr);
-            }
-        }
-    }
-    return STD_ERR_OK;
-}
-
-int fib_handle_intf_admin_status_change(int vrf_id, int af_index, t_fib_intf_entry *p_intf_chg) {
-
-    t_fib_intf  *p_intf = NULL;
-    t_fib_nh    *p_fh = NULL;
-    t_fib_nh_holder nh_holder;
-
-    /* Get the L3 interface and delete all the associated routes*/
-    p_intf = fib_get_intf (p_intf_chg->if_index, vrf_id, af_index);
-    HAL_RT_LOG_INFO ("HAL-RT-DR", "Admin status if_index: %d, vrf_id: %d, af_index: %d admin_up:%d is_del:%d p_intf:%p",
-                    p_intf_chg->if_index, vrf_id, af_index, p_intf_chg->admin_status, p_intf_chg->is_op_del, p_intf);
-
-    /* if interface notification is received for the first time,
-     * just update the admin status from kernel.
-     */
-    if (p_intf == NULL)
-    {
-        if (p_intf_chg->is_op_del == true)
-        {
-            /* if interface doesn't exist and operation is delete,
-             * then simply return.
-             */
-            return STD_ERR_OK;
-        }
-        if ((p_intf = fib_add_intf (p_intf_chg->if_index, vrf_id, af_index)) == NULL)
-        {
-            HAL_RT_LOG_ERR ("HAL-RT-DR",
-                            "%s (): Intf addition failed. "
-                            "if_index: 0x%x, vrf_id: %d, af_index: %d",
-                            __FUNCTION__, p_intf_chg->if_index, vrf_id, af_index);
-
-            return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
-        }
-
-        std_dll_init (&p_intf->fh_list);
-        std_dll_init (&p_intf->pending_fh_list);
-        std_dll_init (&p_intf->ip_list);
-        memcpy(&p_intf->mac_addr, &p_intf_chg->mac_addr, sizeof(hal_mac_addr_t));
-        p_intf->admin_status = p_intf_chg->admin_status;
-        return STD_ERR_OK;
-    } else if ((p_intf->admin_status == RT_INTF_ADMIN_STATUS_NONE) &&
-               (p_intf_chg->admin_status == RT_INTF_ADMIN_STATUS_DOWN)) {
-        HAL_RT_LOG_INFO ("HAL-RT-DR", "if_index: %d admin_up:%d curr:%d is_del:%d",
-                         p_intf_chg->if_index, p_intf_chg->admin_status,
-                         p_intf->admin_status, p_intf_chg->is_op_del);
-
-        /* Bootup time, interface creation with admin down notification,
-         * this will clear the existing routes, ignore it */
-        p_intf->admin_status = p_intf_chg->admin_status;
-        return STD_ERR_OK;
-    }
-
-    /* simply return, if we are receiving duplicate status notification */
-    /* On bootup, admin down event for master interface on interface create
-     * from kernel might be processed after processing connected route add.
-     * in this scenario we may end up in a state where
-     * where connected route will never get installed after that.
-     * To avoid this issue, skip out of order duplicate state notifications.
-     */
-    if ((p_intf_chg->admin_status != RT_INTF_ADMIN_STATUS_NONE) &&
-        (p_intf->admin_status != p_intf_chg->admin_status)) {
-
-        p_intf->admin_status = p_intf_chg->admin_status;
-
-        if (p_intf->admin_status == RT_INTF_ADMIN_STATUS_UP) {
-            /* If admin is up, clear the NH dead status flag */
-            FIB_FOR_EACH_FH_FROM_INTF (p_intf, p_fh, nh_holder) {
-                HAL_RT_LOG_DEBUG("HAL-RT-DR",
-                                 "NH: vrf_id: %d, ip_addr: %s, if_index: 0x%x status:0x%x is_nh_dead:%s",
-                                 p_fh->vrf_id, FIB_IP_ADDR_TO_STR (&p_fh->key.ip_addr),
-                                 p_fh->key.if_index, p_fh->status_flag,
-                                 ((p_fh->status_flag & FIB_NH_STATUS_DEAD) ? "yes" : "no"));
-                p_fh->status_flag &= ~FIB_NH_STATUS_DEAD;
-            }
-            /* on interface admin up,
-             * download the cached route configurations to hardware.
-             */
-            fib_route_add_on_intf_up(p_intf, p_intf_chg);
-        } else {
-            fib_route_del_on_intf_down(p_intf, p_intf_chg);
-        }
-    } else if (p_intf_chg->is_op_del) {
-        fib_route_del_on_intf_down(p_intf, p_intf_chg);
-    }
-    fib_resume_nh_walker_thread(af_index);
-    fib_resume_dr_walker_thread(af_index);
-    /* If there are any Nbr/route reference to this interface, update the RIF MAC in the NPU */
-    if ((p_intf_chg->is_op_del == false) &&
-        (!hal_rt_is_mac_address_zero((const hal_mac_addr_t *)&p_intf_chg->mac_addr)) &&
-        (memcmp(&p_intf->mac_addr, &p_intf_chg->mac_addr, sizeof(hal_mac_addr_t)) != 0)) {
-
-        memcpy(&p_intf->mac_addr, &p_intf_chg->mac_addr, sizeof(hal_mac_addr_t));
-        /* RIF is already created for this interface, update the RIF if MAC is changed */
-        if (hal_rif_update (vrf_id, p_intf_chg) == false) {
-            char p_buf[HAL_RT_MAX_BUFSZ];
-            HAL_RT_LOG_ERR ("HAL-RT-DR",
-                            "MAC update failed for "
-                            "vrf_id: %d, if_index: 0x%x, af: %d MAC:%s",
-                            vrf_id, p_intf_chg->if_index, af_index,
-                            hal_rt_mac_to_str (&(p_intf->mac_addr), p_buf, HAL_RT_MAX_BUFSZ));
-        }
-    }
-
-    /* When is_op_del is true,
-     * check & delete interface if there are no routes/NH associated with it.
-     */
-    if (p_intf_chg->is_op_del == true) {
-        fib_check_and_delete_intf (p_intf);
-    }
-    return STD_ERR_OK;
-}
-

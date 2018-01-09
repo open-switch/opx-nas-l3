@@ -53,6 +53,13 @@
 
 #define FIB_MIN_L3_MTU                 NDI_RIF_MIN_MTU
 
+/* mode  BASE_IF_MODE_MODE_NONE is also handled as L3 mode as there is
+ * no differentiation between default mode and L3 mode as of now.
+ */
+#define FIB_IS_INTF_MODE_L3(_mode_)             \
+        ((_mode_ == BASE_IF_MODE_MODE_NONE) ||  \
+         (_mode_ == BASE_IF_MODE_MODE_L3))
+
 #define FIB_GET_NH_FROM_LINK_NODE_GLUE(_p_dll) \
         ((t_fib_nh *) (((t_fib_link_node *)(((char *) (_p_dll)) - offsetof (t_fib_link_node, glue)))->self))
 
@@ -364,6 +371,9 @@
 #define FIB_IS_DEFAULT_DR_OWNER_FIB(_p_)                                    \
         ((_p_)->default_dr_owner == FIB_DEFAULT_DR_OWNER_FIB)
 
+#define FIB_SET_CATCH_ALL_ROUTE(_vrf_id, _af_index)                 \
+        (((hal_rt_access_fib_vrf_info(_vrf_id, _af_index))->is_catch_all_disabled) = false)
+
 #define FIB_IS_CATCH_ALL_ROUTE_DISABLED(_vrf_id, _af_index)                 \
         (((hal_rt_access_fib_vrf_info(_vrf_id, _af_index))->is_catch_all_disabled) == true)
 
@@ -433,6 +443,13 @@
 #define FIB_RESET_NH_OWNER(_p_nh, _owner_type, _owner_value)                    \
         ((_p_nh)->owner_flag &=                                                \
          ~(0x1 << (FIB_NH_OWNER_TYPE_TO_NUM ((_owner_type), (_owner_value)))))
+
+#define FIB_IS_NH_REF_COUNT_ZERO(_p_nh)                                          \
+         ((_p_nh->owner_flag == 0) &&                                            \
+          (_p_nh->rtm_ref_count == 0) &&                                         \
+          (_p_nh->dr_ref_count == 0) &&                                          \
+          (_p_nh->nh_ref_count == 0) &&                                          \
+          (_p_nh->tunnel_nh_ref_count == 0))
 
 /* Data Structure */
 typedef enum _t_fib_nh_owner_type {
@@ -511,13 +528,19 @@ typedef struct _t_fib_dr {
     uint8_t            a_is_written [HAL_RT_MAX_INSTANCE];
     next_hop_id_t      nh_handle;  /* nh_handle or ECMP group_handle */
     next_hop_id_t      onh_handle;  /* old nh_handle or ECMP group_handle */
+    next_hop_id_t      old_nh_handle_nht;  /* old group_handle to be used by
+                                              NHT module for associated ACLs flush */
     bool               remove_old_handle;
     bool               ecmp_handle_created; /* true if ecmp handle is present */
     bool               is_nh_resolved; /* true if ARP is resolved for this route */
     uint32_t           ofh_cnt; /* Old fh list count to detect the Non-ECMP to ECMP route */
     void              *p_hal_dr_handle; /* mp_obj details per SAI instance */
-    uint32_t           num_ipv6_link_local; /* No. of RIF entries created
-                                               for link local IPv6 addresses */
+    uint32_t           num_ipv6_link_local; /* No. of links on which link local addres
+                                               add received for same link local IPv6 addresses.
+                                               There could be interfaces that share same MAC address
+                                               due to which link local address will be same */
+    uint32_t           num_ipv6_rif_link_local; /* No. of RIF entries created
+                                               for this link local IPv6 addresses */
     t_rt_type          rt_type;     /* route with special nexthop types -
                                      * blackhole/unreachable/prohibit */
 } t_fib_dr;
@@ -640,6 +663,18 @@ typedef struct _t_fib_intf {
     hal_mac_addr_t mac_addr;
     char if_name[HAL_IF_NAME_SZ]; /* interface name */
     std_dll_head   ip_list; /* List of IP addresses configured on this interface */
+    uint32_t mode; /* interface mode None/L2, used to program routes to NPU */
+    /* flag to indicate if interface delete is pending.
+     * This flag will be set to true whenever a delete is triggered from OS,
+     * but interface is not deleted because of any pending cleanup of
+     * ip-address/fh/nh on that iterface. It will be deleted whenever
+     * the ipaddress/fh/nh on that interface is deketed.
+     */
+    bool is_intf_delete_pending;
+    bool is_ipv4_unreachables_set; /* ICMP unreachable msg is generated from kernel
+                                    from this intf for non-routable packets */
+    bool is_ipv6_unreachables_set; /* ICMPv6 unreachable msg is generated from kernel
+                                    from this intf for non-routable packets */
 } t_fib_intf;
 
 /* Function signatures for route.c - Start */
@@ -674,6 +709,8 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
 int fib_form_tnl_nh_msg_info (t_fib_tnl_dest *p_tnl_dest, t_fib_nh_msg_info *p_fib_nh_msg_info);
 
 int fib_add_default_dr (uint32_t vrf_id, uint8_t af_index);
+
+int fib_add_default_link_local_route (uint32_t vrf_id);
 
 t_fib_dr *fib_add_dr (uint32_t vrf_id, t_fib_ip_addr *p_prefix, uint8_t prefix_len);
 
@@ -848,6 +885,9 @@ t_fib_dr *fib_get_nh_best_fit_dr (t_fib_nh *p_nh);
 
 int fib_del_nh_best_fit_ (t_fib_nh *p_nh);
 
+t_fib_intf *fib_get_or_create_intf (uint32_t if_index, uint32_t vrf_id,
+                                    uint8_t af_index, bool *p_intf_present);
+
 t_fib_intf *fib_add_intf (uint32_t if_index, uint32_t vrf_id, uint8_t af_index);
 
 t_fib_intf *fib_get_intf (uint32_t if_index, uint32_t vrf_id, uint8_t af_index);
@@ -878,6 +918,8 @@ int fib_nh_walker_call_back (std_radical_head_t *p_rt_head, va_list ap);
 
 int fib_resolve_nh (t_fib_nh *p_nh);
 
+int fib_proc_nh_dead (t_fib_nh *p_nh);
+
 int fib_add_nh_fh_from_best_fit_dr_nh (t_fib_nh *p_nh, t_fib_dr *p_best_fit_dr);
 
 int fib_mark_nh_for_resolution (t_fib_nh *p_nh);
@@ -885,6 +927,8 @@ int fib_mark_nh_for_resolution (t_fib_nh *p_nh);
 int fib_mark_nh_dep_dr_for_resolution (t_fib_nh *p_nh);
 
 int fib_update_nh_dep_dr_resolution_status (t_fib_nh *p_nh);
+
+int fib_resolve_nh_dep_dr (t_fib_nh *p_nh);
 
 int fib_resume_nh_walker_thread (uint8_t af_index);
 
@@ -921,9 +965,13 @@ t_fib_cmp_result fib_arp_info_cmp (t_fib_nh *p_fh, t_fib_arp_msg_info *p_fib_arp
 int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool isAdd);
 int nas_rt_handle_nht (t_fib_nht *p_nht_info, bool isAdd);
 int fib_handle_intf_admin_status_change(int vrf_id, int af_index, t_fib_intf_entry *p_intf_chg);
+t_std_error fib_process_intf_mode_change (int vrf_id, int af_index, uint32_t if_index, uint32_t mode);
 int nas_route_process_nbr_refresh(cps_api_object_t obj);
 cps_api_object_t nas_route_nh_to_arp_cps_object(t_fib_nh *entry, cps_api_operation_types_t op);
 bool nas_route_resolve_nh(t_fib_nh *entry, bool is_add);
 int fib_nbr_del_on_intf_down (int if_index, int vrf_id, int af_index);
+bool hal_rt_handle_ip_unreachable_config (t_fib_intf_ip_unreach_config *p_cfg, bool *p_os_gbl_cfg_req);
+t_fib_intf *fib_get_first_intf ();
+t_fib_intf *fib_get_next_intf (uint32_t if_index, uint32_t vrf_id, uint8_t af_index);
 
 #endif /* __HAL_RT_ROUTE_H__ */

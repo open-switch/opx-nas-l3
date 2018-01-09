@@ -48,11 +48,15 @@ extern "C" {
 #include <algorithm>
 #include "nas_ndi_obj_id_table.h"
 #include "dell-base-switch-element.h"
+#include "std_utils.h"
 
 #include "cps_api_object_category.h"
 #include "cps_api_route.h"
 #include "cps_api_operation.h"
 #include "cps_class_map.h"
+
+#include "std_utils.h"
+#include "std_rw_lock.h"
 
 typedef struct _nas_rif_info_t {
     ndi_rif_id_t rif_id;
@@ -91,6 +95,8 @@ extern "C" {
 static uint8_t   ga_fib_scratch_buf [FIB_NUM_SCRATCH_BUF][FIB_MAX_SCRATCH_BUFSZ];
 static uint32_t  g_fib_scratch_buf_index = 0;
 
+t_std_error hal_rt_lag_obj_id_get (hal_ifindex_t if_index, ndi_obj_id_t& obj_id);
+
 uint8_t  *fib_get_scratch_buf ()
 {
     g_fib_scratch_buf_index++;
@@ -116,6 +122,7 @@ t_std_error hal_rt_validate_intf(int if_index)
     /* Add other invalid interfaces here, to skip the route/neighbor updates */
     /* skip events for manangement vlan */
     if ((intf_ctrl.int_type == nas_int_type_MGMT) ||
+        (intf_ctrl.int_type == nas_int_type_MACVLAN) ||
         ((intf_ctrl.int_type == nas_int_type_VLAN) &&
          (intf_ctrl.int_sub_type == BASE_IF_VLAN_TYPE_MANAGEMENT)))
         return (STD_ERR_MK(e_std_err_NPU, e_std_err_code_PARAM, 0));
@@ -135,6 +142,24 @@ t_std_error hal_rt_get_intf_name(int if_index, char *p_if_name)
         return (STD_ERR_MK(e_std_err_NPU, e_std_err_code_PARAM, 0));
     }
     strncpy(p_if_name, intf_ctrl.if_name, sizeof(intf_ctrl.if_name));
+    return STD_ERR_OK;
+}
+
+
+t_std_error hal_rt_get_if_index_from_if_name(char *if_name, uint32_t *p_if_index) {
+    interface_ctrl_t intf_ctrl;
+
+    memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
+    intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF_NAME;
+    safestrncpy(intf_ctrl.if_name, (const char *)if_name,
+                sizeof(intf_ctrl.if_name)-1);
+
+    if ((dn_hal_get_interface_info(&intf_ctrl)) != STD_ERR_OK) {
+        HAL_RT_LOG_ERR("HAL-RT",
+                       "Invalid interface %s interface get failed ", if_name);
+        return (STD_ERR(ROUTE, PARAM, 0));
+    }
+    *p_if_index = intf_ctrl.if_index;
     return STD_ERR_OK;
 }
 
@@ -194,14 +219,17 @@ bool hal_rt_is_reserved_ipv6(hal_ip_addr_t *p_ip_addr)
 
 t_std_error hal_rt_lag_obj_id_get (hal_ifindex_t if_index, ndi_obj_id_t& obj_id)
 {
-    nas::ndi_obj_id_table_t tmp_ndi_oid_tbl;
-    if (dn_nas_lag_get_ndi_ids (if_index, &tmp_ndi_oid_tbl) != STD_ERR_OK) {
-        HAL_RT_LOG_DEBUG("HAL-RT", "Lag object get failed for %d", if_index);
+    nas_obj_id_t lag_obj_id;
+
+    if (nas_get_lag_id_from_if_index(if_index, &lag_obj_id) != STD_ERR_OK) {
+        HAL_RT_LOG_DEBUG("HAL-RT-LAG", "Lag object get failed for %d", if_index);
         return (STD_ERR(ROUTE, PARAM, 0));
     }
-
+    HAL_RT_LOG_INFO("HAL-RT-LAG", "LAG NDI object %d retrieved for if_index %d",
+                    lag_obj_id, if_index);
     // @Todo - Handle multiple npus
-    obj_id = tmp_ndi_oid_tbl[0];
+    obj_id = lag_obj_id;
+
     return STD_ERR_OK;
 }
 
@@ -362,6 +390,25 @@ bool hal_rt_is_intf_lpbk (hal_ifindex_t if_index)
     return (intf_ctrl.int_type == nas_int_type_LPBK);
 }
 
+bool hal_rt_is_intf_mac_vlan (hal_ifindex_t if_index)
+{
+    interface_ctrl_t    intf_ctrl;
+
+    memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
+    intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF;
+    intf_ctrl.if_index = if_index;
+
+    if ((dn_hal_get_interface_info(&intf_ctrl)) != STD_ERR_OK) {
+        return false;
+    }
+
+    HAL_RT_LOG_DEBUG("HAL-RT-INTF", "intf:%s(%d) type:%d",
+                     intf_ctrl.if_name, if_index, intf_ctrl.int_type);
+
+    return (intf_ctrl.int_type == nas_int_type_MACVLAN);
+}
+
+
 /*
  * This function gets the maximum mtu supported in the base switch configuration
  */
@@ -433,6 +480,7 @@ static uint_t hal_rt_get_max_mtu()
 t_std_error hal_rif_index_get_or_create (npu_id_t npu_id, hal_vrf_id_t vrf_id,
                                          hal_ifindex_t if_index, ndi_rif_id_t *rif_id)
 {
+    t_fib_intf         *p_intf = NULL;
     nas_rif_info_t      rif_info;
     ndi_rif_entry_t     rif_entry;
     interface_ctrl_t    intf_ctrl;
@@ -495,7 +543,21 @@ t_std_error hal_rif_index_get_or_create (npu_id_t npu_id, hal_vrf_id_t vrf_id,
     rif_entry.vrf_id = hal_vrf_obj_get(npu_id, vrf_id);
 
     hal_mac_addr_t mac_addr;
-    if(dn_hal_get_interface_mac(if_index, mac_addr) == STD_ERR_OK) {
+    /* fib_intf is stored on a per af basis, so retrieve
+     * the interface for first available family and use its mac.
+     */
+    p_intf = fib_get_next_intf (if_index, vrf_id, 0);
+
+    if (p_intf) {
+        memcpy(&mac_addr, &p_intf->mac_addr, sizeof(hal_mac_addr_t));
+    }
+
+    /* fetch the mac from nas interface only if local cache is not present,
+     * call to dn_hal_get_interface_mac is a blocking call, hence to be
+     * called only from l3 threads and not from cps handlers.
+     */
+    if((p_intf && (!hal_rt_is_mac_address_zero(&p_intf->mac_addr))) ||
+       (dn_hal_get_interface_mac(if_index, mac_addr) == STD_ERR_OK)) {
         t_fib_vrf *p_vrf = NULL;
         if ((intf_ctrl.int_type == nas_int_type_VLAN) &&
             ((p_vrf = hal_rt_access_fib_vrf(vrf_id)) != NULL) &&
@@ -538,7 +600,8 @@ t_std_error hal_rif_index_get_or_create (npu_id_t npu_id, hal_vrf_id_t vrf_id,
     rif_entry.rif_id = *rif_id;
     rif_entry.flags = NDI_RIF_ATTR_MTU;
     rif_entry.mtu = hal_rt_get_max_mtu();
-    HAL_RT_LOG_INFO("HAL-RT-RIF", "RIF MTU for if_index %d is %d", if_index, rif_entry.mtu);
+    HAL_RT_LOG_INFO("HAL-RT-RIF", "RIF MTU for rif-id:%d if_index %d is %d",
+                    *rif_id, if_index, rif_entry.mtu);
     if (ndi_rif_set_attribute(&rif_entry) != STD_ERR_OK) {
         HAL_RT_LOG_DEBUG("NAS-RT-RIF",
                     "%s ():RIF update MTU " " failed for if_index = %d",
@@ -684,6 +747,10 @@ int fib_msg_main(void) {
                 HAL_RT_LOG_DEBUG("HAL-RT-MSG-THREAD", "Nbr msg processing");
                 fib_proc_nbr_download(&(p_msg->nbr));
                 break;
+            case FIB_MSG_TYPE_INTF_IP_UNREACH_CFG:
+                HAL_RT_LOG_DEBUG("HAL-RT-MSG-THREAD", "IP unreachable config msg processing");
+                fib_proc_ip_unreach_config_msg(&(p_msg->ip_unreach_cfg));
+                break;
             default:
                 break;
         }
@@ -711,6 +778,17 @@ t_fib_msg *hal_rt_alloc_mem_msg() {
     t_fib_msg *p_msg = new (std::nothrow) t_fib_msg;
     return p_msg;
 }
+
+
+/* allocate memory for the route message for given buffer size.
+ * route message buffer size is calculated based on the nh_count
+ * in the message.
+ */
+t_fib_msg *hal_rt_alloc_route_mem_msg(uint32_t buf_size) {
+    char *p_msg = new (std::nothrow) char[buf_size];
+    return (t_fib_msg *)p_msg;
+}
+
 std::string hal_rt_queue_stats ()
 {
     std::lock_guard<std::mutex> l {m_mtx};
@@ -732,6 +810,7 @@ void hal_rt_sort_array(uint64_t data[], uint32_t count) {
 
     std::sort(data,data+count);
 }
+
 #ifdef __cplusplus
 }
 #endif

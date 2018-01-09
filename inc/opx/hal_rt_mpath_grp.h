@@ -109,7 +109,7 @@ int fib_destroy_mp_md5_tree (t_fib_vrf_info *p_vrf_info);
 std_rt_table * hal_rt_access_fib_vrf_mp_md5_tree(uint32_t vrf_id, uint8_t af_index);
 
 t_std_error hal_rt_find_or_create_ecmp_group(t_fib_dr *p_dr, ndi_nh_group_t *entry,
-        next_hop_id_t *handle, bool *p_out_is_mp_table_full);
+        next_hop_id_t *handle, bool *p_out_is_mp_table_full, ndi_nh_group_t *removed_nh_group_entry);
 t_std_error hal_rt_delete_ecmp_group(t_fib_dr *p_dr, ndi_route_t  *entry,
                                      next_hop_id_t gid_handle, bool route_delete);
 t_fib_mp_md5_node *hal_rt_fib_calloc_mp_md5_node (void);
@@ -122,9 +122,21 @@ t_fib_mp_obj *hal_rt_fib_get_mp_obj (t_fib_dr *p_dr, ndi_nh_group_t *entry, uint
                         int ecmp_count, next_hop_id_t a_nh_obj_id[]);
 t_std_error hal_rt_fib_check_and_delete_mp_obj (t_fib_dr *p_dr, t_fib_mp_obj *p_mp_obj, npu_id_t  unit,
                                                 bool is_sai_del, bool route_delete);
+t_fib_mp_obj *hal_rt_check_and_reuse_mp_obj(t_fib_dr *p_dr,
+                   ndi_nh_group_t *entry, bool *p_out_is_mp_table_full,
+                   ndi_nh_group_t *removed_nh_group_entry,
+                   t_fib_mp_obj *p_old_mp_obj,
+                   next_hop_id_t a_new_nh_obj_id [],
+                   uint8_t *pu1_new_md5_digest);
 t_fib_mp_obj *hal_rt_fib_create_mp_obj (t_fib_dr *p_dr, ndi_nh_group_t *entry, uint8_t *pu1_md5_digest,
                                  int ecmp_count, next_hop_id_t a_nh_obj_id [],
                                  bool is_with_id, uint32_t sai_ecmp_gid,
+                                 bool *p_out_is_mp_table_full);
+t_std_error hal_rt_fib_remove_members_from_mp_obj (t_fib_dr *p_dr, t_fib_mp_obj *p_mp_obj,
+                                 ndi_nh_group_t *removed_nh_group_entry,
+                                 uint8_t *pu1_new_md5_digest, int new_ecmp_count,
+                                 next_hop_id_t a_new_nh_obj_id [],
+                                 bool is_with_id, next_hop_id_t sai_ecmp_gid,
                                  bool *p_out_is_mp_table_full);
 void hal_rt_fib_form_md5_key (uint8_t t_md5_digest [], next_hop_id_t a_nh_obj_id [],
                         uint32_t ecmp_count, bool debug);

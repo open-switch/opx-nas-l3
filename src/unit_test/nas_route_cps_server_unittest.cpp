@@ -85,7 +85,6 @@ static t_std_error nas_os_set_route (cps_api_object_t obj){
 static inline bool nas_route_validate_route_attr(cps_api_object_t obj, bool del) {
 
     cps_api_object_attr_t af;
-    cps_api_object_attr_t vrf_id;
     cps_api_object_attr_t prefix;
     cps_api_object_attr_t pref_len;
     cps_api_object_attr_t nh_count;
@@ -94,7 +93,7 @@ static inline bool nas_route_validate_route_attr(cps_api_object_t obj, bool del)
      * Check mandatory route attributes
      */
     af       = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_ENTRY_AF);
-    vrf_id   = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_ENTRY_VRF_ID);
+    const char *vrf_name  = (const char *)cps_api_object_get_data(obj,BASE_ROUTE_OBJ_VRF_NAME);
     prefix   = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX);
     pref_len = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN);
 
@@ -102,7 +101,7 @@ static inline bool nas_route_validate_route_attr(cps_api_object_t obj, bool del)
      * If route delete case, check the key mandatory attrs for delete case first
      */
 
-    if  (af == CPS_API_ATTR_NULL || vrf_id == CPS_API_ATTR_NULL ||
+    if  (af == CPS_API_ATTR_NULL || vrf_name == CPS_API_ATTR_NULL ||
             prefix == CPS_API_ATTR_NULL || pref_len == CPS_API_ATTR_NULL) {
         return false;
     }

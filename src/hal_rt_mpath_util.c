@@ -211,25 +211,6 @@ t_fib_mp_obj *hal_rt_fib_create_mp_obj (t_fib_dr *p_dr, ndi_nh_group_t *entry,
      */
     rc = ndi_route_next_hop_group_create (entry, &nh_group_handle);
 
-    if (is_with_id == true) {
-
-            /*
-             * If the earlier nh_handle is ecmp group id, mark it for deletion
-             * after the route points to the new group id
-             */
-        if (p_dr->ecmp_handle_created) {
-
-            p_dr->remove_old_handle = true;
-            p_dr->onh_handle = sai_ecmp_gid;
-
-           /*
-            * ndi_route_next_hop_group_delete is called in the ecmp_add
-            * where we add the new group id.
-            */
-        }
-    }
-
-
     if (rc != STD_ERR_OK) {
         HAL_RT_LOG_DEBUG ("HAL-RT-NDI",
                 "NH Group: %s Group ID failed. VRF %d. Prefix: "
@@ -244,6 +225,23 @@ t_fib_mp_obj *hal_rt_fib_create_mp_obj (t_fib_dr *p_dr, ndi_nh_group_t *entry,
 
         return NULL;
     } else {
+        if (is_with_id == true) {
+            /*
+             * If the earlier nh_handle is ecmp group id, mark it for deletion
+             * after the route points to the new group id
+             */
+            if (p_dr->ecmp_handle_created) {
+
+                p_dr->remove_old_handle = true;
+                p_dr->onh_handle = sai_ecmp_gid;
+               /*
+                * ndi_route_next_hop_group_delete is called in the ecmp_add
+                * where we add the new group id.
+                */
+            }
+        }
+
+
         HAL_RT_LOG_DEBUG ("HAL-RT-NDI",
                 "NH Group: %s New Group ID: %d Old GID=%d. VRF %d. Prefix: "
                 "%s/%d,Unit: %d, Err: %d", is_with_id ? "Updated":"Created",
@@ -290,6 +288,60 @@ t_fib_mp_obj *hal_rt_fib_create_mp_obj (t_fib_dr *p_dr, ndi_nh_group_t *entry,
 
     return p_mp_obj;
 }
+
+t_std_error hal_rt_fib_remove_members_from_mp_obj (t_fib_dr *p_dr, t_fib_mp_obj *p_mp_obj,
+                                 ndi_nh_group_t *removed_nh_group_entry,
+                                 uint8_t *pu1_new_md5_digest, int new_ecmp_count,
+                                 next_hop_id_t a_new_nh_obj_id [],
+                                 bool is_with_id, next_hop_id_t sai_ecmp_gid,
+                                 bool *p_out_is_mp_table_full)
+{
+    int             rc;
+
+    *p_out_is_mp_table_full = false;
+
+    /*
+     * Remove NH members from the nexthop group
+     */
+    rc = ndi_route_delete_next_hop_from_group (removed_nh_group_entry, sai_ecmp_gid);
+
+    if (rc != STD_ERR_OK) {
+        HAL_RT_LOG_ERR ("HAL-RT-NDI",
+                "NH Group member remove failed nhop_count:%d. MP GID:%d VRF %d. Prefix: "
+                "%s/%d, Unit: %d, Err: %d",
+                removed_nh_group_entry->nhop_count, sai_ecmp_gid, p_dr->vrf_id,
+                FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
+                p_dr->prefix_len, removed_nh_group_entry->npu_id, rc);
+
+        *p_out_is_mp_table_full = true;
+        return (STD_ERR(ROUTE, FAIL, 0));
+    }
+
+    /*
+     * Update mp md5 tree for new md5 key for the new nh-list
+     */
+    fib_del_mp_obj_from_mp_md5_tree (p_dr, p_mp_obj);
+
+    /*
+     * Update group-id for the new list
+     */
+    p_mp_obj->ecmp_count = new_ecmp_count;
+    memset (p_mp_obj->a_nh_obj_id, 0, sizeof (p_mp_obj->a_nh_obj_id));
+    memcpy (p_mp_obj->a_nh_obj_id, a_new_nh_obj_id, sizeof (p_mp_obj->a_nh_obj_id));
+
+    rc = fib_add_mp_obj_in_mp_md5_tree (p_dr, p_mp_obj, pu1_new_md5_digest);
+
+    if (STD_IS_ERR(rc))
+    {
+        HAL_RT_LOG_ERR ("HAL_RT-MPATH", "Remove members from MP Object:%d "
+                        "Failed to insert p_mp_obj in Tree.\n", sai_ecmp_gid);
+
+//@@TODO - check for failure hanlding and how p_mp_obj state will be
+//        hal_rt_fib_free_mp_obj_node (p_mp_obj);
+    }
+    return rc;
+}
+
 
 static t_fib_mp_obj *fib_find_mp_obj_in_md5_digest_list (t_fib_mp_md5_node *p_mp_md5_node,
                                       int  ecmp_count,  next_hop_id_t a_nh_obj_id[])

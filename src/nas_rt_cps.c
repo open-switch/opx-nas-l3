@@ -160,7 +160,7 @@ static cps_api_return_code_t nas_route_cps_all_route_get_func (void *ctx,
         HAL_RT_LOG_ERR("NAS-RT-CPS","Route object is not present");
         return cps_api_ret_code_ERR;
     }
-    cps_api_object_attr_t vrf_attr = cps_api_get_key_data(filt,BASE_ROUTE_OBJ_ENTRY_VRF_ID);
+    cps_api_object_attr_t vrf_attr = cps_api_get_key_data(filt,BASE_ROUTE_OBJ_VRF_NAME);
     cps_api_object_attr_t af_attr = cps_api_get_key_data(filt,BASE_ROUTE_OBJ_ENTRY_AF);
     cps_api_object_attr_t prefix_attr = cps_api_get_key_data(filt,BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX);
     cps_api_object_attr_t pref_len_attr = cps_api_get_key_data(filt,BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN);
@@ -177,9 +177,12 @@ static cps_api_return_code_t nas_route_cps_all_route_get_func (void *ctx,
         af = cps_api_object_attr_data_u32(af_attr);
 
     if (vrf_attr != NULL) {
-        vrf = cps_api_object_attr_data_u32(vrf_attr);
-        if (!(FIB_IS_VRF_ID_VALID (vrf))) {
-            HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "VRF-id:%d is not valid!", vrf);
+        char  vrf_name[HAL_IF_NAME_SZ];
+        memset (vrf_name,0,sizeof(vrf_name));
+        safestrncpy(vrf_name, (const char *)cps_api_object_attr_data_bin(vrf_attr),
+                    sizeof(vrf_name));
+        if (strncmp(vrf_name, FIB_DEFAULT_VRF_NAME, sizeof(vrf_name))) {
+            HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "VRF-name:%s is not valid!", vrf_name);
             return cps_api_ret_code_ERR;
         }
     }
@@ -364,7 +367,7 @@ static cps_api_return_code_t nas_route_cps_arp_get_func(void *context,
         HAL_RT_LOG_ERR("NAS-RT-CPS","Neighbor object is not present");
         return cps_api_ret_code_ERR;
     }
-    cps_api_object_attr_t vrf_attr = cps_api_get_key_data(filt,BASE_ROUTE_OBJ_NBR_VRF_ID);
+    cps_api_object_attr_t vrf_attr = cps_api_get_key_data(filt,BASE_ROUTE_OBJ_VRF_NAME);
     cps_api_object_attr_t af_attr = cps_api_get_key_data(filt,BASE_ROUTE_OBJ_NBR_AF);
     cps_api_object_attr_t nh_attr = cps_api_get_key_data(filt,BASE_ROUTE_OBJ_NBR_ADDRESS);
 
@@ -373,9 +376,12 @@ static cps_api_return_code_t nas_route_cps_arp_get_func(void *context,
         af = cps_api_object_attr_data_u32(af_attr);
 
     if (vrf_attr != NULL) {
-        vrf = cps_api_object_attr_data_u32(vrf_attr);
-        if (!(FIB_IS_VRF_ID_VALID (vrf))) {
-            HAL_RT_LOG_ERR("NAS-RT-CPS-GET", "VRF-id:%d is not valid!", vrf);
+        char  vrf_name[HAL_IF_NAME_SZ];
+        memset (vrf_name,0,sizeof(vrf_name));
+        safestrncpy(vrf_name, (const char *)cps_api_object_attr_data_bin(vrf_attr),
+                    sizeof(vrf_name));
+        if (strncmp(vrf_name, FIB_DEFAULT_VRF_NAME, sizeof(vrf_name))) {
+            HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "VRF-name:%s is not valid!", vrf_name);
             return cps_api_ret_code_ERR;
         }
     }
@@ -813,7 +819,8 @@ static cps_api_return_code_t nas_intf_mode_change_handler (void * context,
     cps_api_object_attr_t if_name_attr;
     cps_api_object_attr_t mode_attr;
     char                  if_name[HAL_IF_NAME_SZ];
-    uint32_t              mode = 0;
+    BASE_IF_MODE_t        mode = BASE_IF_MODE_MODE_NONE;
+    uint32_t              if_index = 0;
 
     HAL_RT_LOG_DEBUG("NAS-RT-CPS", "Interface mode change function");
 
@@ -851,14 +858,98 @@ static cps_api_return_code_t nas_intf_mode_change_handler (void * context,
                 (const char *)cps_api_object_attr_data_bin(if_name_attr),
                 sizeof(if_name));
 
-    mode = cps_api_object_attr_data_u32(mode_attr);
+    mode = (BASE_IF_MODE_t) cps_api_object_attr_data_u32(mode_attr);
 
-    HAL_RT_LOG_DEBUG ("NAS-RT-CPS-ACTION",
-                      "Mode change for interface:%s, mode:%d",
-                      if_name, mode);
+    if (hal_rt_get_if_index_from_if_name (if_name, &if_index) != STD_ERR_OK) {
+        HAL_RT_LOG_ERR ("NAS-RT-CPS-ACTION",
+                        "Intf index get failed for if_name:%s, mode:%s ",
+                        if_name, hal_rt_intf_mode_to_str(mode));
+        return cps_api_ret_code_OK;
+    }
+    HAL_RT_LOG_INFO ("NAS-RT-CPS-ACTION", "Intf index for if_name:%s(%d), mode:%s",
+                     if_name, if_index, hal_rt_intf_mode_to_str(mode));
+
+    nas_l3_lock();
+
+    /* Handle interface mode change for IPv4 and IPv6 address family */
+    fib_process_intf_mode_change (0, HAL_RT_V4_AFINDEX, if_index, mode);
+    fib_process_intf_mode_change (0, HAL_RT_V6_AFINDEX, if_index, mode);
+
+    nas_l3_unlock();
 
     return cps_api_ret_code_OK;
 }
+
+static cps_api_return_code_t nas_route_cps_ip_unreachables_set_func(void *ctx,
+                                                             cps_api_transaction_params_t * param,
+                                                             size_t ix) {
+    cps_api_object_t          obj;
+
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS-SET", "IP unreachables set");
+    if(param == NULL){
+        HAL_RT_LOG_ERR("NAS-RT-CPS", "IP unreachable with no param: ");
+        return cps_api_ret_code_ERR;
+    }
+
+    obj = cps_api_object_list_get (param->change_list, ix);
+    if (obj == NULL) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS", "Missing IP unreachable Object");
+        return cps_api_ret_code_ERR;
+    }
+
+    cps_api_return_code_t rc = cps_api_ret_code_OK;
+    rc = nas_route_process_cps_ip_unreachables_msg(param,ix);
+
+    return rc;
+}
+
+static cps_api_return_code_t nas_route_cps_ip_unreachables_get_func (void *ctx,
+                                                              cps_api_get_params_t * param,
+                                                              size_t ix) {
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS", "IP unreachables get function");
+
+    cps_api_object_t filt = cps_api_object_list_get(param->filters,ix);
+    if (filt == NULL) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS","IP unreachable object is not present");
+        return cps_api_ret_code_ERR;
+    }
+
+    cps_api_object_attr_t af_attr = cps_api_get_key_data(filt, BASE_ROUTE_IP_UNREACHABLES_CONFIG_AF);
+    cps_api_object_attr_t if_name_attr = cps_api_get_key_data(filt, BASE_ROUTE_IP_UNREACHABLES_CONFIG_IFNAME);
+    bool is_specific_get = false;
+    int32_t af = 0;
+    if (af_attr) {
+        af = cps_api_object_attr_data_u32(af_attr);
+        if ((af != BASE_CMN_AF_TYPE_INET) && (af != BASE_CMN_AF_TYPE_INET6)) {
+            HAL_RT_LOG_ERR("NAS-RT-CPS", "Invalid address family!");
+            return cps_api_ret_code_ERR;
+        }
+        is_specific_get = true;
+    }
+    char if_name[HAL_IF_NAME_SZ];
+    if (if_name_attr) {
+        memset(if_name, '\0', sizeof(if_name));
+        safestrncpy(if_name, (const char *)cps_api_object_attr_data_bin(if_name_attr),
+                    sizeof(if_name));
+        is_specific_get = true;
+    }
+
+    cps_api_return_code_t rc = cps_api_ret_code_OK;
+
+    nas_l3_lock();
+    rc = nas_route_get_all_ip_unreach_info(param->list, af, (if_name_attr ? if_name : NULL),
+                                           is_specific_get);
+    nas_l3_unlock();
+    return rc;
+}
+
+static cps_api_return_code_t nas_route_cps_ip_unreachables_rollback_func(void * ctx,
+                                                                  cps_api_transaction_params_t * param, size_t ix){
+
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS", "IP unreachables Rollback function");
+    return cps_api_ret_code_OK;
+}
+
 static t_std_error nas_route_object_entry_init(cps_api_operation_handle_t nas_route_cps_handle ) {
 
     cps_api_registration_functions_t f;
@@ -1162,6 +1253,34 @@ static t_std_error nas_route_object_interface_init(cps_api_operation_handle_t na
     return STD_ERR_OK;
 }
 
+static t_std_error nas_route_object_ip_unreachables_init(cps_api_operation_handle_t nas_route_cps_handle ) {
+
+    cps_api_registration_functions_t f;
+    char buff[CPS_API_KEY_STR_MAX];
+
+    memset(&f,0,sizeof(f));
+
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS", "IP unreachales CPS Initialization");
+
+    f.handle                 = nas_route_cps_handle;
+    f._read_function         = nas_route_cps_ip_unreachables_get_func;
+    f._write_function        = nas_route_cps_ip_unreachables_set_func;
+    f._rollback_function     = nas_route_cps_ip_unreachables_rollback_func;
+
+    if (!cps_api_key_from_attr_with_qual(&f.key,BASE_ROUTE_IP_UNREACHABLES_CONFIG_OBJ,cps_api_qualifier_TARGET)) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS","Could not translate %d to key %s",
+                   (int)(BASE_ROUTE_IP_UNREACHABLES_CONFIG_OBJ),cps_api_key_print(&f.key,buff,sizeof(buff)-1));
+        return STD_ERR(ROUTE,FAIL,0);
+    }
+
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS", "Registering for %s",
+                 cps_api_key_print(&f.key,buff,sizeof(buff)-1));
+    if (cps_api_register(&f)!=cps_api_ret_code_OK) {
+        return STD_ERR(ROUTE,FAIL,0);
+    }
+    return STD_ERR_OK;
+}
+
 t_std_error nas_routing_cps_init(cps_api_operation_handle_t nas_route_cps_handle) {
 
     t_std_error ret;
@@ -1197,6 +1316,11 @@ t_std_error nas_routing_cps_init(cps_api_operation_handle_t nas_route_cps_handle
     if((ret = nas_route_object_interface_init(nas_route_cps_handle)) != STD_ERR_OK){
         return ret;
     }
+
+    if((ret = nas_route_object_ip_unreachables_init(nas_route_cps_handle)) != STD_ERR_OK){
+        return ret;
+    }
+
     if((ret = nas_route_event_handle_init()) != STD_ERR_OK){
         return ret;
     }
@@ -1229,7 +1353,6 @@ t_std_error nas_route_publish_object(cps_api_object_t obj){
     cps_api_object_delete(obj);
     return STD_ERR_OK;
 }
-
 
 t_std_error nas_route_nht_publish_object(cps_api_object_t obj){
     cps_api_return_code_t rc;
@@ -1391,15 +1514,21 @@ bool nas_route_fdb_add_cps_msg (t_fib_nh *p_nh) {
     return false;
 }
 
-bool hal_rt_ip_addr_cps_obj_to_route(cps_api_object_t obj, t_fib_route_entry *p_route) {
+bool hal_rt_ip_addr_cps_obj_to_route(cps_api_object_t obj, t_fib_msg **p_msg_ret) {
+    t_fib_msg             *p_msg = NULL;
+    t_fib_route_entry     self_ip;
     cps_api_object_attr_t attr_v4 = CPS_API_ATTR_NULL;
     cps_api_object_attr_t attr_v6 = CPS_API_ATTR_NULL;
     cps_api_object_attr_t attr = CPS_API_ATTR_NULL;
-    cps_api_attr_id_t attr_id;
-    cps_api_attr_id_t pref_len_attr_id;
+    cps_api_attr_id_t     attr_id;
+    cps_api_attr_id_t     pref_len_attr_id;
     uint32_t addr_len = HAL_INET6_LEN;
+    uint32_t nh_count;
 
     HAL_RT_LOG_DEBUG("HAL-RT-IP", "Intf msg received");
+
+    *p_msg_ret = NULL;
+    memset(&self_ip, 0, sizeof(t_fib_route_entry));
 
     attr_v4 = cps_api_get_key_data (obj, BASE_IP_IPV4_IFINDEX);
     attr_v6 = cps_api_get_key_data (obj, BASE_IP_IPV6_IFINDEX);
@@ -1407,30 +1536,23 @@ bool hal_rt_ip_addr_cps_obj_to_route(cps_api_object_t obj, t_fib_route_entry *p_
     if ((attr_v4 == CPS_API_ATTR_NULL) && (attr_v6 == CPS_API_ATTR_NULL))
         return false;
 
-    p_route->hop_count = 1;
+    self_ip.hop_count = 1;
 
     /* Get if-index from key data */
-    hal_ifindex_t if_index =
-                (attr_v4 != CPS_API_ATTR_NULL) ?
-                 cps_api_object_attr_data_u32(attr_v4) :
-                 cps_api_object_attr_data_u32(attr_v6);
+    hal_ifindex_t nh_if_index =
+        (attr_v4 != CPS_API_ATTR_NULL) ?
+        cps_api_object_attr_data_u32(attr_v4) :
+        cps_api_object_attr_data_u32(attr_v6);
 
-
-    if (cps_api_object_type_operation(cps_api_object_key(obj)) != cps_api_oper_DELETE) {
-        if (hal_rt_validate_intf(if_index) != STD_ERR_OK) {
-            HAL_RT_LOG_ERR("HAL-RT-RIF", "Invalid interface:%d", if_index);
-            return false;
-        }
-    }
     if (attr_v4 != CPS_API_ATTR_NULL) {
         /** Get the ipv4 address */
-        p_route->prefix.af_index = HAL_RT_V4_AFINDEX;
+        self_ip.prefix.af_index = HAL_RT_V4_AFINDEX;
         attr_id = BASE_IP_IPV4_ADDRESS_IP;
         pref_len_attr_id = BASE_IP_IPV4_ADDRESS_PREFIX_LENGTH;
         addr_len = HAL_INET4_LEN;
     } else if (attr_v6 != CPS_API_ATTR_NULL) {
         /** Get the ipv6 address */
-        p_route->prefix.af_index = HAL_RT_V6_AFINDEX;
+        self_ip.prefix.af_index = HAL_RT_V6_AFINDEX;
         attr_id = BASE_IP_IPV6_ADDRESS_IP;
         pref_len_attr_id = BASE_IP_IPV6_ADDRESS_PREFIX_LENGTH;
         addr_len = HAL_INET6_LEN;
@@ -1440,51 +1562,89 @@ bool hal_rt_ip_addr_cps_obj_to_route(cps_api_object_t obj, t_fib_route_entry *p_
     if (attr == CPS_API_ATTR_NULL)
         return false;
 
-    memcpy(&p_route->prefix.u,
+    memcpy(&self_ip.prefix.u,
            cps_api_object_attr_data_bin(attr), addr_len);
 
     HAL_RT_LOG_DEBUG("HAL-RT-IP", "Intf:%d Addr:%s",
-                   if_index, FIB_IP_ADDR_TO_STR(&p_route->prefix));
+                   nh_if_index, FIB_IP_ADDR_TO_STR(&self_ip.prefix));
 
     attr = cps_api_object_e_get(obj, &pref_len_attr_id, 1);
     if (attr == CPS_API_ATTR_NULL)
         return false;
 
-    p_route->nh_list[0].nh_if_index = if_index;
-    p_route->prefix_masklen = cps_api_object_attr_data_u32(attr);
+    self_ip.prefix_masklen = cps_api_object_attr_data_u32(attr);
 
     switch(cps_api_object_type_operation(cps_api_object_key(obj)))
     {
         case cps_api_oper_CREATE:
-            p_route->msg_type = ROUTE_ADD;
+            self_ip.msg_type = FIB_RT_MSG_ADD;
             break;
         case cps_api_oper_SET:
-            p_route->msg_type = ROUTE_UPD;
+            self_ip.msg_type = FIB_RT_MSG_UPD;
             break;
         case cps_api_oper_DELETE:
-            p_route->msg_type = ROUTE_DEL;
+            self_ip.msg_type = FIB_RT_MSG_DEL;
             break;
         default:
             break;
     }
 
     /* IP address other than link local, set the route type as local */
-    if (!STD_IP_IS_ADDR_LINK_LOCAL(&p_route->prefix)) {
-        p_route->rt_type = RT_LOCAL;
+    if (!STD_IP_IS_ADDR_LINK_LOCAL(&self_ip.prefix)) {
+        self_ip.rt_type = RT_LOCAL;
+    } else if (self_ip.prefix_masklen == HAL_RT_V6_PREFIX_LEN){
+        /* @@TODO Allow the IPv6 link local with /128 prefix len for now
+         * for VRRPv6 with link local virtual address case to work.
+         * Once the interface type MACVLAN changes are merged,
+         * remove this check and handle it internally in the route programming into NPU flow */
+        self_ip.rt_type = RT_UNREACHABLE;
+        self_ip.hop_count = 0;
+        nh_if_index = 0;
+    }
+
+    /* Validate the interface only for the interface is valid case */
+    if (self_ip.rt_type != RT_UNREACHABLE) {
+        if (cps_api_object_type_operation(cps_api_object_key(obj)) != cps_api_oper_DELETE) {
+            if (hal_rt_validate_intf(nh_if_index) != STD_ERR_OK) {
+                HAL_RT_LOG_DEBUG("HAL-RT-RIF", "Invalid interface:%d", nh_if_index);
+                return false;
+            }
+        }
     }
 
     HAL_RT_LOG_INFO("HAL-RT-IP", "Intf:%d Addr:%s/%d op:%s",
-                    p_route->nh_list[0].nh_if_index,
-                    FIB_IP_ADDR_TO_STR(&p_route->prefix),
-                    p_route->prefix_masklen,
-                    ((p_route->msg_type == ROUTE_ADD) ? "Add" :
-                     ((p_route->msg_type == ROUTE_DEL) ? "Del" : "Update")));
+                    nh_if_index,
+                    FIB_IP_ADDR_TO_STR(&self_ip.prefix),
+                    self_ip.prefix_masklen,
+                    ((self_ip.msg_type == FIB_RT_MSG_ADD) ? "Add" :
+                     ((self_ip.msg_type == FIB_RT_MSG_DEL) ? "Del" : "Update")));
 
     /* Update the prefix len to 32/128 based on the address family,
      * since we need to install full address for trap to CPU action.
      */
-    p_route->prefix_masklen = (p_route->prefix.af_index == HAL_RT_V4_AFINDEX)
+    self_ip.prefix_masklen = (self_ip.prefix.af_index == HAL_RT_V4_AFINDEX)
                                ? HAL_RT_V4_PREFIX_LEN : HAL_RT_V6_PREFIX_LEN;
+
+    nh_count = 1;
+    /* allocate the memory for the ip addr message for 1 nh */
+    uint32_t buf_size = sizeof(t_fib_msg) + (sizeof (t_fib_nh_info) * nh_count);
+    p_msg = hal_rt_alloc_route_mem_msg(buf_size);
+
+    if (!p_msg) {
+        HAL_RT_LOG_ERR("HAL-RT", "Memory alloc failed for ip_addr msg");
+        return false;
+    }
+
+    HAL_RT_LOG_DEBUG("HAL-RT", "allocated buffer for ip address event "
+                     "message:%p for bytes:%d", p_msg, buf_size);
+
+    memset(p_msg, 0, buf_size);
+    p_msg->type = FIB_MSG_TYPE_NL_ROUTE;
+    t_fib_route_entry *p_route = &(p_msg->route);
+    memcpy(p_route, &self_ip, sizeof(self_ip));
+    p_route->nh_list[0].nh_if_index = nh_if_index;
+
+    *p_msg_ret = p_msg;
 
     return true;
 }

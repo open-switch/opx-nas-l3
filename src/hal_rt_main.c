@@ -40,12 +40,12 @@
 
 #include "event_log.h"
 #include "cps_api_object_category.h"
-#include "cps_api_route.h"
 #include "cps_api_operation.h"
 #include "cps_api_events.h"
 #include "cps_class_map.h"
 #include "cps_api_object_key.h"
 #include "dell-base-ip.h"
+#include "os-routing-events.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -64,9 +64,6 @@ static t_fib_vrf        *ga_fib_vrf [FIB_MAX_VRF];
 
 static cps_api_operation_handle_t nas_rt_cps_handle;
 static cps_api_operation_handle_t nas_rt_nht_cps_handle;
-static cps_api_key_t linux_if_obj_key;
-static cps_api_key_t linux_ipv4_obj_key;
-static cps_api_key_t linux_ipv6_obj_key;
 
 #define NUM_INT_NAS_RT_CPS_API_THREAD 1
 #define NUM_INT_NAS_RT_NHT_CPS_API_THREAD 1
@@ -452,11 +449,11 @@ t_std_error hal_rt_task_init (void)
     fib_create_intf_tree ();
 
     if ((rc = hal_rt_vrf_init ()) != STD_ERR_OK) {
-        HAL_RT_LOG_ERR( "HAL-RT", "%s (): vrf_init failed", __FUNCTION__);
+        HAL_RT_LOG_ERR( "HAL-RT", "VRF Init failed");
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
-    if ((rc = hal_rt_default_dr_init ()) != STD_ERR_OK) {
-        HAL_RT_LOG_ERR( "HAL-RT", "%s (): default_dr_init failed", __FUNCTION__);
+    if ((rc = hal_rt_default_link_local_route_init ()) != STD_ERR_OK) {
+        HAL_RT_LOG_ERR( "HAL-RT", "Default link local route Init failed");
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
 
@@ -476,17 +473,14 @@ void hal_rt_task_exit (void)
     return;
 }
 
-int hal_rt_default_dr_init (void)
+int hal_rt_default_link_local_route_init (void)
 {
     uint32_t    vrf_id;
-    uint8_t     af_index;
 
-    HAL_RT_LOG_DEBUG("HAL-RT", "Init Default DR");
+    HAL_RT_LOG_DEBUG("HAL-RT", "Init Default Link Local Route");
 
     for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id ++) {
-        for (af_index = FIB_MIN_AFINDEX; af_index < FIB_MAX_AFINDEX; af_index++) {
-            fib_add_default_dr (vrf_id, af_index);
-        }
+        fib_add_default_link_local_route (vrf_id);
     }
 
     return STD_ERR_OK;
@@ -497,58 +491,42 @@ static bool hal_rt_process_msg(cps_api_object_t obj, void *param)
     t_fib_msg *p_msg = NULL;
     g_fib_gbl_info.num_tot_msg++;
 
-    if (cps_api_key_matches (&linux_if_obj_key, cps_api_object_key(obj), true) == 0) {
-        g_fib_gbl_info.num_int_msg++;
-        t_fib_intf_entry intf;
-        memset(&intf, 0, sizeof(t_fib_intf_entry));
-        /* Enqueue the intf messages for further processing
-         * only it has the admin attribute.*/
-        if (hal_rt_cps_obj_to_intf(obj,&intf)) {
-            p_msg = hal_rt_alloc_mem_msg();
-            if (p_msg) {
-                p_msg->type = FIB_MSG_TYPE_NL_INTF;
-                memcpy(&(p_msg->intf), &intf, sizeof(intf));
+    switch (cps_api_key_get_cat(cps_api_object_key(obj))) {
+        case cps_api_obj_CAT_BASE_IF_LINUX:
+            g_fib_gbl_info.num_int_msg++;
+            t_fib_intf_entry intf;
+            memset(&intf, 0, sizeof(t_fib_intf_entry));
+            /* Enqueue the intf messages for further processing
+             * only it has the admin attribute.*/
+            if (hal_rt_cps_obj_to_intf(obj,&intf)) {
+                p_msg = hal_rt_alloc_mem_msg();
+                if (p_msg) {
+                    p_msg->type = FIB_MSG_TYPE_NL_INTF;
+                    memcpy(&(p_msg->intf), &intf, sizeof(intf));
+                    nas_rt_process_msg(p_msg);
+                }
+            }
+            break;
+        case cps_api_obj_CAT_BASE_IP:
+            g_fib_gbl_info.num_ip_msg++;
+            /* Enqueue the IP address messages for further processing
+             * it has the IPv4/IPv6 route attributes.
+             */
+            if (hal_rt_ip_addr_cps_obj_to_route (obj,&p_msg)) {
                 nas_rt_process_msg(p_msg);
             }
-        }
-        return true;
-    }
-    if ((cps_api_key_matches (&linux_ipv4_obj_key, cps_api_object_key(obj), true) == 0) ||
-        (cps_api_key_matches (&linux_ipv6_obj_key, cps_api_object_key(obj), true) == 0)) {
-        g_fib_gbl_info.num_ip_msg++;
-        t_fib_route_entry self_ip;
-        memset(&self_ip, 0, sizeof(t_fib_route_entry));
-        /* Enqueue the IP address messages for further processing
-         * it has the IPv4/IPv6 route attributes.
-         */
-        if (hal_rt_ip_addr_cps_obj_to_route (obj,&self_ip)) {
-            p_msg = hal_rt_alloc_mem_msg();
-            if (p_msg) {
-                p_msg->type = FIB_MSG_TYPE_NL_ROUTE;
-                memcpy(&(p_msg->route), &self_ip, sizeof(self_ip));
-                nas_rt_process_msg(p_msg);
-            }
-        }
-        return true;
-    }
-    if (cps_api_key_get_cat(cps_api_object_key(obj)) != cps_api_obj_cat_ROUTE) {
-        g_fib_gbl_info.num_err_msg++;
-        return true;
-    }
-    switch (cps_api_key_get_subcat(cps_api_object_key(obj))) {
-        case cps_api_route_obj_ROUTE:
+            break;
+        case cps_api_obj_CAT_OS_RE:
             g_fib_gbl_info.num_route_msg++;
-            p_msg = hal_rt_alloc_mem_msg();
-            if (p_msg) {
-                p_msg->type = FIB_MSG_TYPE_NL_ROUTE;
-                hal_rt_cps_obj_to_route(obj, &(p_msg->route));
+            if (hal_rt_cps_obj_to_route(obj, &p_msg)) {
                 nas_rt_process_msg(p_msg);
             }
             break;
         default:
             g_fib_gbl_info.num_unk_msg++;
-            HAL_RT_LOG_DEBUG( "HAL-RT", "msg sub_class unknown %d",
-                         cps_api_key_get_subcat(cps_api_object_key(obj)));
+            HAL_RT_LOG_DEBUG("HAL-RT", "msg sub_class unknown category:%d sub-cat:%d",
+                             cps_api_key_get_cat(cps_api_object_key(obj)),
+                             cps_api_key_get_subcat(cps_api_object_key(obj)));
             break;
     }
     return true;
@@ -563,23 +541,21 @@ t_std_error hal_rt_main(void)
     const uint_t NUM_KEYS=4;
     cps_api_key_t key[NUM_KEYS];
 
-    cps_api_key_init(&key[0],cps_api_qualifier_TARGET,
-            cps_api_obj_cat_ROUTE,cps_api_route_obj_ROUTE,0);
+    cps_api_key_from_attr_with_qual(&key[0], OS_RE_BASE_ROUTE_OBJ_ENTRY_OBJ,
+                                    cps_api_qualifier_OBSERVED);
     // Register with NAS-Linux object for interface state change notifications
     cps_api_key_from_attr_with_qual(&key[1],
                                     BASE_IF_LINUX_IF_INTERFACES_INTERFACE_OBJ,
                                     cps_api_qualifier_OBSERVED);
-    memcpy(&linux_if_obj_key, &key[1], sizeof(cps_api_key_t));
 
     cps_api_key_from_attr_with_qual(&key[2],
                                     BASE_IP_IPV4_OBJ,
-                                    cps_api_qualifier_TARGET);
-    memcpy(&linux_ipv4_obj_key, &key[2], sizeof(cps_api_key_t));
+                                    cps_api_qualifier_OBSERVED);
 
     cps_api_key_from_attr_with_qual(&key[3],
                                     BASE_IP_IPV6_OBJ,
-                                    cps_api_qualifier_TARGET);
-    memcpy(&linux_ipv6_obj_key, &key[3], sizeof(cps_api_key_t));
+                                    cps_api_qualifier_OBSERVED);
+    reg.priority = 0;
     reg.number_of_objects = NUM_KEYS;
     reg.objects = key;
     if (cps_api_event_thread_reg(&reg,hal_rt_process_msg,NULL)!=cps_api_ret_code_OK) {

@@ -355,6 +355,11 @@ void fib_dump_dr_node (t_fib_dr *p_dr)
     printf ("  num_nh            :  %d\r\n", p_dr->num_nh);
     printf ("  num_fh            :  %d\r\n", p_dr->num_fh);
 
+    if (STD_IP_IS_ADDR_LINK_LOCAL(&p_dr->key.prefix)) {
+        printf ("  num_ipv6_link_local      :  %d\r\n", p_dr->num_ipv6_link_local);
+        printf ("  num_ipv6_rif_link_local  :  %d\r\n", p_dr->num_ipv6_rif_link_local);
+    }
+
     printf ("**************************************************\r\n");
     printf ("  NH List:\r\n");
     printf ("**************************************************\r\n");
@@ -930,10 +935,11 @@ void fib_dump_intf_node_key (t_fib_intf *p_intf)
     }
 
     printf ("  p_intf            :  %p\r\n", p_intf);
-    printf ("  if_index          :  0x%x\r\n", p_intf->key.if_index);
+    printf ("  if_index          :  %d\r\n", p_intf->key.if_index);
     printf ("  vrf_id            :  %d\r\n", p_intf->key.vrf_id);
     printf ("  af_index          :  %d\r\n", p_intf->key.af_index);
     printf ("  admin             :  %d\r\n", p_intf->admin_status);
+    printf ("  if_name           :  %s\r\n", p_intf->if_name);
 
     return;
 }
@@ -943,6 +949,7 @@ void fib_dump_intf_node (t_fib_intf *p_intf)
     t_fib_nh       *p_fh = NULL;
     t_fib_nh_holder nh_holder;
     uint32_t    count = 0;
+    char              p_buf[HAL_RT_MAX_BUFSZ];
 
     if (!p_intf)
     {
@@ -954,6 +961,11 @@ void fib_dump_intf_node (t_fib_intf *p_intf)
 
     fib_dump_intf_node_key (p_intf);
 
+    printf(" IPv4 unreachable status:%d \r\n", p_intf->is_ipv4_unreachables_set);
+    printf(" IPv6 unreachable status:%d \r\n", p_intf->is_ipv6_unreachables_set);
+    printf (" mode               :  %s\r\n", hal_rt_intf_mode_to_str(p_intf->mode));
+    printf (" MAC address        :  %s\r\n",
+            hal_rt_mac_to_str (&p_intf->mac_addr, p_buf, HAL_RT_MAX_BUFSZ));
     printf ("**************************************************\r\n");
     printf ("  FH List:\r\n");
     printf ("**************************************************\r\n");
@@ -1076,7 +1088,6 @@ void fib_dump_intf_per_if_index (uint32_t if_index)
         printf ("  If_index: 0x%x, Count: %d\r\n", if_index, count);
         printf ("************************************************\r\n");
     }
-
     return;
 }
 
@@ -1328,6 +1339,7 @@ void fib_dump_vrf_cntrs_per_vrf_per_af (uint32_t vrf_id, uint32_t in_af_index)
     printf ("  num_cam_host_entries     :  %d\r\n", p_vrf_cntrs->num_cam_host_entries);
     printf ("  num_cam_route_entries    :  %d\r\n", p_vrf_cntrs->num_cam_route_entries);
     printf ("  num_nht_entries          :  %d\r\n", p_vrf_cntrs->num_nht_entries);
+    printf ("  num_catch_all_intf_entries:  %d\r\n", p_vrf_cntrs->num_catch_all_intf_entries);
 
     printf ("**************************************************\r\n");
 

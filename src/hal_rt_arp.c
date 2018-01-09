@@ -48,20 +48,6 @@
 
 #include <string.h>
 
-bool hal_rt_validate_cps_obj_neigh_family(cps_api_object_t obj) {
-    cps_api_object_attr_t list[cps_api_if_NEIGH_A_MAX];
-    cps_api_object_attr_fill_list(obj,0,list,sizeof(list)/sizeof(*list));
-
-    if (list[cps_api_if_NEIGH_A_FAMILY]!=NULL) {
-        unsigned short  family = cps_api_object_attr_data_u32(list[cps_api_if_NEIGH_A_FAMILY]);
-        /* Skip the non IPv4 and IPv6 family neighbors here */
-        if ((family != HAL_RT_V4_AFINDEX) && (family != HAL_RT_V6_AFINDEX))
-            return false;
-    }
-
-    return true;
-}
-
 void hal_rt_cps_obj_to_neigh(cps_api_object_t obj,t_fib_neighbour_entry *p_nbr_msg) {
     cps_api_object_it_t it;
     cps_api_attr_id_t id = 0;
@@ -73,10 +59,10 @@ void hal_rt_cps_obj_to_neigh(cps_api_object_t obj,t_fib_neighbour_entry *p_nbr_m
     switch (op) {
         case cps_api_oper_CREATE:
         case cps_api_oper_SET:
-            p_nbr_msg->msg_type = NBR_ADD;
+            p_nbr_msg->msg_type = FIB_RT_MSG_ADD;
             break;
         case cps_api_oper_DELETE:
-            p_nbr_msg->msg_type = NBR_DEL;
+            p_nbr_msg->msg_type = FIB_RT_MSG_DEL;
             break;
         default:
             break;
@@ -143,12 +129,13 @@ t_std_error fib_proc_nbr_download (t_fib_neighbour_entry *p_arp_info_msg)
     }
 
     HAL_RT_LOG_INFO("HAL-RT-ARP_OStoNAS", "cmd:%s(%d) vrf_id:%d, family:%d state:0x%x ip_addr:%s, "
-                  "mac_addr:%s, out_if_index:%d mbr:%d expire:%d status:0x%x",
-                  ((p_arp_info_msg->msg_type == NBR_ADD) ? "Nbr-Add" : ((p_arp_info_msg->msg_type == NBR_DEL) ?
-                                                                       "Nbr-Del" : "Unknown")),
-                  p_arp_info_msg->msg_type, p_arp_info_msg->vrfid,
-                  p_arp_info_msg->family, p_arp_info_msg->status,
-                  FIB_IP_ADDR_TO_STR (&p_arp_info_msg->nbr_addr),
+                    "mac_addr:%s, out_if_index:%d mbr:%d expire:%d status:0x%x",
+                    ((p_arp_info_msg->msg_type == FIB_RT_MSG_ADD) ? "Nbr-Add" :
+                     ((p_arp_info_msg->msg_type == FIB_RT_MSG_DEL) ?
+                      "Nbr-Del" : "Unknown")),
+                    p_arp_info_msg->msg_type, p_arp_info_msg->vrfid,
+                    p_arp_info_msg->family, p_arp_info_msg->status,
+                    FIB_IP_ADDR_TO_STR (&p_arp_info_msg->nbr_addr),
                   hal_rt_mac_to_str (&p_arp_info_msg->nbr_hwaddr, p_buf, HAL_RT_MAX_BUFSZ),
                   p_arp_info_msg->if_index,
                   p_arp_info_msg->mbr_if_index, p_arp_info_msg->expire, p_arp_info_msg->status);
@@ -181,13 +168,13 @@ t_std_error fib_proc_nbr_download (t_fib_neighbour_entry *p_arp_info_msg)
     }
 
     /* Delete the failed neighbor entries from the DB */
-    if ((sub_cmd == NBR_ADD) && (p_arp_info_msg->status == RT_NUD_FAILED)) {
-        sub_cmd = NBR_DEL;
+    if ((sub_cmd == FIB_RT_MSG_ADD) && (p_arp_info_msg->status == RT_NUD_FAILED)) {
+        sub_cmd = FIB_RT_MSG_DEL;
         FIB_INCR_CNTRS_NBR_ADD_FAILED (vrf_id, af_index);
     }
 
     switch (sub_cmd) {
-        case NBR_ADD:
+        case FIB_RT_MSG_ADD:
             FIB_INCR_CNTRS_NBR_ADD (vrf_id, af_index);
             if (p_arp_info_msg->status == RT_NUD_REACHABLE)
                 FIB_INCR_CNTRS_NBR_ADD_REACHABLE (vrf_id, af_index);
@@ -209,7 +196,7 @@ t_std_error fib_proc_nbr_download (t_fib_neighbour_entry *p_arp_info_msg)
             }
             break;
 
-        case NBR_DEL:
+        case FIB_RT_MSG_DEL:
             FIB_INCR_CNTRS_NBR_DEL (vrf_id, af_index);
             if (fib_proc_arp_del (af_index, p_arp_info_msg) == STD_ERR_OK){
                 nbr_change = true;
@@ -671,11 +658,53 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf) {
     return true;
 }
 
+bool fib_proc_ip_unreach_config_msg(t_fib_intf_ip_unreach_config *p_ip_unreach_cfg) {
+    bool os_gbl_cfg_req = false, os_gbl_cfg_enable = false, os_intf_cfg_enable = true;
+    nas_l3_lock();
+    bool rc = hal_rt_handle_ip_unreachable_config(p_ip_unreach_cfg, &os_gbl_cfg_req);
+    nas_l3_unlock();
+    if (rc == false)
+        return false;
+
+    if (os_gbl_cfg_req) {
+        /* @@TODO This needs to be enabled/disabled per VRF level globally */
+        if (nas_route_os_ip_unreachable_config(p_ip_unreach_cfg->af_index,
+                                               NULL, p_ip_unreach_cfg->is_op_del,
+                                               os_gbl_cfg_enable)
+            != cps_api_ret_code_OK) {
+            HAL_RT_LOG_ERR("HAL-RT-OS-UNREACH", "Failed to config global rule in OS for IP unreachable"
+                           " is_del:%d if-index:%d af:%d",
+                           p_ip_unreach_cfg->is_op_del, p_ip_unreach_cfg->if_index,
+                           p_ip_unreach_cfg->af_index);
+            return false;
+        }
+    }
+
+    /* Program the IP table filter to allow the ICMP unreachable message
+     * generation on this interface for a non-routable packets */
+    if (nas_route_os_ip_unreachable_config(p_ip_unreach_cfg->af_index,
+                                           p_ip_unreach_cfg->if_name,
+                                           p_ip_unreach_cfg->is_op_del,
+                                           os_intf_cfg_enable) !=
+        cps_api_ret_code_OK) {
+        HAL_RT_LOG_ERR("HAL-RT-OS-UNREACH", "Failed to config intf rule in OS for IP unreachable"
+                       " is_del:%d if-index:%d af:%d",
+                       p_ip_unreach_cfg->is_op_del, p_ip_unreach_cfg->if_index,
+                       p_ip_unreach_cfg->af_index);
+        if (os_gbl_cfg_req && (p_ip_unreach_cfg->is_op_del == false)) {
+            nas_route_os_ip_unreachable_config(p_ip_unreach_cfg->af_index,
+                                               NULL, true, os_gbl_cfg_enable);
+        }
+        return false;
+    }
+    return rc;
+}
+
 bool hal_rt_process_intf_state_msg(t_fib_msg_type type, t_fib_intf_entry *p_intf) {
 
     HAL_RT_LOG_INFO("HAL-RT","Interface status change notification type:%d "
                     "intf:%d admin:%d is_del:%d",
-                   type, p_intf->if_index, p_intf->admin_status, p_intf->is_op_del);
+                    type, p_intf->if_index, p_intf->admin_status, p_intf->is_op_del);
 
     if (type == FIB_MSG_TYPE_NBR_MGR_INTF) {
         /* If the interface down is from neighbor manager, delete the Nbrs (owner - ARP) */
@@ -707,6 +736,7 @@ bool hal_rt_process_intf_state_msg(t_fib_msg_type type, t_fib_intf_entry *p_intf
             }
         }
     }
+
     nas_l3_lock();
     /* Handle interface admin status changes for IPv4 and IPv6 routes */
     fib_handle_intf_admin_status_change(0, HAL_RT_V4_AFINDEX, p_intf);

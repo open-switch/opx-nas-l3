@@ -86,7 +86,7 @@ int hal_fib_set_all_dr_fh_to_un_written (t_fib_dr *p_dr);
 
 dn_hal_route_err _hal_fib_host_add (uint32_t vrf_id, t_fib_nh *p_fh);
 
-dn_hal_route_err _hal_fib_host_del (uint32_t vrf_id, t_fib_nh *p_fh, bool error_occured);
+dn_hal_route_err _hal_fib_host_del (uint32_t vrf_id, t_fib_nh *p_fh);
 
 dn_hal_route_err hal_fib_reserved_host_add (uint32_t vrf_id, t_fib_nh *p_fh);
 

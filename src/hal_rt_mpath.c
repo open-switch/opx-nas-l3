@@ -112,12 +112,14 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
     bool error_occured = false, is_ecmp_table_full = false;
     bool ecmp_handle_created = false;
     int valid_ecmp_count = 0;
+    int removed_fh_count = 0;
     ndi_rif_id_t rif_id = 0;
     t_fib_nh *p_fh;
     t_fib_dr_fh *p_dr_fh;
     t_fib_nh_holder nh_holder;
     ndi_route_t route_entry;
     ndi_nh_group_t nh_group_entry;
+    ndi_nh_group_t removed_nh_group_entry;
     t_fib_nh_holder nh_holder1;
     t_fib_tunnel_fh *p_tunnel_fh = NULL;
     t_fib_tunnel_dr_fh *p_tunnel_dr_fh = NULL;
@@ -136,6 +138,12 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
     hal_form_ecmp_route_entry(&nh_group_entry, p_dr);
 
     /*
+     * Initialize NH Group entry for removed NHs
+     */
+    memset(&removed_nh_group_entry, 0, sizeof(ndi_nh_group_t));
+    hal_form_ecmp_route_entry(&removed_nh_group_entry, p_dr);
+
+    /*
      * Initialize ECMP route entry
      */
     memset(&route_entry, 0, sizeof(route_entry));
@@ -144,9 +152,11 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
     for (npu_id = 0; npu_id < hal_rt_access_fib_config()->max_num_npu;
             npu_id++) {
         valid_ecmp_count = 0;
+        removed_fh_count = 0;
         route_entry.npu_id = npu_id;
         route_entry.vrf_id = hal_vrf_obj_get(npu_id, p_dr->vrf_id);
         nh_group_entry.vrf_id = route_entry.vrf_id;
+        removed_nh_group_entry.vrf_id = route_entry.vrf_id;
 
         FIB_FOR_EACH_FH_FROM_DR (p_dr, p_fh, nh_holder)
         {
@@ -157,6 +167,22 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
                     p_fh = FIB_GET_FH_FROM_TUNNEL_FH(p_tunnel_fh);
                     p_tunnel_dr_fh = FIB_GET_TUNNEL_DRFH_NODE_FROM_NH_HOLDER(nh_holder1);
 
+                    /* find out the removed NHs and remove them from NH group
+                     * if there are only NH's that are removed.
+                     */
+
+                    if (!FIB_IS_NH_WRITTEN (p_fh) ||
+                        (p_fh->p_arp_info->state != FIB_ARP_RESOLVED)) {
+                        if (p_fh->next_hop_id != 0) {
+                            removed_nh_group_entry.nh_list[removed_fh_count].id = p_fh->next_hop_id;
+                            removed_nh_group_entry.nh_list[removed_fh_count].weight = 1;
+                            removed_fh_count++;
+                            HAL_RT_LOG_INFO ("HAL-RT-MP", "VRF %d Prefix: %s/%d, "
+                                             "removed_fh_count:%d NH handle:%d ",
+                                             p_dr->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
+                                             removed_fh_count, p_fh->next_hop_id);
+                        }
+                    }
                     if (!FIB_IS_FH_VALID_ECMP(p_fh, valid_ecmp_count)) {
                         p_tunnel_dr_fh->status = FIB_DRFH_STATUS_UNWRITTEN;
                         continue;
@@ -175,6 +201,23 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
                     }
                 }
             } else {
+
+                /* find out the removed NHs and remove them from NH group
+                 * if there are only NH's that are removed.
+                 */
+                if (!FIB_IS_NH_WRITTEN (p_fh) ||
+                    (p_fh->p_arp_info->state != FIB_ARP_RESOLVED)) {
+                    if (p_fh->next_hop_id != 0) {
+                        removed_nh_group_entry.nh_list[removed_fh_count].id = p_fh->next_hop_id;
+                        removed_nh_group_entry.nh_list[removed_fh_count].weight = 1;
+                        removed_fh_count++;
+                        HAL_RT_LOG_INFO ("HAL-RT-MP", "VRF %d Prefix: %s/%d, "
+                                         "removed_fh_count:%d NH handle:%d ",
+                                         p_dr->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
+                                         removed_fh_count, p_fh->next_hop_id);
+                    }
+                }
+
                 if (!FIB_IS_FH_VALID_ECMP(p_fh, valid_ecmp_count)) {
                     p_dr_fh->status = FIB_DRFH_STATUS_UNWRITTEN;
                     HAL_RT_LOG_DEBUG("HAL-RT-NDI",
@@ -268,10 +311,17 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
         p_dr->nh_count = valid_ecmp_count;
         hal_dump_ecmp_route_entry(&nh_group_entry);
 
-        HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                "OLD NH Group: VRF %d. " "Prefix: %s/%d, num_fh: %d, valid_ecmp_count=%d, " "OLD NH Group ID =%d \n",
+        /*
+         * Update the removed nh group entry nh list
+         */
+        removed_nh_group_entry.npu_id = npu_id;
+        removed_nh_group_entry.nhop_count = removed_fh_count;
+
+        HAL_RT_LOG_INFO ("HAL-RT-NDI",
+                "OLD NH Group: VRF %d. " "Prefix: %s/%d, num_fh: %d, valid_ecmp_count=%d, removed_fh_count=%d "
+                "OLD NH Group ID =%d \n",
                 vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
-                p_dr->prefix_len, p_dr->num_fh, valid_ecmp_count,
+                p_dr->prefix_len, p_dr->num_fh, valid_ecmp_count, removed_fh_count,
                 p_dr->nh_handle);
 
         if ((valid_ecmp_count == 0) && (p_dr->num_fh > 0)) {
@@ -294,7 +344,7 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
              */
             is_ecmp_table_full = false;
             rc = hal_rt_find_or_create_ecmp_group(p_dr, &nh_group_entry,
-                    &nh_group_handle, &is_ecmp_table_full);
+                    &nh_group_handle, &is_ecmp_table_full, &removed_nh_group_entry);
             if (rc != STD_ERR_OK) {
                 HAL_RT_LOG_ERR("HAL-RT-NDI",
                         "ECMP Group: Create Group ID failed. VRF %d. Prefix: " "%s/%d, Unit: %d, Err: %d, %s %d",
@@ -436,6 +486,7 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
             /*
              * Change to new group handle
              */
+            p_dr->old_nh_handle_nht = p_dr->nh_handle;
             p_dr->nh_handle = route_entry.nh_handle;
 
         } else {
@@ -455,6 +506,11 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
     }
 
     if (error_occured == false) {
+        /* Notify the Route add to NHT only if the action is forward */
+        if (route_entry.action == NDI_ROUTE_PACKET_ACTION_FORWARD) {
+            nas_rt_handle_dest_change(p_dr, NULL, true);
+        }
+        p_dr->old_nh_handle_nht = 0;
 
         /*
          * Delete old group id that was marked for deletion
@@ -464,9 +520,6 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
         hal_rt_fib_check_and_delete_old_groupid(p_dr, route_entry.npu_id);
         p_dr->ofh_cnt = valid_ecmp_count;
 
-        /* Notify the Route add to NHT only if the action is forward */
-        if (route_entry.action == NDI_ROUTE_PACKET_ACTION_FORWARD)
-            nas_rt_handle_dest_change(p_dr, NULL, true);
     } else {
         /*
          * @@TODO either delete route hal_fib_route_del or take appropriate action
@@ -481,7 +534,7 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
 dn_hal_route_err hal_fib_ecmp_route_del(uint32_t vrf_id, t_fib_dr *p_dr) {
     npu_id_t npu_id;
     ndi_route_t route_entry;
-    bool error_occured = false;
+    bool error_occured = false, is_nht_notif_done = false;
     t_std_error rc;
 
     HAL_RT_LOG_INFO("HAL-RT-NDI",
@@ -519,6 +572,12 @@ dn_hal_route_err hal_fib_ecmp_route_del(uint32_t vrf_id, t_fib_dr *p_dr) {
             return DN_HAL_ROUTE_E_FAIL;
         }
 
+        if (is_nht_notif_done == false) {
+            /* Mark the NH resolve as false, to avoid taking this route for NHT */
+            p_dr->is_nh_resolved = false;
+            nas_rt_handle_dest_change(p_dr, NULL, false);
+            is_nht_notif_done = true;
+        }
         /*
          * Delete the NH group(mostly decrement refcount or delete
          * in SAI (decrement ref cnt) and if group rf cnt is 0 delete from HW)
@@ -546,7 +605,6 @@ dn_hal_route_err hal_fib_ecmp_route_del(uint32_t vrf_id, t_fib_dr *p_dr) {
     if (error_occured == true) {
         return DN_HAL_ROUTE_E_FAIL;
     }
-    nas_rt_handle_dest_change(p_dr, NULL, false);
     return DN_HAL_ROUTE_E_NONE;
 }
 

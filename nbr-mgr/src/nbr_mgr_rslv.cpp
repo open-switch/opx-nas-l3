@@ -40,6 +40,9 @@ int nbr_mgr_resolve_main(void)
 
 int nbr_mgr_delay_resolve_main(void)
 {
+    for (;;) {
+        nbr_mgr_process_delay_resolve_msg(nbr_mgr_burst_resolve_handler);
+    }
     return true;
 }
 
@@ -127,7 +130,8 @@ bool nbr_mgr_burst_resolve_handler(nbr_mgr_msg_t *p_msg) {
     /* Invoke the NAS-linux APIs for Neighbor resolution and refresh */
     if (p_msg->type == NBR_MGR_NL_RESOLVE_MSG) {
         nas_os_resolve_neighbor(obj);
-    } else if (p_msg->type == NBR_MGR_NL_REFRESH_MSG) {
+    } else if ((p_msg->type == NBR_MGR_NL_REFRESH_MSG) ||
+               (p_msg->type == NBR_MGR_NL_DELAY_REFRESH_MSG)) {
         nas_os_refresh_neighbor(obj);
     }
     cps_api_object_delete(obj);
@@ -140,7 +144,11 @@ bool nbr_mgr_nbr_resolve(nbr_mgr_msg_type_t type, nbr_mgr_nbr_entry_t *p_nbr) {
     if (p_msg) {
         p_msg->type = type;
         memcpy(&(p_msg->nbr), p_nbr, sizeof(nbr_mgr_nbr_entry_t));
-        nbr_mgr_enqueue_burst_resolve_msg(std::move(p_msg_uptr));
+        if (type == NBR_MGR_NL_DELAY_REFRESH_MSG) {
+            nbr_mgr_enqueue_delay_resolve_msg(std::move(p_msg_uptr));
+        } else {
+            nbr_mgr_enqueue_burst_resolve_msg(std::move(p_msg_uptr));
+        }
     }
     return true;
 }

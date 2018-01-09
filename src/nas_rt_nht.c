@@ -290,6 +290,18 @@ t_fib_nht *fib_get_next_nht (uint32_t vrf_id, t_fib_ip_addr *p_dest_addr) {
     return p_nht;
 }
 
+static int nas_rt_get_mask (uint8_t af_index, uint8_t prefix_len, t_fib_ip_addr *mask) {
+    if (!FIB_IS_AFINDEX_VALID(af_index)) {
+        return false;
+    }
+    std_ip_get_mask_from_prefix_len (af_index, prefix_len, mask);
+    /* @@TODO the above function is not giving the mask for IPv4 in the correct order, fix it */
+    if (STD_IP_IS_AFINDEX_V4 (af_index)) {
+        mask->u.v4_addr = htonl(mask->u.v4_addr);
+    }
+    return true;
+}
+
 /* Active prefix is down, find the next best prefix for the all NHTs or find the best nexthop/Route
  * for the given p_fib_nht if not NULL */
 int nas_rt_find_next_best_dr_for_nht(t_fib_nht *p_fib_nht, int vrf_id, t_fib_ip_addr *dest_addr, uint8_t prefix_len,
@@ -302,13 +314,7 @@ int nas_rt_find_next_best_dr_for_nht(t_fib_nht *p_fib_nht, int vrf_id, t_fib_ip_
 
     *is_next_best_rt_found = false;
     memset (&mask, 0, sizeof (t_fib_ip_addr));
-    if (FIB_IS_AFINDEX_VALID(dest_addr->af_index)) {
-        std_ip_get_mask_from_prefix_len (dest_addr->af_index, prefix_len, &mask);
-        /* @@TODO the above function is not giving the mask for IPv4 in the correct order, fix it */
-        if (STD_IP_IS_AFINDEX_V4 (dest_addr->af_index)) {
-            mask.u.v4_addr = htonl(mask.u.v4_addr);
-        }
-    } else {
+    if (nas_rt_get_mask (dest_addr->af_index, prefix_len, &mask) == false) {
         HAL_RT_LOG_DEBUG("HAL-RT-NHT", "Not a valid address family %d",
                          dest_addr->af_index);
         return STD_ERR_OK;
@@ -446,6 +452,105 @@ int fib_handle_nh_dep_dr_for_nht (t_fib_nh *p_nh, bool is_add)
     return STD_ERR_OK;
 }
 
+/* NH handle flush cases
+1) is_add = true change of best_match (one route to another)
+   NHT current route (old) to NH handle reference to be cleaned
+   - given that current NH handle is NOT being used by any other NHT.
+
+2) is_add = false, next best_match change could be present.
+   NH handle reference to be cleaned
+    - given that NH handle of the deleted route, NOT referenced by any NHT
+3) is_add = false, no best_match present.
+   NH handle reference to be cleaned
+    - given that NH handle of the deleted route, NOT referenced by any NHT
+
+4) is_add = true Same best_match change of NH handle (one ECMP to other ECMP or ECMP to non-ECMP or non-ECMP to ECMP)
+   i) best match route is deleted
+      NHT current route (old) to NH handle reference to be cleaned
+      - given that current NH handle is NOT being used by any other NHT.
+   ii) new bext match route is added
+      NHT current route (old) to NH handle reference to be cleaned
+      - given that current NH handle is NOT being used by any other NHT.
+   iii) same route, but NH handle is changing (one ECMP to other/ECMP to non-ECMP/non-ECMP to ECMP)
+       This route's old NH handle reference to be cleaned
+      - given that old NH handle is NOT being used by any other NHT.
+*/
+static int nas_rt_check_nht_and_flush_acls(t_fib_ip_addr *dest_addr, t_fib_ip_addr *mask,
+                                           uint8_t prefix_len, t_fib_dr *p_dr, t_fib_nh *p_nh,
+                                           bool is_force_flush) {
+    t_fib_nht *p_fib_nht = NULL;
+    hal_vrf_id_t vrf_id = 0;
+    uint8_t af_index = 0;
+
+    next_hop_id_t next_hop_id = 0;
+    if (p_nh) {
+        vrf_id = p_nh->vrf_id;
+        af_index = p_nh->key.ip_addr.af_index;
+        next_hop_id = p_nh->next_hop_id;
+    } else if (p_dr) {
+        vrf_id = p_dr->vrf_id;
+        af_index = p_dr->key.prefix.af_index;
+        if (p_dr->old_nh_handle_nht) {
+            next_hop_id = p_dr->old_nh_handle_nht;
+        } else {
+            next_hop_id = p_dr->nh_handle;
+        }
+    } else {
+        return true;
+    }
+    HAL_RT_LOG_INFO("RT-NHT-ACL", "Dependent ACLs cleanup for Addr:%s/%d,"
+                    "nh:%p dr:%p nh_id:%d dr handle old:%d new:%d force_del:%d",
+                    FIB_IP_ADDR_TO_STR (dest_addr), prefix_len,
+                    p_nh, p_dr, next_hop_id, (p_dr ? p_dr->old_nh_handle_nht : 0),
+                    (p_dr ? p_dr->nh_handle : 0), is_force_flush);
+    if (next_hop_id == 0) {
+        return true;
+    }
+
+    t_fib_dr *p_temp_dr = NULL;
+    p_fib_nht = fib_get_first_nht(vrf_id, af_index);
+    while(p_fib_nht) {
+        HAL_RT_LOG_INFO("HAL-RT-NHT", "NHT:%s NH/Route Match addr:%s/%d dest:%s/%d force-del:%d",
+                        FIB_IP_ADDR_TO_STR(&p_fib_nht->key.dest_addr),
+                        FIB_IP_ADDR_TO_STR(&p_fib_nht->fib_match_dest_addr),
+                        p_fib_nht->prefix_len,
+                        FIB_IP_ADDR_TO_STR(dest_addr), prefix_len, is_force_flush);
+
+        if (FIB_IS_AFINDEX_VALID (p_fib_nht->fib_match_dest_addr.af_index)) {
+            /* Force ACL clean-up case, ignore the NHTs using the same route/NH */
+            if (is_force_flush && (memcmp(&p_fib_nht->fib_match_dest_addr,
+                                          dest_addr, sizeof(t_fib_ip_addr)) == 0)  &&
+                (p_fib_nht->prefix_len == prefix_len)) {
+                p_fib_nht = fib_get_next_nht(vrf_id, &p_fib_nht->key.dest_addr);
+                continue;
+            }
+            p_temp_dr = fib_get_dr (vrf_id, &p_fib_nht->fib_match_dest_addr,
+                                    p_fib_nht->prefix_len);
+            HAL_RT_LOG_INFO("HAL-RT-NHT", "NHT:%s NH/Route Match addr:%s/%d "
+                            "dest-chg:%s/%d nh-id:%d rt-nh-id:%d",
+                            FIB_IP_ADDR_TO_STR(&p_fib_nht->key.dest_addr),
+                            FIB_IP_ADDR_TO_STR(&p_fib_nht->fib_match_dest_addr),
+                            p_fib_nht->prefix_len,
+                            FIB_IP_ADDR_TO_STR(dest_addr), prefix_len, next_hop_id,
+                            (p_temp_dr ? p_temp_dr->nh_handle : 0));
+            if (p_temp_dr && (p_temp_dr->nh_handle == next_hop_id)) {
+                return true;
+            }
+        }
+        p_fib_nht = fib_get_next_nht(vrf_id, &p_fib_nht->key.dest_addr);
+    }
+
+    if (nas_route_flush_acls(&next_hop_id) != STD_ERR_OK) {
+        HAL_RT_LOG_ERR("RT-NHT-ACL", "Dependent ACLs cleanup failed for Addr:%s/%d,"
+                       "nh_id:%d ", FIB_IP_ADDR_TO_STR (dest_addr), prefix_len,
+                       next_hop_id);
+        return false;
+    }
+    HAL_RT_LOG_INFO("RT-NHT-ACL", "Dependent ACLs cleanup successful for Addr:%s/%d,"
+                    "nh_id:%d ", FIB_IP_ADDR_TO_STR (dest_addr), prefix_len,
+                    next_hop_id);
+    return true;
+}
 
 int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
 
@@ -483,6 +588,9 @@ int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
             if (hal_fib_next_hop_add(p_nh) != DN_HAL_ROUTE_E_NONE) {
                 HAL_RT_LOG_ERR("HAL-RT-NHT", "NextHop Add %s/%d NH-handle:%d del failed!",
                                FIB_IP_ADDR_TO_STR(&p_nh->key.ip_addr), prefix_len, p_nh->next_hop_id);
+            } else {
+                /* increment the RIF for the first time update */
+                hal_rt_rif_ref_inc(p_nh->key.if_index);
             }
         }
 
@@ -497,10 +605,9 @@ int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
         if (p_dr->nh_handle == 0) {
             t_fib_nh_holder nh_holder;
             p_fh = FIB_GET_FIRST_NH_FROM_DR(p_dr, nh_holder);
-            /* No valid Opaque data, return */
-            if ((p_fh == NULL) || (!FIB_IS_NH_ZERO(p_fh)))
-                return STD_ERR_OK;
-            is_conn_route = true;
+            /* Mark the connected route flag true only if the NH is zero. */
+            if (p_fh && (FIB_IS_NH_ZERO(p_fh)))
+                is_conn_route = true;
         }
 
         if (p_dr->prefix_len == FIB_AFINDEX_TO_PREFIX_LEN (p_dr->key.prefix.af_index)) {
@@ -525,11 +632,7 @@ int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
 
     do {
         memset (&mask, 0, sizeof (t_fib_ip_addr));
-        std_ip_get_mask_from_prefix_len (dest_addr.af_index, prefix_len, &mask);
-        /* @@TODO the above function is not giving the mask for IPv4 in the correct order, fix it */
-        if (STD_IP_IS_AFINDEX_V4 (dest_addr.af_index)) {
-            mask.u.v4_addr = htonl(mask.u.v4_addr);
-        }
+        nas_rt_get_mask (dest_addr.af_index, prefix_len, &mask);
         HAL_RT_LOG_DEBUG("HAL-RT-NHT", "dest_addr:%s/%d Mask:%s ",
                      FIB_IP_ADDR_TO_STR(&dest_addr), prefix_len, FIB_IP_ADDR_TO_STR(&mask));
 
@@ -550,13 +653,40 @@ int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
                 } else if ((!(FIB_IS_AFINDEX_VALID (p_fib_nht->fib_match_dest_addr.af_index)) &&
                             (STD_IP_IS_ADDR_ZERO(&p_fib_nht->fib_match_dest_addr))) ||
                            /* Publish the NHT, even if the dest_addr is exact match with fib_match_dest_addr,
-                            * because incase of multipath, we expect to receive the dest_change with different handle (multiple NHs) */
+                            * because incase of multipath, we expect to receive the dest_change
+                            * with different handle (multiple NHs) */
                            ((memcmp(&p_fib_nht->fib_match_dest_addr, &dest_addr, sizeof(dest_addr)) <= 0) &&
                             (p_fib_nht->prefix_len <= prefix_len))) {
                     /* Best match is found, publish the information */
+                    /* Check if the dest addr is being used for some other NHT,
+                     * if none of the NHTs use this NH/DR, clean up the associated ACLs */
+                    t_fib_dr *p_old_dr = NULL;
+                    if ((FIB_IS_AFINDEX_VALID (p_fib_nht->fib_match_dest_addr.af_index)) &&
+                        (memcmp(&p_fib_nht->fib_match_dest_addr, &dest_addr, sizeof(dest_addr)) < 0)  &&
+                        (p_fib_nht->prefix_len < prefix_len)) {
+
+                        p_old_dr = fib_get_dr (vrf_id, &p_fib_nht->fib_match_dest_addr,
+                                               p_fib_nht->prefix_len);
+                    }
                     memcpy(&p_fib_nht->fib_match_dest_addr, &dest_addr, sizeof(dest_addr));
                     p_fib_nht->prefix_len = prefix_len;
-                    nas_rt_publish_nht(p_fib_nht, p_dr, p_nh, is_add);
+                    if (p_old_dr) {
+                        /* Better match found, flush the ACLs associated with
+                         * current route handle (p_old_dr) if no other routes are using the same handle. */
+                        t_fib_ip_addr dr_mask;
+                        memset (&dr_mask, 0, sizeof (t_fib_ip_addr));
+                        nas_rt_get_mask (p_old_dr->key.prefix.af_index, p_old_dr->prefix_len, &dr_mask);
+                        nas_rt_check_nht_and_flush_acls(&p_old_dr->key.prefix, &dr_mask,
+                                                        p_old_dr->prefix_len, p_old_dr, NULL, false);
+                    } else if (p_dr && (p_dr->old_nh_handle_nht) &&
+                               (FIB_IS_AFINDEX_VALID (p_fib_nht->fib_match_dest_addr.af_index)) &&
+                               (memcmp(&p_fib_nht->fib_match_dest_addr, &dest_addr, sizeof(dest_addr)) == 0) &&
+                               (p_fib_nht->prefix_len == prefix_len)) {
+                        /* Route is changing from ECMP to Non-ECMP or ECMP to ECMP (with different nh handle) or
+                         * non-ECMP to ECMP cases, flush the current handle if no other NHTs are using it */
+                        nas_rt_check_nht_and_flush_acls(&dest_addr, &mask, prefix_len, p_dr, p_nh, false);
+                    }
+                    nas_rt_publish_nht(p_fib_nht, p_dr, p_nh, true);
                 }
             } else if (is_conn_route) {
                 p_fh = fib_get_next_nh(p_fib_nht->vrf_id, &p_fib_nht->key.dest_addr, 0);
@@ -588,6 +718,7 @@ int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
             break;
         }
 
+        nas_rt_check_nht_and_flush_acls(&dest_addr, &mask, prefix_len, p_dr, p_nh, true);
         nas_rt_find_next_best_dr_for_nht(NULL, vrf_id, &dest_addr, prefix_len, &is_next_best_rt_found);
         if (is_next_best_rt_found)
             break;
@@ -618,7 +749,9 @@ int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
      * updating the host will update the egress object and routes too */
     if (p_nh) {
         fib_handle_nh_dep_dr_for_nht(p_nh, is_add);
-        if ((is_add == false) && (p_nh->next_hop_id) && (p_nh->dr_ref_count == 0)) {
+
+        if ((is_add == false) && (p_nh->next_hop_id) &&
+            (FIB_IS_NH_REF_COUNT_ZERO (p_nh))) {
             if (hal_fib_next_hop_del(p_nh) == DN_HAL_ROUTE_E_FAIL) {
                 HAL_RT_LOG_ERR("HAL-RT-NHT", "NextHop Del %s/%d NH-handle:%d del failed!",
                                FIB_IP_ADDR_TO_STR(&dest_addr), prefix_len, p_nh->next_hop_id);
@@ -632,6 +765,7 @@ int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
 int nas_rt_handle_nht (t_fib_nht *p_nht_info, bool is_add) {
 
     t_fib_nh *p_nh = NULL;
+    t_fib_dr *p_dr = NULL;
     t_fib_nht *p_nht = NULL;
     bool is_best_rt_found = false;
 
@@ -649,7 +783,6 @@ int nas_rt_handle_nht (t_fib_nht *p_nht_info, bool is_add) {
                 /* If no more clients interested for this NHT, delete NHT */
                 FIB_DECR_CNTRS_NHT_ENTRIES (p_nht->vrf_id, p_nht->key.dest_addr.af_index);
                 /* Publish the NHT delete upon last app. NHT config delete */
-                nas_rt_publish_nht(p_nht, NULL, NULL, is_add);
 
                 p_nh = fib_get_next_nh(p_nht_info->vrf_id, &p_nht_info->key.dest_addr, 0);
                 if (p_nh && (memcmp(&p_nh->key.ip_addr, &p_nht->key.dest_addr,
@@ -660,7 +793,23 @@ int nas_rt_handle_nht (t_fib_nht *p_nht_info, bool is_add) {
                                      ((p_nh->p_arp_info) ? p_nh->p_arp_info->state : 0), p_nh->next_hop_id);
 
                     fib_proc_nh_delete (p_nh, FIB_NH_OWNER_TYPE_CLIENT, 0);
+                } else if (FIB_IS_AFINDEX_VALID(p_nht->fib_match_dest_addr.af_index)) {
+                    p_dr = fib_get_dr (p_nht->vrf_id, &p_nht->fib_match_dest_addr,
+                                       p_nht->prefix_len);
                 }
+                t_fib_ip_addr fib_match_dest_addr, mask;
+                uint8_t prefix_len;
+
+                memcpy(&fib_match_dest_addr, &p_nht->fib_match_dest_addr, sizeof(t_fib_ip_addr));
+                prefix_len = p_nht->prefix_len;
+                memset(&p_nht->fib_match_dest_addr, 0, sizeof(t_fib_ip_addr));
+                p_nht->prefix_len = 0;
+                memset (&mask, 0, sizeof (t_fib_ip_addr));
+                if (nas_rt_get_mask (fib_match_dest_addr.af_index, prefix_len, &mask)) {
+                    nas_rt_check_nht_and_flush_acls(&fib_match_dest_addr,
+                                                    &mask, prefix_len, p_dr, p_nh, false);
+                }
+                nas_rt_publish_nht(p_nht, NULL, NULL, is_add);
                 if (fib_del_nht(p_nht) != STD_ERR_OK) {
                     HAL_RT_LOG_ERR("HAL-RT-NHT",
                                    "vrf_id: %d, dest_addr: %s del failed!",
@@ -750,6 +899,8 @@ int nas_rt_handle_nht (t_fib_nht *p_nht_info, bool is_add) {
                                ((p_nh->p_arp_info->state == FIB_ARP_RESOLVED) ? "Yes" : "No"), p_nh->next_hop_id);
                 return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
             }
+            /* increment the RIF for the first time update */
+            hal_rt_rif_ref_inc(p_nh->key.if_index);
         }
         /* NH should always be matched for exact address.
          * check if returned NH address is same as NHT dest address

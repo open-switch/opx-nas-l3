@@ -33,50 +33,6 @@
 #include "hal_rt_route.h"
 #include <stdint.h>
 
-#define BASE_ROUTE_NEXT_HOP_MAX_COUNT   64
-#define BASE_ROUTE_NEXT_HOP_DEF_WEIGHT (1)
-
-typedef struct  {
-    unsigned short                  af;
-    unsigned short                  distance;
-    unsigned short                  protocol;
-    unsigned long                   vrfid;
-    hal_ip_addr_t                   prefix;
-    unsigned short                  prefix_masklen;
-    hal_ifindex_t                   nh_if_index;
-    unsigned long                   nh_vrfid;
-    hal_ip_addr_t                   nh_addr;
-    BASE_ROUTE_RT_OWNER_t           owner;
-    BASE_ROUTE_NH_TYPE_t            nh_type;
-
-    /* WECMP nh_list*/
-    struct {
-        hal_ifindex_t   nh_if_index;
-        hal_ip_addr_t   nh_addr;
-        uint32_t        nh_weight;
-        uint32_t        nh_id;
-    } nh_list[BASE_ROUTE_NEXT_HOP_MAX_COUNT];
-
-    size_t              nh_count;
-    uint32_t            group_id;
-
-} nas_rt_entry_t;
-
-typedef struct  {
-    unsigned short              af;
-    db_nbr_event_type_t         msg_type;
-    hal_ip_addr_t               nbr_addr;
-    hal_mac_addr_t              nbr_hwaddr;
-    unsigned long               vrfid;
-    hal_ifindex_t               if_index;
-    hal_ifindex_t               mbr_if_index; /* VLAN member port - physical/LAG */
-    BASE_ROUTE_RT_OWNER_t       owner;
-    BASE_ROUTE_RT_TYPE_t           type;
-    unsigned long               flags;
-    unsigned long               state;
-    unsigned long               expire;
-}  nas_rt_nbr_entry_t;
-
 typedef struct  {
     unsigned short              af;
     unsigned long               vrfid;
@@ -184,4 +140,9 @@ cps_api_object_t nas_route_nh_to_nbr_cps_object(t_fib_nh *entry, cps_api_operati
 bool nas_route_fdb_add_cps_msg (t_fib_nh *p_nh);
 
 bool nas_route_is_rsvd_intf(hal_ifindex_t nh_if_index);
+cps_api_return_code_t nas_route_process_cps_ip_unreachables_msg(cps_api_transaction_params_t * param, size_t ix);
+cps_api_return_code_t nas_route_get_all_ip_unreach_info(cps_api_object_list_t list, uint32_t af, char *if_name,
+                                              bool is_specific_get);
+cps_api_return_code_t nas_route_os_ip_unreachable_config(uint32_t af, char *if_name, bool is_del, bool is_enable);
+cps_api_return_code_t nas_route_flush_acls(next_hop_id_t *next_hop_id);
 #endif /* NAS_RT_API_H */

@@ -43,10 +43,9 @@
 static inline uint32_t hal_rt_type_to_packet_action (t_rt_type rt_type)
 {
     /* return packet action according to the route type */
-    return ((rt_type == RT_BLACKHOLE) ? NDI_ROUTE_PACKET_ACTION_DROP:
-            (rt_type == RT_UNREACHABLE) ? NDI_ROUTE_PACKET_ACTION_TRAPCPU:
-            (rt_type == RT_PROHIBIT) ? NDI_ROUTE_PACKET_ACTION_TRAPCPU:
-             NDI_ROUTE_PACKET_ACTION_TRAPCPU);
+    return ((rt_type == RT_BLACKHOLE) ? NDI_ROUTE_PACKET_ACTION_DROP :
+            /* RT_UNREACHABLE, RT_PROHIBIT and other cases, TRAP to CPU */
+            NDI_ROUTE_PACKET_ACTION_TRAPCPU);
 }
 dn_hal_route_err hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr) {
     t_fib_nh *p_fh;
@@ -203,7 +202,11 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
     t_std_error rc;
     bool error_occured = false;
     bool rif_update = false;
+    bool is_link_local_addr = false, is_nht_notif_done = false;
     hal_ifindex_t  if_index = 0;
+
+    if (STD_IP_IS_ADDR_LINK_LOCAL(&p_dr->key.prefix))
+        is_link_local_addr = true;
 
     if (p_dr_fh != NULL) {
         p_fh = FIB_GET_FH_FROM_DRFH(p_dr_fh);
@@ -235,15 +238,19 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                                  "nh_handle is NULL. Creating..!!" "if_index %d Vrf_id: %d.",
                                  p_fh->key.if_index, vrf_id);
                 //@Todo, Handle multi-npu case
-                if (hal_rif_index_get_or_create(npu_id, vrf_id, p_fh->key.if_index,
-                                                &rif_id) != STD_ERR_OK) {
+                /* For link local address on interface,
+                 * rif would be created before this function.
+                 * So no need to create again.
+                 */
+                if (!is_link_local_addr &&
+                    (hal_rif_index_get_or_create(npu_id, vrf_id, p_fh->key.if_index,
+                                                &rif_id) != STD_ERR_OK)) {
                     HAL_RT_LOG_ERR("HAL-RT-NDI", "RIF creation failed. VRF %d."
                                    " Prefix: %s/%d: if-index:%d",
                                    vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                                    p_dr->prefix_len, p_fh->key.if_index);
                     return DN_HAL_ROUTE_E_FAIL;
                 }
-
                 HAL_RT_LOG_DEBUG("HAL-RT-NDI",
                         "RIF ID %d!" "Vrf_id: %d.", rif_id, vrf_id);
 
@@ -266,7 +273,9 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                         nas_rt_handle_dest_change(NULL, p_fh, true);
                     }
                 }
-                rif_update = true;
+                /* update rif only if its not link local address */
+                if (!is_link_local_addr)
+                    rif_update = true;
                 if_index = p_fh->key.if_index;
             }
         }
@@ -305,8 +314,13 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                 HAL_RT_LOG_DEBUG("HAL-RT-NDI", "Null NH!");
                 return DN_HAL_ROUTE_E_FAIL;
             }
-            if (hal_rif_index_get_or_create(npu_id, vrf_id, p_nh->key.if_index,
-                                            &rif_id) != STD_ERR_OK) {
+            /* For link local address on interface,
+             * rif would be created before this function.
+             * So no need to create again.
+             */
+            if (!is_link_local_addr &&
+                (hal_rif_index_get_or_create(npu_id, vrf_id, p_nh->key.if_index,
+                                            &rif_id) != STD_ERR_OK)) {
                 HAL_RT_LOG_ERR("HAL-RT-NDI", "RIF creation failed VRF %d."
                                " Prefix: %s/%d: if-index:%d",
                                vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
@@ -333,7 +347,9 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                          * before this route add, so notify dest change to NHT now */
                         nas_rt_handle_dest_change(NULL, p_nh, true);
                     }
-                    rif_update = true;
+                    /* update rif only if its not link local address */
+                    if (!is_link_local_addr)
+                        rif_update = true;
                 } else {
                     HAL_RT_LOG_DEBUG("HAL-RT-NDI",
                                  "nh handle already exists %d..!!" "Vrf_id: %d.",
@@ -344,7 +360,9 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
             } else {
                 HAL_RT_LOG_DEBUG("HAL-RT-NDI",
                                  "NH IP Zero, Vrf_id: %d.", vrf_id);
-                rif_update = true;
+                /* update rif only if its not link local address */
+                if (!is_link_local_addr)
+                    rif_update = true;
                 route_entry.action = NDI_ROUTE_PACKET_ACTION_TRAPCPU;
             }
             if_index = p_nh->key.if_index;
@@ -358,7 +376,9 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                 }
             } else if (FIB_IS_NH_ZERO(p_fh)) {
                 route_entry.action = NDI_ROUTE_PACKET_ACTION_TRAPCPU;
-                rif_update = true;
+                /* update rif only if its not link local address */
+                if (!is_link_local_addr)
+                    rif_update = true;
                 if_index = p_fh->key.if_index;
             } else {
                 route_entry.action = NDI_ROUTE_PACKET_ACTION_FORWARD;
@@ -452,6 +472,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
             }
 
             p_dr->nh_handle = nh_handle;
+
             if(rif_update)
                 hal_rt_rif_ref_inc(if_index);
         } else {
@@ -476,7 +497,16 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                             vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                             p_dr->prefix_len, p_dr->num_fh, old_nh_handle, nh_handle,
                             npu_id);
-
+            p_dr->old_nh_handle_nht = old_nh_handle;
+            if ((is_nht_notif_done == false) &&
+                (((p_fh && (p_fh->p_arp_info) && (p_fh->p_arp_info->state == FIB_ARP_RESOLVED)) ||
+                  (p_nh && (p_nh->p_arp_info) && p_nh->p_arp_info->state == FIB_ARP_RESOLVED)) ||
+                 (route_entry.action == NDI_ROUTE_PACKET_ACTION_TRAPCPU))) {
+                /* Notify the route add only if the NH is resolved */
+                nas_rt_handle_dest_change(p_dr, NULL, true);
+                is_nht_notif_done = true;
+            }
+            p_dr->old_nh_handle_nht = 0;
             /*
              * Update the route by removing the ECMP group as it is now a non-ECMP route
              */
@@ -500,9 +530,10 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
     if (error_occured == true) {
         hal_fib_route_del(vrf_id, p_dr);
         return DN_HAL_ROUTE_E_FAIL;
-    } else if (((p_fh && (p_fh->p_arp_info) && (p_fh->p_arp_info->state == FIB_ARP_RESOLVED)) ||
-                (p_nh && (p_nh->p_arp_info) && p_nh->p_arp_info->state == FIB_ARP_RESOLVED)) ||
-               (route_entry.action == NDI_ROUTE_PACKET_ACTION_TRAPCPU)) {
+    } else if ((is_nht_notif_done == false) &&
+               (((p_fh && (p_fh->p_arp_info) && (p_fh->p_arp_info->state == FIB_ARP_RESOLVED)) ||
+                 (p_nh && (p_nh->p_arp_info) && p_nh->p_arp_info->state == FIB_ARP_RESOLVED)) ||
+                (route_entry.action == NDI_ROUTE_PACKET_ACTION_TRAPCPU))) {
         /* Notify the route add only if the NH is resolved */
         nas_rt_handle_dest_change(p_dr, NULL, true);
     }

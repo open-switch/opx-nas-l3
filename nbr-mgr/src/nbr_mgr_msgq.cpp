@@ -114,19 +114,33 @@ bool nbr_mgr_enqueue_burst_resolve_msg(nbr_mgr_msg_uptr_t msg)
     return (p_msgq_burst_rslv_hdl->enqueue(std::move(msg)));
 }
 
-bool nbr_mgr_process_burst_resolve_msg(burst_resolvefunc callbk_func) {
-    return (nbr_mgr_dequeue_and_handle_burst_resolve_msg(p_msgq_burst_rslv_hdl, callbk_func));
+bool nbr_mgr_enqueue_delay_resolve_msg(nbr_mgr_msg_uptr_t msg)
+{
+    return (p_msgq_delay_rslv_hdl->enqueue(std::move(msg)));
 }
 
-bool nbr_mgr_dequeue_and_handle_burst_resolve_msg(nbr_mgr_msgq_t *hdl, burst_resolvefunc callbk_func)
+bool nbr_mgr_process_burst_resolve_msg(burst_resolvefunc callbk_func) {
+    static uint32_t resolve_cnt = 0;
+    return (nbr_mgr_dequeue_and_handle_burst_resolve_msg(p_msgq_burst_rslv_hdl, callbk_func,
+                                                         NBR_MGR_BURST_RESOLVE_DELAY, &resolve_cnt));
+}
+
+bool nbr_mgr_process_delay_resolve_msg(burst_resolvefunc callbk_func) {
+    static uint32_t delay_resolve_cnt = 0;
+    return (nbr_mgr_dequeue_and_handle_burst_resolve_msg(p_msgq_delay_rslv_hdl, callbk_func,
+                                                         NBR_MGR_DELAY_BURST_RESOLVE_DELAY, &delay_resolve_cnt));
+}
+
+bool nbr_mgr_dequeue_and_handle_burst_resolve_msg(nbr_mgr_msgq_t *hdl, burst_resolvefunc callbk_func,
+                                                  uint32_t burst_delay, uint32_t *resolve_cnt)
 {
-    static int resolve_cnt = 0;
     nbr_mgr_msg_uptr_t uptr;
     {
         std::unique_lock<std::mutex> l {hdl->m_mtx};
         /* If the message queue is empty, wait */
         if (hdl->m_msgq.empty()) {
-            resolve_cnt = 0;
+            if (burst_delay == NBR_MGR_BURST_RESOLVE_DELAY)
+                *resolve_cnt = 0;
             hdl->m_data.wait (l, [&] {return !hdl->m_msgq.empty();});
         }
         /* Move the message ownership from msgq*/
@@ -136,30 +150,20 @@ bool nbr_mgr_dequeue_and_handle_burst_resolve_msg(nbr_mgr_msgq_t *hdl, burst_res
     if (uptr)
     {
         callbk_func(uptr.get());
-        resolve_cnt++;
+        (*resolve_cnt)++;
     }
 
-    if (resolve_cnt > NBR_MGR_BURST_RESOLVE_CNT) {
-        /* Once the max. threshold count reached, wait for 1 sec.
+    if (*resolve_cnt > NBR_MGR_BURST_RESOLVE_CNT) {
+        /* Once the max. threshold count reached, wait for few sec(s).
          * to avoid the kernel load with lot of nbr resolve/refresh messages,
          * also NPU CPU-Q Rx rate is 400 PPS for ARP reply, if we send more than
          * 400 ARP requests per second, we will get more than 400 ARP replies
          * from the peer but only 400 ARP replies will be lifted to CPU,
          * so, we will end up re-transmitting the ARP requests for the missed ARP replies */
-        sleep(1);
-        resolve_cnt = 0;
+        sleep(burst_delay);
+        *resolve_cnt = 0;
     }
     return true;
-}
-
-bool nbr_mgr_enqueue_delay_resolve_msg(nbr_mgr_msg_uptr_t msg)
-{
-    return (p_msgq_delay_rslv_hdl->enqueue(std::move(msg)));
-}
-
-nbr_mgr_msg_uptr_t nbr_mgr_dequeue_delay_resolve_msg ()
-{
-    return (p_msgq_delay_rslv_hdl->dequeue());
 }
 
 

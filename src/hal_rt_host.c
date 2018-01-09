@@ -137,6 +137,7 @@ dn_hal_route_err hal_fib_next_hop_del(t_fib_nh *p_nh)
             }
             if(!hal_rt_rif_ref_dec(p_nh->key.if_index))
                 hal_rif_index_remove(0, p_nh->vrf_id, p_nh->key.if_index);
+            p_nh->next_hop_id = 0;
         }
     }
 
@@ -160,7 +161,7 @@ dn_hal_route_err hal_fib_host_del (uint32_t vrf_id, t_fib_nh *p_fh)
         return (rc);
     }
 
-    rc = _hal_fib_host_del (vrf_id, p_fh, false);
+    rc = _hal_fib_host_del (vrf_id, p_fh);
     return rc;
 }
 
@@ -225,7 +226,6 @@ dn_hal_route_err _hal_fib_host_add (uint32_t vrf_id, t_fib_nh *p_fh)
     ndi_neighbor_t nbr_entry;
     char           p_buf[HAL_RT_MAX_BUFSZ];
     ndi_route_action       action = NDI_ROUTE_PACKET_ACTION_FORWARD;
-    cps_api_operation_types_t op = cps_api_oper_CREATE;
 
     if (p_fh->p_arp_info != NULL) {
         HAL_RT_LOG_INFO("HAL-RT-NDI", "NPU host add - nbr: %s p_arp_info - vlan_id: %d, mac_addr: %s, "
@@ -239,7 +239,7 @@ dn_hal_route_err _hal_fib_host_add (uint32_t vrf_id, t_fib_nh *p_fh)
                 action = NDI_ROUTE_PACKET_ACTION_DROP;
             } else {
                 /* There is no ARP resolve triggered by kernel yet, delete the NH created */
-                _hal_fib_host_del (vrf_id, p_fh, error_occured);
+                _hal_fib_host_del (vrf_id, p_fh);
                 return DN_HAL_ROUTE_E_NONE;
             }
         }
@@ -321,60 +321,16 @@ dn_hal_route_err _hal_fib_host_add (uint32_t vrf_id, t_fib_nh *p_fh)
                                ((action == NDI_ROUTE_PACKET_ACTION_FORWARD) ? "Forward" :
                                 ((action == NDI_ROUTE_PACKET_ACTION_DROP) ? "Drop" : "TrapToCPU")));
             }
-            op = cps_api_oper_SET;
         }
         if (error_occured == true) {
-            /* Program the MAC entry and then re-try the host add */
-            bool is_mac_prg_done = false;
-            if (action == NDI_ROUTE_PACKET_ACTION_FORWARD) {
-                is_mac_prg_done = nas_route_fdb_add_cps_msg(p_fh);
-                if (is_mac_prg_done == false) {
-                    HAL_RT_LOG_ERR("HAL-RT-NDI", "FDB add failed for "
-                                   "Host: %s mac_addr: %s, state: %d, port: %d "
-                                   "status:0x%x NPU status:%d unit:%d rif:%d action: %s"
-                                   " replaced successfully",
-                                   FIB_IP_ADDR_TO_STR(&(p_fh->key.ip_addr)),
-                                   hal_rt_mac_to_str (&p_fh->p_arp_info->mac_addr, p_buf, HAL_RT_MAX_BUFSZ),
-                                   p_fh->p_arp_info->state, p_fh->p_arp_info->if_index, p_fh->p_arp_info->arp_status,
-                                   p_fh->a_is_written [unit], unit, nbr_entry.rif_id,
-                                   ((action == NDI_ROUTE_PACKET_ACTION_FORWARD) ? "Forward" :
-                                    ((action == NDI_ROUTE_PACKET_ACTION_DROP) ? "Drop" : "TrapToCPU")));
-                }
-            }
+            HAL_RT_LOG_ERR("HAL-RT-NDI", "Failed to add : host: %s mac_addr: %s, state: %d, port: %d "
+                           "status:0x%x NPU status:%d action: %d Err %d", FIB_IP_ADDR_TO_STR(&(p_fh->key.ip_addr)),
+                           hal_rt_mac_to_str (&p_fh->p_arp_info->mac_addr, p_buf, HAL_RT_MAX_BUFSZ),
+                           p_fh->p_arp_info->state, p_fh->p_arp_info->if_index, p_fh->p_arp_info->arp_status,
+                           p_fh->a_is_written [unit], action, rc);
 
-            if (is_mac_prg_done) {
-                rc = ndi_route_neighbor_add(&nbr_entry);
-                if (rc == STD_ERR_OK) {
-                    bool is_npu_written_now = false;
-                    if(!p_fh->a_is_written [unit]) {
-                        is_npu_written_now = true;
-                        p_fh->a_is_written [unit] = true;
-                        hal_rt_rif_ref_inc(p_fh->key.if_index);
-                    }
-
-                    HAL_RT_LOG_INFO("HAL-RT-NDI", "Programmed 2nd time after FDB add,"
-                                   "Host: %s mac_addr: %s, state: %d, port: %d "
-                                   "status:0x%x NPU status:%d unit:%d rif:%d action: %s is_npu_written_now:%d"
-                                   " replaced successfully",
-                                   FIB_IP_ADDR_TO_STR(&(p_fh->key.ip_addr)),
-                                   hal_rt_mac_to_str (&p_fh->p_arp_info->mac_addr, p_buf, HAL_RT_MAX_BUFSZ),
-                                   p_fh->p_arp_info->state, p_fh->p_arp_info->if_index, p_fh->p_arp_info->arp_status,
-                                   p_fh->a_is_written [unit], unit, nbr_entry.rif_id,
-                                   ((action == NDI_ROUTE_PACKET_ACTION_FORWARD) ? "Forward" :
-                                    ((action == NDI_ROUTE_PACKET_ACTION_DROP) ? "Drop" : "TrapToCPU")), is_npu_written_now);
-                }
-            }
-            if (rc != STD_ERR_OK) {
-                HAL_RT_LOG_ERR("HAL-RT-NDI", "Failed to add : host: %s mac_addr: %s, state: %d, port: %d "
-                               "status:0x%x NPU status:%d action: %d Err %d", FIB_IP_ADDR_TO_STR(&(p_fh->key.ip_addr)),
-                               hal_rt_mac_to_str (&p_fh->p_arp_info->mac_addr, p_buf, HAL_RT_MAX_BUFSZ),
-                               p_fh->p_arp_info->state, p_fh->p_arp_info->if_index, p_fh->p_arp_info->arp_status,
-                               p_fh->a_is_written [unit], action, rc);
-
-                /* Send error ocurred TRUE to publish the NPU program error to app */
-                _hal_fib_host_del (vrf_id, p_fh, error_occured);
-                return DN_HAL_ROUTE_E_FAIL;
-            }
+            _hal_fib_host_del (vrf_id, p_fh);
+            return DN_HAL_ROUTE_E_FAIL;
         } else {
             if (action == NDI_ROUTE_PACKET_ACTION_FORWARD) {
                 /* If the action is forward, consider this NH as resolved */
@@ -383,16 +339,12 @@ dn_hal_route_err _hal_fib_host_add (uint32_t vrf_id, t_fib_nh *p_fh)
                 nas_rt_handle_dest_change(NULL, p_fh, false);
             }
         }
-        cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_fh, op);
-        if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
-            HAL_RT_LOG_ERR("HAL-RT-DR","Failed to publish neighbor entry");
-        }
     }
 
     return DN_HAL_ROUTE_E_NONE;
 }
 
-dn_hal_route_err _hal_fib_host_del (uint32_t vrf_id, t_fib_nh *p_fh, bool error_occured)
+dn_hal_route_err _hal_fib_host_del (uint32_t vrf_id, t_fib_nh *p_fh)
 {
     npu_id_t       unit;
     t_std_error    rc = STD_ERR_OK;
@@ -412,7 +364,7 @@ dn_hal_route_err _hal_fib_host_del (uint32_t vrf_id, t_fib_nh *p_fh, bool error_
     for (unit = 0; unit < hal_rt_access_fib_config()->max_num_npu; unit++) {
         if (p_fh->a_is_written [unit] == false) {
             HAL_RT_LOG_ERR("HAL-RT-NDI", "Host entry not present in "
-                       "Unit %d, Vrf_id: %d.", unit, vrf_id);
+                           "Unit %d, Vrf_id: %d.", unit, vrf_id);
             continue;
         }
 
@@ -448,12 +400,6 @@ dn_hal_route_err _hal_fib_host_del (uint32_t vrf_id, t_fib_nh *p_fh, bool error_
                 hal_rif_index_remove(unit, vrf_id, p_fh->key.if_index);
         }
         p_fh->a_is_written [unit] = false;
-    }
-    /* If error occured is set, publish the ARP entry as op=create with npu-prg-done false */
-    cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_fh,
-                                                          (error_occured ? cps_api_oper_CREATE : cps_api_oper_DELETE));
-    if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
-        HAL_RT_LOG_ERR("HAL-RT-DR","Failed to publish neighbor entry");
     }
 
     return DN_HAL_ROUTE_E_NONE;

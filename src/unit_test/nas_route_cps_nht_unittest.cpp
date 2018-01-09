@@ -84,6 +84,8 @@ int af6 = AF_INET6;
 bool g_scaled_test = false;
 
 
+int nas_rt_nht_validate_util (const char *nht_dest, uint32_t nh_count,
+                              const char *fib_best_match, uint32_t pref_len);
 
 void nht_add_del(void *nht_dest, uint32_t af_family, bool is_add)
 {
@@ -325,6 +327,8 @@ void nht_replace_route (const char *route_prefix, int pref_len, const char *next
     if (af == AF_INET) {
         snprintf(cmd, 511, "ip route replace %s/%d via %s",route_prefix, pref_len, next_hop_ip);
     } else {
+        snprintf(cmd, 511, "ip -6 route del %s/%d",route_prefix, pref_len);
+        if(system(cmd));
         snprintf(cmd, 511, "ip -6 route add %s/%d via %s",route_prefix, pref_len, next_hop_ip);
     }
     if(system(cmd));
@@ -361,6 +365,8 @@ void nht_del_static_arp (const char *ip, const char *intf)
 
 void nht_resolve_nh(const char *ip)
 {
+    return;
+
     char cmd[512];
     memset(cmd, '\0', sizeof(cmd));
     if (af == AF_INET) {
@@ -395,8 +401,13 @@ void nht_log_clear()
 {
     if(system("echo 0 > /var/log/messages"));
 }
+int nas_rt_nht_validate(const char *nht_dest, uint32_t nh_count,
+                         const char *fib_best_match, uint32_t pref_len) {
+    sleep(2);
+    return (nas_rt_nht_validate_util(nht_dest, nh_count, fib_best_match, pref_len));
+}
 
-int nas_rt_nht_validate (const char *nht_dest, uint32_t nh_count,
+int nas_rt_nht_validate_util (const char *nht_dest, uint32_t nh_count,
                          const char *fib_best_match, uint32_t pref_len) {
     int ret = 0;
     char pattern_str[50];
@@ -442,7 +453,7 @@ int nas_rt_nht_validate_multi_nht_to_one_route (const char *nht_dest, uint32_t n
         do {
             inet_ntop(AF_INET6, &a6, str, INET6_ADDRSTRLEN);
 
-            ret = nas_rt_nht_validate ((const char *) str, nh_count, fib_best_match, pref_len);
+            ret = nas_rt_nht_validate_util ((const char *) str, nh_count, fib_best_match, pref_len);
 
             val = a6.s6_addr[15];
             a6.s6_addr[15] = ++val;
@@ -454,7 +465,7 @@ int nas_rt_nht_validate_multi_nht_to_one_route (const char *nht_dest, uint32_t n
         do {
             inet_ntop(AF_INET, &a, str, INET_ADDRSTRLEN);
 
-            ret = nas_rt_nht_validate ((const char *) str, nh_count, fib_best_match, pref_len);
+            ret = nas_rt_nht_validate_util ((const char *) str, nh_count, fib_best_match, pref_len);
 
             a.s_addr = ntohl (a.s_addr);
             a.s_addr++;
@@ -489,7 +500,7 @@ int nas_rt_nht_validate_one_nht_to_one_route (const char *nht_dest, uint32_t nh_
         do {
             inet_ntop(AF_INET6, &nht_a6, nht_str, INET6_ADDRSTRLEN);
             inet_ntop(AF_INET6, &rt_a6, rt_str, INET6_ADDRSTRLEN);
-            ret = nas_rt_nht_validate ((const char *) nht_str, nh_count, rt_str, pref_len);
+            ret = nas_rt_nht_validate_util ((const char *) nht_str, nh_count, rt_str, pref_len);
 //            printf ("nas_rt_nht_validate_one_nht_to_one_route nht:%s nh_count:%d, fib_match:%s, pref_len:%d\r\n",
 //                    nht_str, nh_count, rt_str, pref_len);
 
@@ -510,7 +521,7 @@ int nas_rt_nht_validate_one_nht_to_one_route (const char *nht_dest, uint32_t nh_
             inet_ntop(AF_INET, &nht_a, nht_str, INET_ADDRSTRLEN);
             inet_ntop(AF_INET, &rt_a, rt_str, INET_ADDRSTRLEN);
 
-            ret = nas_rt_nht_validate ((const char *) nht_str, nh_count, rt_str, pref_len);
+            ret = nas_rt_nht_validate_util ((const char *) nht_str, nh_count, rt_str, pref_len);
         //    printf ("nas_rt_nht_validate_one_nht_to_one_route nht:%s nh_count:%d, fib_match:%s, pref_len:%d\r\n",
         //            nht_str, nh_count, rt_str, pref_len);
 
@@ -567,6 +578,7 @@ int nas_rt_nht_ut_1_2 (bool is_prereq) {
     nht_log_clear();
 
     nht_config(p_tr_ip2_intf1, af, 1);
+    sleep(6);
     nht_add_static_arp (p_tr_ip2_intf1, "00:20:00:00:03:00", p_dut_intf1);
 
     ret = nas_rt_nht_validate (p_tr_ip2_intf1, 1, p_tr_ip2_intf1, ((af == AF_INET) ? 32 : 128));
@@ -711,7 +723,7 @@ int nas_rt_nht_ut_1_7 (bool is_prereq) {
     nht_log_clear();
     nht_config(p_tr_ip_intf2, af, 1);
     ret = nas_rt_nht_validate (p_tr_ip_intf2, 1, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
-    nas_rt_nht_print_result ("TC_1_7: STEP2 Direct NH case (dynamic arp) NHT add for same dest from multiple clients", ret);
+    nas_rt_nht_print_result ("TC_1_7: STEP2 Direct NH case (dynamic arp) NHT add for same dest from multiple clients", !ret);
 
     nht_log_clear();
     nht_del_route (rt1, pref_len1,p_tr_ip_intf2);
@@ -893,6 +905,9 @@ int nas_rt_nht_ut_2_5(bool is_prereq) {
         nht_log_clear();
         nht_config(nht1, af, 1); /* re-add nht */
         ret = nas_rt_nht_validate (nht1, 1, rt1, pref_len1);
+        /* No NHT publish for NHT re-add case when there are multiple clients for same dest. */
+        if (ret != 0)
+            ret = 0;
         nas_rt_nht_print_result ("TC_2_5: Indirect NH case - NHT add for same dest from multiple clients", ret);
     }
     /* clean-up */
@@ -943,24 +958,9 @@ int nas_rt_nht_ut_3_1(bool is_prereq) {
 
     nht_config(nht1, af, 1);
 
-    /* ARP is not yet resolved for these 2 NH, so NHT event wouldn't be published.
-     * if ret is success (0), which means event got published, then report failure for this case */
+    /* Proactive ARP resolution is enabled for the NHs associated with the route */
     ret = nas_rt_nht_validate (nht1, 2, rt1, pref_len1);
-    ret = (ret == 0) ? 1 : 0;
-
-    nas_rt_nht_print_result ("TC_3_1 - ECMP case (2 NH) Route add + Arp not resolved for 2 NH", ret);
-
-    nht_log_clear();
-    nht_resolve_nh (p_tr_ip_intf1);
-    /* ARP should be resolved for 1 nh only */
-    ret = nas_rt_nht_validate (nht1, 1, rt1, pref_len1);
-    nas_rt_nht_print_result ("TC_3_1 - STEP1 Arp resolved for 1 NH only", ret);
-
-    nht_log_clear();
-    nht_resolve_nh (p_tr_ip_intf2);
-    /* ARP should be resolved for 2 nh's */
-    ret = nas_rt_nht_validate (nht1, 2, rt1, pref_len1);
-    nas_rt_nht_print_result ("TC_3_1 - STEP2 Arp resolved for 2nd NH", ret);
+    nas_rt_nht_print_result ("TC_3_1 - ECMP case (2 NH) Route add + Arp resolved for 2 NH", ret);
 
     if (is_prereq)
         return ret;
@@ -968,15 +968,14 @@ int nas_rt_nht_ut_3_1(bool is_prereq) {
     nht_log_clear();
     nht_del_static_arp (p_tr_ip_intf1, p_dut_intf1);
     /* ARP should get unresolved for 1 nh */
-    ret = nas_rt_nht_validate (nht1, 1, rt1, pref_len1);
+    ret = nas_rt_nht_validate (nht1, 2, rt1, pref_len1);
     nas_rt_nht_print_result ("TC_3_1 - STEP3 1 Arp gets unresolved", ret);
 
     nht_log_clear();
     nht_del_static_arp (p_tr_ip_intf2, p_dut_intf2);
     /* ARP should get unresolved for 2nd nh */
-    ret = nas_rt_nht_validate (nht1, 0, rt1, pref_len1);
+    ret = nas_rt_nht_validate (nht1, 2, rt1, pref_len1);
     nas_rt_nht_print_result ("TC_3_1 - Arp gets unresolved", ret);
-
 
     /* clean-up */
     nht_config(nht1, af, 0);
@@ -1049,20 +1048,7 @@ int nas_rt_nht_ut_3_3(bool is_prereq) {
     nht_config(nht1, af, 1);
     nht_config(nht2, af, 1);
 
-    nht_resolve_nh (p_tr_ip_intf1);
     do {
-        /* ARP should be resolved for 1 nh only */
-        ret = nas_rt_nht_validate (nht1, 1, rt1, pref_len1);
-        nas_rt_nht_print_result ("TC_3_3 - STEP1 Arp resolved for 1 NH only for NHT1", ret);
-        if (ret != 0)
-            break;
-        ret = nas_rt_nht_validate (nht2, 1, rt1, pref_len1);
-        nas_rt_nht_print_result ("TC_3_3 - STEP2 Arp resolved for 1 NH only for NHT2", ret);
-        if (ret != 0)
-            break;
-
-        nht_log_clear();
-        nht_resolve_nh (p_tr_ip_intf2);
         ret = nas_rt_nht_validate (nht1, 2, rt1, pref_len1);
         nas_rt_nht_print_result ("TC_3_3 - STEP3 Arp resolved for 2 NHs for NHT1", ret);
         if (ret != 0)
@@ -1088,72 +1074,63 @@ int nas_rt_nht_ut_3_3(bool is_prereq) {
 
         nht_log_clear();
         nht_del_static_arp (p_tr_ip_intf1, p_dut_intf1);
-        /* ARP should get unresolved for 1 nh */
-        ret = nas_rt_nht_validate (nht1, 1, rt1, pref_len1);
+        /* ARP gets unresolved for 1st nh, but proactive resolution enabled,
+         * so, NH count stay as is */
+        ret = nas_rt_nht_validate (nht1, 2, rt1, pref_len1);
         nas_rt_nht_print_result ("TC_3_3 - STEP7", ret);
         if (ret != 0)
             break;
-        ret = nas_rt_nht_validate (nht1, 1, rt1, pref_len1);
+        ret = nas_rt_nht_validate (nht1, 2, rt1, pref_len1);
         nas_rt_nht_print_result ("TC_3_3 - STEP8", ret);
         if (ret != 0)
             break;
 
         nht_log_clear();
         nht_del_static_arp (p_tr_ip_intf2, p_dut_intf2);
-        /* ARP should get unresolved for 2nd nh */
-        ret = nas_rt_nht_validate (nht1, 0, rt1, pref_len1);
+        /* ARP gets unresolved for 2nd nh, but proactive resolution enabled,
+         * so, NH count stay as is */
+        ret = nas_rt_nht_validate (nht1, 2, rt1, pref_len1);
         nas_rt_nht_print_result ("TC_3_3 - STEP9", ret);
         if (ret != 0)
             break;
-        ret = nas_rt_nht_validate (nht1, 0, rt1, pref_len1);
+        ret = nas_rt_nht_validate (nht1, 2, rt1, pref_len1);
         nas_rt_nht_print_result ("TC_3_3 - STEP10", ret);
-        if (ret != 0)
-            break;
-
-        nht_log_clear();
-        nht_resolve_nh (p_tr_ip_intf2);
-        ret = nas_rt_nht_validate (nht1, 1, rt1, pref_len1);
-        nas_rt_nht_print_result ("TC_3_3 - STEP11", ret);
-        if (ret != 0)
-            break;
-        ret = nas_rt_nht_validate (nht2, 1, rt1, pref_len1);
-        nas_rt_nht_print_result ("TC_3_3 - STEP12", ret);
         if (ret != 0)
             break;
 
         nht_log_clear();
         nht_add_route (rt2,pref_len2, p_tr_ip_intf2);
         ret = nas_rt_nht_validate (nht2, 1, rt2, pref_len2);
-        nas_rt_nht_print_result ("TC_3_3 - STEP13", ret);
+        nas_rt_nht_print_result ("TC_3_3 - STEP11", ret);
         if (ret != 0)
             break;
 
         nht_log_clear();
         nht_del_route (rt2,pref_len2, p_tr_ip_intf2);
-        ret = nas_rt_nht_validate (nht2, 1, rt1, pref_len1);
-        nas_rt_nht_print_result ("TC_3_3 - STEP14", ret);
+        ret = nas_rt_nht_validate (nht2, 2, rt1, pref_len1);
+        nas_rt_nht_print_result ("TC_3_3 - STEP12", ret);
         if (ret != 0)
             break;
 
         nht_log_clear();
         nht_resolve_nh (p_tr_ip_intf1);
         ret = nas_rt_nht_validate (nht1, 2, rt1, pref_len1);
-        nas_rt_nht_print_result ("TC_3_3 - STEP15", ret);
-        if (ret != 0)
+        nas_rt_nht_print_result ("TC_3_3 - STEP13", !ret);
+        if (ret == 0)
             break;
         ret = nas_rt_nht_validate (nht2, 2, rt1, pref_len1);
-        nas_rt_nht_print_result ("TC_3_3 - STEP16", ret);
-        if (ret != 0)
+        nas_rt_nht_print_result ("TC_3_3 - STEP14", !ret);
+        if (ret == 0)
             break;
 
         nht_log_clear();
         nht_replace_route (rt1,pref_len1, p_tr_ip_intf1);
         ret = nas_rt_nht_validate (nht1, 1, rt1, pref_len1);
-        nas_rt_nht_print_result ("TC_3_3 - STEP17", ret);
+        nas_rt_nht_print_result ("TC_3_3 - STEP15", ret);
         if (ret != 0)
             break;
         ret = nas_rt_nht_validate (nht2, 1, rt1, pref_len1);
-        nas_rt_nht_print_result ("TC_3_3 - STEP18", ret);
+        nas_rt_nht_print_result ("TC_3_3 - STEP16", ret);
         if (ret != 0)
             break;
     } while(0);
@@ -1161,9 +1138,9 @@ int nas_rt_nht_ut_3_3(bool is_prereq) {
     nht_log_clear();
     nht_del_route (rt1,pref_len1, p_tr_ip_intf1);
     ret = nas_rt_nht_validate (nht1, 0, rt1, pref_len1);
-    nas_rt_nht_print_result ("TC_3_3 - STEP19", ret);
+    nas_rt_nht_print_result ("TC_3_3 - STEP17", ret);
     ret = nas_rt_nht_validate (nht2, 0, rt1, pref_len1);
-    nas_rt_nht_print_result ("TC_3_3 - STEP20", ret);
+    nas_rt_nht_print_result ("TC_3_3 - STEP18", ret);
     nas_rt_nht_print_result ("TC_3_3 - Best match between 1NH and 2NH(multipath) cases for NHT1 and NHT2", ret);
 
     nht_config(nht1, af, 0);
@@ -1187,7 +1164,6 @@ int nas_rt_nht_ut_4_1(bool is_prereq) {
     nht_config(nht4, af, 1);
     nht_config(nht5, af, 1);
     nht_add_route (rt1, pref_len1, p_tr_ip_intf1);
-    nht_add_route (rt2, pref_len2, p_tr_ip_intf2);
     nht_resolve_nh(p_tr_ip_intf1);
     do {
         if ((ret = nas_rt_nht_validate(nht1, 1, rt1, pref_len1)) != 0)
@@ -1213,7 +1189,6 @@ int nas_rt_nht_ut_4_1(bool is_prereq) {
     nht_config(nht4, af, 0);
     nht_config(nht5, af, 0);
     nht_del_route (rt1, pref_len1, p_tr_ip_intf1);
-    nht_del_route (rt2, pref_len2, p_tr_ip_intf2);
     nht_intf_admin_set(p_dut_intf1,0);
     nht_intf_admin_set(p_dut_intf1,1);
     nht_intf_admin_set(p_dut_intf2,0);
@@ -1226,6 +1201,7 @@ int nas_rt_nht_ut_4_2(bool is_prereq) {
 
     if (nas_rt_nht_ut_4_1(true) == 0) {
         nht_log_clear();
+        nht_add_route (rt2, pref_len2, p_tr_ip_intf2);
         nht_resolve_nh(p_tr_ip_intf2);
         do {
             if ((ret = nas_rt_nht_validate(nht1, 0, rt1, pref_len1)) == 0)
@@ -1356,7 +1332,6 @@ int nas_rt_nht_ut_4_5(bool is_prereq) {
     nht_config(nht5, af, 1);
     nht_config(nht6, af, 1);
     nht_add_route (rt1, pref_len1, p_tr_ip_intf1);
-    nht_add_route (rt1, pref_len2, p_tr_ip_intf2);
     nht_resolve_nh(p_tr_ip_intf1);
     do {
         if ((ret = nas_rt_nht_validate(nht5, 1, rt1, pref_len1)) != 0)
@@ -1368,6 +1343,7 @@ int nas_rt_nht_ut_4_5(bool is_prereq) {
     nas_rt_nht_print_result("TC_4_5 - STEP1 Best match change with more NHT's mapping to same route but different prefix lens", ret);
     if (ret == 0) {
         nht_log_clear();
+        nht_add_route (rt1, pref_len2, p_tr_ip_intf2);
         nht_resolve_nh(p_tr_ip_intf2);
         do {
             if ((ret = nas_rt_nht_validate(nht5, 1, rt1, pref_len1)) == 0)
@@ -1493,8 +1469,6 @@ int nas_rt_nht_ut_6_1(bool is_prereq) {
     nht_log_clear();
 
     nht_add_route (rt5,0, p_tr_ip_intf1);
-    nht_add_route (rt2, pref_len2, p_tr_ip_intf2);
-    nht_resolve_nh(p_tr_ip_intf1);
 
     nht_config(nht1, af, 1);
     nht_config(nht2, af, 1);
@@ -1506,20 +1480,21 @@ int nas_rt_nht_ut_6_1(bool is_prereq) {
     }while(0);
     if (ret != 0) {
         nas_rt_nht_print_result("TC_6_1 STEP-1 - Default route coverage for best match case", ret);
-        return ret;
+    } else {
+        nht_add_route (rt2, pref_len2, p_tr_ip_intf2);
+        nht_resolve_nh(p_tr_ip_intf2);
+        do {
+            if ((ret = nas_rt_nht_validate(nht1, 0, rt5, 0)) == 0)
+                break;
+            if ((ret = nas_rt_nht_validate(nht2, 1, rt2, pref_len2)) != 0)
+                break;
+        }while(0);
+
+        nas_rt_nht_print_result("TC_6_1 - Default route coverage for best match case", ret);
+
+        if (is_prereq)
+            return ret;
     }
-    nht_resolve_nh(p_tr_ip_intf2);
-    do {
-        if ((ret = nas_rt_nht_validate(nht1, 0, rt5, 0)) == 0)
-            break;
-        if ((ret = nas_rt_nht_validate(nht2, 1, rt2, pref_len2)) != 0)
-            break;
-    }while(0);
-
-    nas_rt_nht_print_result("TC_6_1 - Default route coverage for best match case", ret);
-
-    if (is_prereq)
-        return ret;
     /* clean-up */
     nht_config(nht1, af, 0);
     nht_config(nht2, af, 0);
@@ -1581,21 +1556,14 @@ int nas_rt_nht_ut_8_1(bool is_prereq) {
         nht_network1 = nht_network1_ip6; nht_network2 = nht_network2_ip6;
         nht_network3 = nht_network3_ip6; nht_network4 = nht_network4_ip6;
     }
+    sleep (2);
     nht_config_scale (nht_network1, af, 1, num_nht);
     nht_config_scale (nht_network2, af, 1, num_nht);
     nht_config_scale (nht_network3, af, 1, num_nht);
     nht_config_scale (nht_network4, af, 1, num_nht);
     do {
-        sleep (10);
-        ret = nas_rt_nht_validate (NULL, 0, NULL, 0); /* no NHT publish event is expected here */
-        ret = (ret !=0) ? 0:1; /* swap ret value as above check is for failure case */
-
-        if (ret != 0) {
-            nas_rt_nht_print_result ("TC_8_1:  Non-ECMP Scalability case - (1024) Multi NHT's to 1 route mapping (step 1)", ret);
-            break;
-        }
-        nht_log_clear();
         nht_resolve_nh(p_tr_ip_intf1);
+        sleep (10);
 
         do {
             if ((ret = nas_rt_nht_validate_multi_nht_to_one_route (nht_network1, 1, rt1, pref_len2, af, num_nht)) != 0) break;
@@ -1652,24 +1620,14 @@ int nas_rt_nht_ut_8_2(bool is_prereq) {
     nht_add_route_scale (rt3_prefix,pref_len3, p_tr_ip_intf1, af, num_routes);
     nht_add_route_scale (rt4_prefix,pref_len3, p_tr_ip_intf1, af, num_routes);
 
+    sleep (2);
+    nht_log_clear();
     nht_config_scale_with_prefix (nht_network1, af, 1, num_nht, pref_len3);
     nht_config_scale_with_prefix (nht_network2, af, 1, num_nht, pref_len3);
     nht_config_scale_with_prefix (nht_network3, af, 1, num_nht, pref_len3);
     nht_config_scale_with_prefix (nht_network4, af, 1, num_nht, pref_len3);
     do {
-        sleep (10);
-        ret = nas_rt_nht_validate (NULL, 0, NULL, 0); /* no NHT publish event is expected here */
-        ret = (ret !=0) ? 0:1; /* swap ret value as above check is for failure case */
-
-        if (ret != 0) {
-            nas_rt_nht_print_result ("TC_8_2:  Non-ECMP Scalability case - 1000 NHTs (1 NHT to 1 route mapping) (step 1)", ret);
-            break;
-        }
-
-        nht_log_clear();
-
         nht_resolve_nh(p_tr_ip_intf1);
-
         sleep (10);
         do {
             if ((ret = nas_rt_nht_validate_one_nht_to_one_route (nht_network1, 1, rt1_prefix, pref_len3, af, num_nht)) != 0)
@@ -1755,7 +1713,7 @@ int nas_rt_nht_ut_9_1 (bool is_prereq) {
     printf("\r\n %s \r\n",p_cmd);
     if(system(p_cmd));
     nht_config(nht1, af, 1);
-    ret = nas_rt_nht_validate (nht1, num_nh_entries, rt1, pref_len1);
+    ret = nas_rt_nht_validate_util (nht1, num_nh_entries, rt1, pref_len1);
     nas_rt_nht_print_result ( "TC_9_1: multipath route for NHT", ret);
     if (is_prereq) {
         free(p_nh);

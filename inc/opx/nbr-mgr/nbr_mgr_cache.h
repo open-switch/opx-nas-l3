@@ -104,6 +104,12 @@ typedef struct {
     uint32_t flush_nbr_cnt;
 }nbr_mgr_stats;
 
+typedef struct {
+    /* Auto refresh on stale state is enabled by default for both IPv4 and IPv6 neighbors */
+    uint32_t ipv4_nbr_auto_refresh_status;
+    uint32_t ipv6_nbr_auto_refresh_status;
+} nbr_mgr_auto_refresh_t;
+
 class mac_data {
 
 public:
@@ -234,15 +240,23 @@ public:
         return m_refresh_cnt;
     }
 
+    uint32_t get_refresh_for_mac_learn_retry_cnt() const {
+        return m_refresh_for_mac_learn_retry_cnt;
+    }
+    uint32_t get_prev_refresh_for_mac_learn_retry_cnt() const {
+        return m_prev_refresh_for_mac_learn_retry_cnt;
+    }
+
     bool trigger_resolve() const;
     bool trigger_refresh() const;
+    bool trigger_refresh_for_mac_learn() const;
     bool publish_entry(nbr_mgr_op_t op, const nbr_mgr_nbr_entry_t&) const;
     void populate_nbr_entry(nbr_mgr_nbr_entry_t& entry) const;
 
     void display() const;
     bool process_nbr_data(nbr_mgr_nbr_entry_t& entry);
 
-    bool handle_fdb_change(db_nbr_event_type_t, unsigned long status) const;
+    bool handle_fdb_change(nbr_mgr_evt_type_t, unsigned long status) const;
     bool handle_if_state_change(nbr_mgr_intf_entry_t&);
     bool handle_mac_change(nbr_mgr_nbr_entry_t& entry);
 
@@ -283,6 +297,10 @@ private:
     uint32_t m_refresh_cnt = 0; /* This tracks the no. of refreshes being
                                         triggered so as to trigger the refresh again
                                         when the current refresh in progress is done */
+    uint8_t m_refresh_for_mac_learn_retry_cnt = 0; /* This helps to refresh
+                                        the nbr atleast few times
+                                        to learn the MAC in the HW before give up */
+    uint8_t m_prev_refresh_for_mac_learn_retry_cnt = 0; /* This helps for the statistics */
 
     //Each neighbor object contains a pointer to its associated mac data object
     std::shared_ptr<mac_data> m_mac_data_ptr;

@@ -27,6 +27,7 @@
 #include "std_radical.h"
 #include "std_radix.h"
 #include "ds_common_types.h"
+#include "nas_ndi_route.h"
 #include "nas_ndi_router_interface.h"
 #include "std_llist.h"
 #include "std_mutex_lock.h"
@@ -34,7 +35,6 @@
 
 #include <stdbool.h>
 #include <sys/socket.h>
-#include <stdint.h>
 #include "event_log.h"
 
 #define HAL_RT_MAC_ADDR_LEN               HAL_MAC_ADDR_LEN
@@ -102,6 +102,12 @@ enum {
     RT_INTF_ADMIN_STATUS_DOWN
 };
 
+/* interface events for route/nh processing */
+typedef enum _t_fib_intf_event_type {
+    FIB_INTF_ADMIN_EVENT = 1,
+    FIB_INTF_MODE_CHANGE_EVENT
+} t_fib_intf_event_type;
+
 /* ARP/ND status */
 #define RT_NUD_INCOMPLETE 0x01
 #define RT_NUD_REACHABLE  0x02
@@ -112,6 +118,12 @@ enum {
 #define RT_NUD_NOARP      0x40
 #define RT_NUD_PERMANENT  0x80
 #define RT_NUD_NONE          0x00
+
+typedef enum _t_fib_rt_msg_type {
+    FIB_RT_MSG_ADD = 1,
+    FIB_RT_MSG_DEL,
+    FIB_RT_MSG_UPD
+} t_fib_rt_msg_type;
 
 typedef enum _rt_proto rt_proto;
 
@@ -273,6 +285,7 @@ typedef struct _t_fib_vrf_cntrs {
     uint32_t  num_cam_host_entries;
     uint32_t  num_cam_route_entries;
     uint32_t  num_nht_entries;
+    uint32_t  num_catch_all_intf_entries;
 } t_fib_vrf_cntrs;
 
 typedef struct _nas_rt_peer_mac_config_t{
@@ -301,42 +314,49 @@ typedef enum {
     FIB_MSG_TYPE_NBR_MGR_INTF, /* Admin status notification from the Nbr mgr */
     FIB_MSG_TYPE_NL_ROUTE, /* Route notification from the kernel */
     FIB_MSG_TYPE_NBR_MGR_NBR_INFO, /* Nbr notification from the Nbr mgr */
-    FIB_MSG_TYPE_NL_NBR
+    FIB_MSG_TYPE_NL_NBR,
+    FIB_MSG_TYPE_INTF_IP_UNREACH_CFG /* IP unreachable configuration from the user */
 } t_fib_msg_type;
 
 typedef struct  {
     unsigned short  family;
-    db_nbr_event_type_t    msg_type;
+    t_fib_rt_msg_type msg_type;
     hal_ip_addr_t         nbr_addr;
     hal_mac_addr_t      nbr_hwaddr;
     hal_ifindex_t   if_index;
     hal_ifindex_t   mbr_if_index; /* VLAN member port - physical/LAG */
     unsigned long   vrfid;
+    uint8_t         vrf_name[HAL_IF_NAME_SZ + 1];
     unsigned long   expire;
     unsigned long   flags;
     unsigned long   status;
 } t_fib_neighbour_entry;
 
-#define ROUTE_NEXT_HOP_MAX_COUNT   64
+/* WECMP nh_list*/
+typedef struct {
+    hal_ifindex_t   nh_if_index;
+    hal_ip_addr_t   nh_addr;
+    uint32_t         nh_weight;
+} t_fib_nh_info;
+
 typedef struct  {
-    db_route_msg_t  msg_type;
+    t_fib_rt_msg_type msg_type;
     unsigned short  distance;
     unsigned short  protocol;
     unsigned long   vrfid;
+    uint8_t         vrf_name[HAL_IF_NAME_SZ + 1];
     hal_ip_addr_t       prefix;
     unsigned short      prefix_masklen;
     t_rt_type       rt_type;
     hal_ifindex_t   nh_if_index;
     unsigned long   nh_vrfid;
     hal_ip_addr_t         nh_addr;
-    /* WECMP nh_list*/
-    struct {
-        hal_ifindex_t   nh_if_index;
-        hal_ip_addr_t   nh_addr;
-        uint32_t         nh_weight;
-    } nh_list[ROUTE_NEXT_HOP_MAX_COUNT];
-
     size_t hop_count;
+
+    /* variable size buffer to hold nh_list based on
+     * the hop_count in received route event.
+     */
+    t_fib_nh_info nh_list[0];
 } t_fib_route_entry;
 
 typedef struct {
@@ -346,19 +366,32 @@ typedef struct {
     hal_mac_addr_t mac_addr;
 } t_fib_intf_entry;
 
+/* IP unreachable msg to be generated
+   from this interface for the non-routable
+   packets in the kernel. */
+typedef struct {
+    hal_ifindex_t if_index;
+    char          if_name[HAL_IF_NAME_SZ];
+    uint8_t af_index; /* This indicates IP unreachable to be generated
+                         from the kernel for which address family (IPv4/IPv6) */
+    bool is_op_del;
+} t_fib_intf_ip_unreach_config;
+
 typedef struct {
     t_fib_msg_type type;
     union {
         t_fib_route_entry route;
         t_fib_neighbour_entry nbr;
         t_fib_intf_entry intf;
+        t_fib_intf_ip_unreach_config ip_unreach_cfg;
     };
 } t_fib_msg;
 
 t_fib_msg * hal_rt_alloc_mem_msg();
-bool hal_rt_validate_cps_obj_neigh_family(cps_api_object_t obj);
+t_fib_msg *hal_rt_alloc_route_mem_msg(uint32_t buf_size);
 void hal_rt_cps_obj_to_neigh(cps_api_object_t obj, t_fib_neighbour_entry *n);
-void hal_rt_cps_obj_to_route(cps_api_object_t obj, t_fib_route_entry *r);
+bool hal_rt_cps_obj_to_route(cps_api_object_t obj, t_fib_msg **p_msg_ret);
+bool hal_rt_ip_addr_cps_obj_to_route (cps_api_object_t obj, t_fib_msg **p_msg_ret);
 bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf);
 
 #define FIB_RDX_MAX_NAME_LEN           64
@@ -370,6 +403,7 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf);
 
 /* Common Data Structures */
 #define FIB_DEFAULT_VRF                0
+#define FIB_DEFAULT_VRF_NAME           "default"
 #define FIB_MIN_VRF                    0
 #define FIB_MAX_VRF                    1
 #define FIB_IS_VRF_ID_VALID(_vrf_id)   ((_vrf_id) < FIB_MAX_VRF)
@@ -521,6 +555,9 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf);
 #define FIB_INCR_CNTRS_NHT_ENTRIES(_vrf_id, _af_index)                 \
         (((hal_rt_access_fib_vrf_cntrs(_vrf_id, _af_index))->num_nht_entries)++)
 
+#define FIB_INCR_CNTRS_CATCH_ALL_ENTRIES(_vrf_id, _af_index)                 \
+        (((hal_rt_access_fib_vrf_cntrs(_vrf_id, _af_index))->num_catch_all_intf_entries)++)
+
 #define FIB_DECR_CNTRS_FIB_HOST_ENTRIES(_vrf_id, _af_index)                  \
         if ((FIB_GET_CNTRS_FIB_HOST_ENTRIES ((_vrf_id), (_af_index))) > 0)   \
         {                                                                  \
@@ -551,6 +588,11 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf);
             ((hal_rt_access_fib_vrf_cntrs(_vrf_id, _af_index))->num_nht_entries)--;  \
         }
 
+#define FIB_DECR_CNTRS_CATCH_ALL_ENTRIES(_vrf_id, _af_index)                 \
+        if ((FIB_GET_CNTRS_CATCH_ALL_ENTRIES((_vrf_id), (_af_index))) > 0)  \
+        {                                                                  \
+            ((hal_rt_access_fib_vrf_cntrs(_vrf_id, _af_index))->num_catch_all_intf_entries)--;  \
+        }
 #define FIB_GET_CNTRS_ROUTE_ADD(_vrf_id, _af_index)                      \
         ((hal_rt_access_fib_vrf_cntrs(_vrf_id, _af_index))->num_route_add)
 
@@ -596,6 +638,9 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf);
 #define FIB_GET_CNTRS_NHT_ENTRIES(_vrf_id, _af_index)                  \
         ((hal_rt_access_fib_vrf_cntrs(_vrf_id, _af_index))->num_nht_entries)
 
+#define FIB_GET_CNTRS_CATCH_ALL_ENTRIES(_vrf_id, _af_index)                  \
+        ((hal_rt_access_fib_vrf_cntrs(_vrf_id, _af_index))->num_catch_all_intf_entries)
+
 #define HAL_RT_LOG_EMERG(ID, ...) EV_LOGGING(ROUTE, EMERG, ID, __VA_ARGS__)
 #define HAL_RT_LOG_ALERT(ID, ...) EV_LOGGING(ROUTE, ALERT, ID, __VA_ARGS__)
 #define HAL_RT_LOG_CRIT(ID, ...) EV_LOGGING(ROUTE, CRIT, ID, __VA_ARGS__)
@@ -616,7 +661,7 @@ int hal_rt_task_init (void);
 
 void hal_rt_task_exit (void);
 
-int hal_rt_default_dr_init (void);
+int hal_rt_default_link_local_route_init (void);
 
 const t_fib_config * hal_rt_access_fib_config(void);
 t_fib_gbl_info * hal_rt_access_fib_gbl_info(void);
@@ -644,6 +689,6 @@ int hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac_config_
 int fib_create_nht_tree (t_fib_vrf_info *p_vrf_info);
 int fib_destroy_nht_tree (t_fib_vrf_info *p_vrf_info);
 bool hal_rt_process_intf_state_msg(t_fib_msg_type type, t_fib_intf_entry *p_intf);
-bool hal_rt_ip_addr_cps_obj_to_route (cps_api_object_t obj, t_fib_route_entry *p_route);
+bool fib_proc_ip_unreach_config_msg(t_fib_intf_ip_unreach_config *p_ip_unreach_cfg);
 
 #endif /* __HAL_RT_MAIN_H__ */
