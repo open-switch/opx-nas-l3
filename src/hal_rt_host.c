@@ -363,7 +363,7 @@ dn_hal_route_err _hal_fib_host_del (uint32_t vrf_id, t_fib_nh *p_fh)
 
     for (unit = 0; unit < hal_rt_access_fib_config()->max_num_npu; unit++) {
         if (p_fh->a_is_written [unit] == false) {
-            HAL_RT_LOG_ERR("HAL-RT-NDI", "Host entry not present in "
+            HAL_RT_LOG_INFO("HAL-RT-NDI", "Host entry not present in "
                            "Unit %d, Vrf_id: %d.", unit, vrf_id);
             continue;
         }

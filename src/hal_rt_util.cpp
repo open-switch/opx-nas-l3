@@ -155,7 +155,7 @@ t_std_error hal_rt_get_if_index_from_if_name(char *if_name, uint32_t *p_if_index
                 sizeof(intf_ctrl.if_name)-1);
 
     if ((dn_hal_get_interface_info(&intf_ctrl)) != STD_ERR_OK) {
-        HAL_RT_LOG_ERR("HAL-RT",
+        HAL_RT_LOG_INFO("HAL-RT",
                        "Invalid interface %s interface get failed ", if_name);
         return (STD_ERR(ROUTE, PARAM, 0));
     }

@@ -781,8 +781,8 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
             (FIB_IS_INTF_MODE_L3 (p_intf->mode)) && (hal_rt_rif_ref_get(if_index) == -1)) {
             /* Looks like duplicate link local route delete,
              * need to analyse further if the below error is seen in the journal */
-            HAL_RT_LOG_ERR("HAL-RT-DR", "Reference count already 0 while deleting "
-                           "the link local address from intf:%d", if_index);
+            HAL_RT_LOG_INFO("HAL-RT-DR", "Reference count already 0 while deleting "
+                            "the link local address from intf:%d", if_index);
             nas_l3_unlock();
             return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
         }

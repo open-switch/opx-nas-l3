@@ -877,6 +877,7 @@ bool nbr_data::process_nbr_data(nbr_mgr_nbr_entry_t& entry) {
             }
         } else if (entry.status & NBR_MGR_NUD_FAILED) {
             m_retry_cnt = 0;
+            m_flags &= ~NBR_MGR_NBR_REFRESH_FOR_MAC_LEARN;
             m_prev_refresh_for_mac_learn_retry_cnt = m_refresh_for_mac_learn_retry_cnt;
             m_refresh_for_mac_learn_retry_cnt = 0;
             if (m_flags & NBR_MGR_NBR_REFRESH) {

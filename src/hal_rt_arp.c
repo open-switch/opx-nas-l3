@@ -307,11 +307,11 @@ t_std_error fib_proc_arp_add (uint8_t af_index, void *p_arp_info)
     }
 
     HAL_RT_LOG_INFO("HAL-RT-ARP(ARP-START)", "Neighbor add - vrf_id: %d, ip_addr: %s, "
-            "if_index: %d, mac_addr: %s, out_if_index: %d status:%d", fib_arp_msg_info.vrf_id,
+            "if_index: %d, mac_addr: %s, out_if_index: %d status:%d NH:%p", fib_arp_msg_info.vrf_id,
             FIB_IP_ADDR_TO_STR (&fib_arp_msg_info.ip_addr),
             fib_arp_msg_info.if_index,
             hal_rt_mac_to_str (&fib_arp_msg_info.mac_addr, p_buf, HAL_RT_MAX_BUFSZ),
-            fib_arp_msg_info.out_if_index, fib_arp_msg_info.status);
+            fib_arp_msg_info.out_if_index, fib_arp_msg_info.status, p_nh);
 
     p_nh = fib_proc_nh_add (fib_arp_msg_info.vrf_id, &fib_arp_msg_info.ip_addr,
                             fib_arp_msg_info.if_index, FIB_NH_OWNER_TYPE_ARP, 0);

@@ -411,7 +411,7 @@ t_fib_nh *fib_proc_nh_add (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr,
         fib_mark_nh_for_resolution (p_nh);
     }
 
-    HAL_RT_LOG_DEBUG("HAL-RT-NH",
+    HAL_RT_LOG_INFO("NH-ADD-RSLV",
                  "AFTER vrf_id: %d, ip_addr: %s, if_index: %d, "
                  "owner_flag: 0x%x, status_flag: 0x%x, rtm_ref_count: %d, resolve_nh: %d",
                   vrf_id, FIB_IP_ADDR_TO_STR (p_ip_addr), if_index, p_nh->owner_flag, p_nh->status_flag,
@@ -432,7 +432,7 @@ int fib_proc_nh_delete (t_fib_nh *p_nh, t_fib_nh_owner_type owner_type,
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
 
-    HAL_RT_LOG_DEBUG("HAL-RT-NH",
+    HAL_RT_LOG_INFO("NH-DEL",
                  "vrf_id: %d, ip_addr: %s, if_index: 0x%x, owner_type: %d, owner_value: %d"
                  "owner_flag: 0x%x, status_flag: 0x%x",
                  p_nh->vrf_id, FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr),
@@ -440,7 +440,7 @@ int fib_proc_nh_delete (t_fib_nh *p_nh, t_fib_nh_owner_type owner_type,
 
     if (!(FIB_IS_NH_OWNER (p_nh, owner_type, owner_value)))
     {
-        HAL_RT_LOG_DEBUG("HAL-RT-NH",
+        HAL_RT_LOG_INFO("NH-DEL",
                      "Ownership not present. vrf_id: %d, ip_addr: %s, if_index: 0x%x, "
                      "owner_flag: 0x%x, owner_type: %d, owner_value: %d",
                      p_nh->vrf_id, FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr),
@@ -2542,6 +2542,7 @@ int fib_nh_walker_call_back (std_radical_head_t *p_rt_head, va_list ap)
     dn_hal_route_err     hal_err = DN_HAL_ROUTE_E_NONE;
     bool           is_host_ready = true;
     t_fib_dr        *p_dr = NULL;
+    char           p_buf[HAL_RT_MAX_BUFSZ];
 
     if (!p_rt_head)
     {
@@ -2554,11 +2555,16 @@ int fib_nh_walker_call_back (std_radical_head_t *p_rt_head, va_list ap)
 
     p_nh = (t_fib_nh *) p_rt_head;
 
-    HAL_RT_LOG_DEBUG("HAL-RT-NH",
-               "NH: vrf_id: %d, ip_addr: %s, if_index: %d, "
-               "status_flag: 0x%x, owner_flag: 0x%x",
-               p_nh->vrf_id, FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr), p_nh->key.if_index,
-               p_nh->status_flag, p_nh->owner_flag);
+
+    HAL_RT_LOG_INFO("NH-WALKER",
+                    "NH: vrf_id: %d, ip_addr: %s, if_index: %d, "
+                    "status_flag: 0x%x, owner_flag: 0x%x MAC:%s state:%d status:0x%x",
+                    p_nh->vrf_id, FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr), p_nh->key.if_index,
+                    p_nh->status_flag, p_nh->owner_flag,
+                    ((p_nh->p_arp_info) ? (hal_rt_mac_to_str (&p_nh->p_arp_info->mac_addr,
+                                                              p_buf, HAL_RT_MAX_BUFSZ)) : ""),
+                    ((p_nh->p_arp_info) ? p_nh->p_arp_info->state : 0),
+                    ((p_nh->p_arp_info) ? p_nh->p_arp_info->arp_status : 0));
 
     p_vrf_info = FIB_GET_VRF_INFO (p_nh->vrf_id,
                                  p_nh->key.ip_addr.af_index);
@@ -2765,6 +2771,7 @@ int fib_nh_walker_call_back (std_radical_head_t *p_rt_head, va_list ap)
     else if (p_nh->status_flag & FIB_NH_STATUS_DEAD) /* port admin/mode change */
     {
         fib_proc_nh_dead (p_nh);
+        p_nh->status_flag &= ~FIB_NH_STATUS_REQ_RESOLVE;
         cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_nh, cps_api_oper_DELETE);
         if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
             HAL_RT_LOG_ERR("HAL-RT-DR","Failed to publish neighbor delete");
@@ -2862,7 +2869,7 @@ int fib_proc_nh_dead (t_fib_nh *p_nh)
         return STD_ERR_OK;
     }
 
-    HAL_RT_LOG_DEBUG("HAL-RT-NH",
+    HAL_RT_LOG_INFO("NH-DEAD",
                "NH Dead: vrf_id: %d, ip_addr: %s, if_index: 0x%x, "
                "status_flag: 0x%x, owner_flag: 0x%x",
                 p_nh->vrf_id,
@@ -2907,8 +2914,6 @@ int fib_proc_nh_dead (t_fib_nh *p_nh)
     }
     /* update dependent dr's for this dead nh */
     fib_resolve_nh_dep_dr (p_nh);
-
-    p_nh->status_flag &= ~FIB_NH_STATUS_REQ_RESOLVE;
 
     /* all route reference to this NH is removed already,
      * hence delete the nexthop if its created.

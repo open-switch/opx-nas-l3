@@ -1,8 +1,16 @@
+opx-nas-l3 (3.2.0+opx1) unstable; urgency=medium
+
+  * Bugfix: Reset next-hop entry's resolution status upon interface status/mode change. 
+  * Bugfix: Reset the MAC not present flag when the neighbor state moved to FAILED          
+
+ -- Dell EMC <ops-dev@lists.openswitch.net>  Wed, 16 Jan 2018 11:00:00 -0800
+
 opx-nas-l3 (3.2.0) unstable; urgency=medium
 
-  * Added: Virtual link local address programming into the NPU for VRRPv3 functionality.
-  * Added: Ifname attribute filled for route and NHT objects.
-  * Added: Refresh the neighbor until MAC gets learnt in the NPU, proactive resolution trigger for failed ARPs restricted to finite re-tries.
+  * Update: Added Virtual link local address programming into the NPU for VRRPv3 functionality.
+  * Update: Added Ifname attribute filled for route and NHT objects.
+  * Update: Added Refresh the neighbor until MAC gets learnt in the NPU, proactive resolution
+            trigger for failed ARPs restricted to finite re-tries.
   * Bugfix: Address issues in LLA RIF reference count handling for LLA route installation in hardware.
   * Bugfix: Few issues based on UT testing and modified logs for readability.
   * Bugfix: Lookup local interface cache for mac addr before fetching it from nas-interface.

@@ -861,9 +861,9 @@ static cps_api_return_code_t nas_intf_mode_change_handler (void * context,
     mode = (BASE_IF_MODE_t) cps_api_object_attr_data_u32(mode_attr);
 
     if (hal_rt_get_if_index_from_if_name (if_name, &if_index) != STD_ERR_OK) {
-        HAL_RT_LOG_ERR ("NAS-RT-CPS-ACTION",
-                        "Intf index get failed for if_name:%s, mode:%s ",
-                        if_name, hal_rt_intf_mode_to_str(mode));
+        HAL_RT_LOG_INFO ("NAS-RT-CPS-ACTION",
+                         "Intf index get failed for if_name:%s, mode:%s ",
+                         if_name, hal_rt_intf_mode_to_str(mode));
         return cps_api_ret_code_OK;
     }
     HAL_RT_LOG_INFO ("NAS-RT-CPS-ACTION", "Intf index for if_name:%s(%d), mode:%s",
