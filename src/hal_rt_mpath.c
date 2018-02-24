@@ -258,7 +258,7 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
                             return DN_HAL_ROUTE_E_FAIL;
                         }
                         HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                                "NH Group: RIF ID %d!" "Vrf_id: %d.",
+                                "NH Group: RIF ID 0x%llx!" "Vrf_id: %d.",
                                 rif_id, vrf_id);
 
                         memset(&nbr_entry, 0, sizeof(nbr_entry));
@@ -440,16 +440,47 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
         } else if (p_dr->nh_handle != nh_group_handle) { /* Update route NH */
 
             hal_dump_route_entry(&route_entry);
-            rc = ndi_route_set_attribute(&route_entry);
-            if (rc != STD_ERR_OK) {
-                HAL_RT_LOG_ERR("HAL-RT-NDI",
-                                "MP: ECMP Route Update: Failed. Attribute Group Nexthop ID set failed."
-                                "Prefix: %s/%d Unit: %d, Err: %d, old gid %d, new gid to set %d",
-                                FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
-                                p_dr->prefix_len, npu_id, rc, p_dr->nh_handle,
-                                route_entry.nh_handle);
-                error_occured = true;
-                break;
+            if (p_dr->nh_handle == 0) {
+                /* This is the case for replacing null route with ECMP route,
+                 * if the nh_handle is zero, always set both the action and nh-group handle */
+                route_entry.flags = NDI_ROUTE_L3_ECMP;
+                rc = ndi_route_set_attribute(&route_entry);
+                if (rc != STD_ERR_OK) {
+                    HAL_RT_LOG_ERR("HAL-RT-NDI",
+                                   "ECMP Route Attribute Nexthop ID set failed. VRF %d, "
+                                   "Prefix: %s/%d, Unit: %d, Err: %d",
+                                   vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
+                                   p_dr->prefix_len, npu_id, rc);
+                    error_occured = true;
+                    break;
+                }
+                /* NDI doesn't accept multiple attributes for update;
+                 * Hence set attribute is called for each attribute that is
+                 * updated.
+                 */
+                route_entry.flags = NDI_ROUTE_L3_PACKET_ACTION;
+                rc = ndi_route_set_attribute(&route_entry);
+                if (rc != STD_ERR_OK) {
+                    HAL_RT_LOG_ERR("HAL-RT-NDI",
+                                   "ECMP Route Attribute Packet Action set failed VRF %d, "
+                                   "Prefix: %s/%d, Unit: %d, Err: %d",
+                                   vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
+                                   p_dr->prefix_len, npu_id, rc);
+                    error_occured = true;
+                    break;
+                }
+            } else {
+                rc = ndi_route_set_attribute(&route_entry);
+                if (rc != STD_ERR_OK) {
+                    HAL_RT_LOG_ERR("HAL-RT-NDI",
+                                   "MP: ECMP Route Update: Failed. Attribute Group Nexthop ID set failed."
+                                   "Prefix: %s/%d Unit: %d, Err: %d, old gid %d, new gid to set %d",
+                                   FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
+                                   p_dr->prefix_len, npu_id, rc, p_dr->nh_handle,
+                                   route_entry.nh_handle);
+                    error_occured = true;
+                    break;
+                }
             }
             HAL_RT_LOG_INFO("HAL-RT-NDI",
                             "MP: ECMP Route Update:  Successful, VRF %d, Prefix: %s/%d - "

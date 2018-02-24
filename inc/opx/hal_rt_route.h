@@ -543,6 +543,7 @@ typedef struct _t_fib_dr {
                                                for this link local IPv6 addresses */
     t_rt_type          rt_type;     /* route with special nexthop types -
                                      * blackhole/unreachable/prohibit */
+    bool               is_mgmt_route;
 } t_fib_dr;
 
 typedef struct _t_fib_nh_key {
@@ -589,6 +590,7 @@ typedef struct _t_fib_nh {
                                                       from the kernel */
     bool               is_nht_active; /* true - if this NH is being tracked
                                         for PBR and ER-SPAN, false otherwise */
+    bool               is_mgmt_nh;
 } t_fib_nh;
 
 /*
@@ -704,7 +706,8 @@ int fib_form_dr_msg_info (uint8_t af_index, void *p_rtm_fib_cmd, t_fib_dr_msg_in
 
 int fib_form_nh_msg_info (uint8_t af_index, void *p_rtm_nh_key, t_fib_nh_msg_info *p_fib_nh_msg_info,
                             size_t nh_index);
-int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_size, bool is_rt_replace);
+int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_size, bool is_rt_replace,
+                         bool is_mgmt_intf);
 
 int fib_form_tnl_nh_msg_info (t_fib_tnl_dest *p_tnl_dest, t_fib_nh_msg_info *p_fib_nh_msg_info);
 
@@ -833,7 +836,7 @@ int fib_create_intf_tree (void);
 int fib_destroy_intf_tree (void);
 
 t_fib_nh *fib_proc_nh_add (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr, uint32_t if_index,
-                      t_fib_nh_owner_type owner_type, uint32_t owner_value);
+                      t_fib_nh_owner_type owner_type, uint32_t owner_value, bool is_mgmt_nh);
 
 int fib_proc_nh_delete (t_fib_nh *p_nh, t_fib_nh_owner_type owner_type, uint32_t owner_value);
 
@@ -950,7 +953,7 @@ int fib_create_tnl_dest_tree (void);
 
 t_std_error fib_proc_nbr_download (t_fib_neighbour_entry *p_arp_info);
 
-t_std_error fib_proc_arp_add (uint8_t af_index, void *p_arp_info);
+t_std_error fib_proc_arp_add (uint8_t af_index, void *p_arp_info, bool is_mgmt_intf);
 
 t_std_error fib_proc_arp_del (uint8_t af_index, void *p_arp_info);
 

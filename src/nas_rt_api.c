@@ -409,6 +409,54 @@ static cps_api_object_t nas_intf_ip_unreach_info_to_cps_object(t_fib_intf *p_int
     return obj;
 }
 
+static cps_api_object_t nas_route_event_filter_info_to_cps_object(char *vrf_name, uint8_t type,
+                                                                  uint8_t enable) {
+
+    if(vrf_name == NULL){
+        HAL_RT_LOG_ERR("HAL-RT-API","Invalid VRF name!");
+        return NULL;
+    }
+
+    cps_api_object_t obj = cps_api_object_create();
+    if(obj == NULL){
+        HAL_RT_LOG_ERR("HAL-RT-API","Failed to allocate memory to cps object");
+        return NULL;
+    }
+
+    cps_api_key_t key;
+    cps_api_key_from_attr_with_qual(&key, BASE_ROUTE_EVENT_FILTER_OBJ,
+                                    cps_api_qualifier_TARGET);
+    cps_api_object_set_key(obj,&key);
+
+    cps_api_set_key_data (obj, BASE_ROUTE_EVENT_FILTER_VRF_NAME, cps_api_object_ATTR_T_BIN,
+                          vrf_name, (strlen(vrf_name)+1));
+    cps_api_set_key_data (obj, BASE_ROUTE_EVENT_FILTER_TYPE, cps_api_object_ATTR_T_U32,
+                          &type, sizeof(type));
+    cps_api_object_attr_add_u32(obj, BASE_ROUTE_EVENT_FILTER_ENABLE, enable);
+    return obj;
+}
+
+cps_api_return_code_t nas_route_get_all_event_filter_info(cps_api_object_list_t list) {
+    hal_vrf_id_t    vrf_id = 0;
+    t_fib_vrf_info *p_vrf_info = NULL;
+
+    for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id ++) {
+        p_vrf_info = hal_rt_access_fib_vrf_info(vrf_id, HAL_RT_V4_AFINDEX);
+        cps_api_object_t obj =
+            nas_route_event_filter_info_to_cps_object((char*)p_vrf_info->vrf_name,
+                                                      p_vrf_info->event_filter_info,
+                                                      (p_vrf_info->event_filter_info ? true : false));
+        if(obj != NULL){
+            if (!cps_api_object_list_append(list,obj)) {
+                cps_api_object_delete(obj);
+                HAL_RT_LOG_ERR("HAL-RT-API","Failed to append object to object list");
+                return STD_ERR(ROUTE,FAIL,0);
+            }
+        }
+    }
+    return STD_ERR_OK;
+}
+
 cps_api_return_code_t nas_route_get_all_ip_unreach_info(cps_api_object_list_t list, uint32_t af, char *if_name,
                                                         bool is_specific_get) {
 
@@ -462,7 +510,8 @@ cps_api_return_code_t nas_route_get_all_ip_unreach_info(cps_api_object_list_t li
     return cps_api_ret_code_OK;
 }
 
-static cps_api_object_t nas_route_info_to_cps_object(t_fib_dr *entry){
+static cps_api_object_t nas_route_info_to_cps_object(cps_api_operation_types_t op, t_fib_dr *entry,
+                                                     bool is_pub){
     t_fib_nh       *p_nh = NULL;
     t_fib_nh_holder nh_holder1;
     int weight = 0, is_npu_prg_done;
@@ -481,11 +530,15 @@ static cps_api_object_t nas_route_info_to_cps_object(t_fib_dr *entry){
 
     cps_api_key_t key;
     cps_api_key_from_attr_with_qual(&key, BASE_ROUTE_OBJ_ENTRY,
-                                    cps_api_qualifier_TARGET);
+                                    (is_pub ? cps_api_qualifier_OBSERVED : cps_api_qualifier_TARGET));
+    if (is_pub) {
+        cps_api_object_set_type_operation(&key, op);
+    }
     cps_api_object_set_key(obj,&key);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_VRF_ID,entry->vrf_id);
-    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, FIB_DEFAULT_VRF_NAME,
-                            sizeof(FIB_DEFAULT_VRF_NAME));
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME,
+                            FIB_GET_VRF_NAME(entry->vrf_id, entry->key.prefix.af_index),
+                            strlen((const char*)FIB_GET_VRF_NAME(entry->vrf_id, entry->key.prefix.af_index))+1);
     if(entry->key.prefix.af_index == HAL_INET4_FAMILY){
         addr_len = HAL_INET4_LEN;
         cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX,&(entry->key.prefix.u.v4_addr), addr_len);
@@ -601,8 +654,9 @@ cps_api_object_t nas_route_nh_to_arp_cps_object(t_fib_nh *entry, cps_api_operati
     cps_api_object_attr_add(obj, BASE_ROUTE_OBJ_NBR_MAC_ADDR, (const void *)mac_addr,
                             strlen(mac_addr)+1);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_VRF_ID,entry->vrf_id);
-    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, FIB_DEFAULT_VRF_NAME,
-                            sizeof(FIB_DEFAULT_VRF_NAME));
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME,
+                            FIB_GET_VRF_NAME(entry->vrf_id, entry->key.ip_addr.af_index),
+                            strlen((const char*)FIB_GET_VRF_NAME(entry->vrf_id, entry->key.ip_addr.af_index))+1);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_AF,entry->key.ip_addr.af_index);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_IFINDEX,entry->key.if_index);
 
@@ -673,7 +727,7 @@ t_std_error nas_route_get_all_route_info(cps_api_object_list_t list, uint32_t vr
         p_dr = fib_get_first_dr(vrf_id, af);
     }
     while (p_dr != NULL){
-        cps_api_object_t obj = nas_route_info_to_cps_object(p_dr);
+        cps_api_object_t obj = nas_route_info_to_cps_object(0, p_dr, false);
         if(obj != NULL){
             if (!cps_api_object_list_append(list,obj)) {
                 cps_api_object_delete(obj);
@@ -956,8 +1010,9 @@ cps_api_object_t nas_route_nh_to_nbr_cps_object(t_fib_nh *entry, cps_api_operati
         cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_NBR_ADDRESS,(void *)entry->key.ip_addr.u.ipv6.s6_addr,HAL_INET6_LEN);
     }
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_VRF_ID,entry->vrf_id);
-    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME, FIB_DEFAULT_VRF_NAME,
-                            sizeof(FIB_DEFAULT_VRF_NAME));
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME,
+                            FIB_GET_VRF_NAME(entry->vrf_id, entry->key.ip_addr.af_index),
+                            strlen((const char*)FIB_GET_VRF_NAME(entry->vrf_id, entry->key.ip_addr.af_index))+1);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_AF,entry->key.ip_addr.af_index);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_IFINDEX,entry->key.if_index);
 
@@ -983,6 +1038,38 @@ bool nas_route_resolve_nh(t_fib_nh *entry, bool is_add) {
     cps_api_object_t obj = nas_route_nh_to_nbr_cps_object(entry, (is_add ? cps_api_oper_CREATE: cps_api_oper_DELETE), true);
     if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
         HAL_RT_LOG_ERR("HAL-RT-NH-PUB","Failed to publish NH entry for resolution");
+        return false;
+    }
+    return true;
+}
+
+bool nas_route_publish_route(t_fib_dr *p_dr, t_fib_rt_msg_type type) {
+    cps_api_operation_types_t op;
+    if (!FIB_IS_EVENT_FILTER_ENABLED(p_dr->vrf_id, p_dr->key.prefix.af_index,
+                                     (p_dr->is_mgmt_route ? BASE_ROUTE_RT_OWNER_MGMTROUTE: 0))) {
+        HAL_RT_LOG_INFO("HAL-RT-PUB", "Route VRF %d. Prefix: %s/%d mgmt_route:%d publish ignored"
+                        " since event-filter is not present!",
+                        p_dr->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
+                        p_dr->prefix_len, p_dr->is_mgmt_route);
+        return true;
+    }
+    switch(type) {
+        case FIB_RT_MSG_ADD:
+            op = cps_api_oper_CREATE;
+            break;
+        case FIB_RT_MSG_UPD:
+            op = cps_api_oper_SET;
+            break;
+        case FIB_RT_MSG_DEL:
+            op = cps_api_oper_DELETE;
+            break;
+        default:
+            return false;
+    }
+
+    cps_api_object_t obj = nas_route_info_to_cps_object(op, p_dr, true);
+    if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
+        HAL_RT_LOG_ERR("HAL-RT-NH-PUB","Failed to publish route entry!");
         return false;
     }
     return true;
@@ -1069,6 +1156,61 @@ cps_api_return_code_t nas_route_os_ip_unreachable_config(uint32_t af, char *if_n
     }
     HAL_RT_LOG_INFO("NAS-RT-CPS-SET", "CPS OS IP Unreachable RPC successful!");
     cps_api_transaction_close(&tran);
+    return cps_api_ret_code_OK;
+}
+
+cps_api_return_code_t nas_route_handle_event_filter(cps_api_transaction_params_t * param, size_t ix) {
+
+    cps_api_object_t obj = cps_api_object_list_get(param->change_list,ix);
+    cps_api_object_t cloned = cps_api_object_create();
+    if (!cloned) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "CPS malloc error");
+        return cps_api_ret_code_ERR;
+    }
+
+    cps_api_object_attr_t vrf_attr = cps_api_get_key_data(obj, BASE_ROUTE_EVENT_FILTER_VRF_NAME);
+    cps_api_object_attr_t type_attr = cps_api_get_key_data(obj, BASE_ROUTE_EVENT_FILTER_TYPE);
+    cps_api_object_attr_t enable_attr   = cps_api_object_attr_get(obj, BASE_ROUTE_EVENT_FILTER_ENABLE);
+    if ((vrf_attr == NULL) || (type_attr == NULL)) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS", "Missing VRF-name/route type attribute");
+        return cps_api_ret_code_ERR;
+    }
+    int32_t type = cps_api_object_attr_data_u32(type_attr);
+    if (type != BASE_ROUTE_RT_OWNER_MGMTROUTE) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS", "Invalid route type filter!");
+        return cps_api_ret_code_ERR;
+    }
+    char  vrf_name[HAL_IF_NAME_SZ];
+    memset (vrf_name,0,sizeof(vrf_name));
+    safestrncpy(vrf_name, (const char *)cps_api_object_attr_data_bin(vrf_attr),
+                sizeof(vrf_name));
+    hal_vrf_id_t  vrf_id = 0;
+
+    if (hal_rt_get_vrf_id(vrf_name, &vrf_id) == false) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "VRF-name:%s is not valid!", vrf_name);
+        return cps_api_ret_code_ERR;
+    }
+
+    int32_t enable = false;
+    if (enable_attr) {
+        enable = cps_api_object_attr_data_uint(enable_attr);
+        if ((enable != true) && (enable != false)) {
+            HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "Enable attribute value:%d is not valid!", enable);
+            return cps_api_ret_code_ERR;
+        }
+    }
+    cps_api_object_clone(cloned,obj);
+    cps_api_object_list_append(param->prev,cloned);
+    if (cps_api_object_type_operation(cps_api_object_key(obj)) == cps_api_oper_DELETE) {
+        enable = false;
+    }
+    if (enable) {
+        FIB_EVENT_FILTER_SET(vrf_id, HAL_RT_V4_AFINDEX, type);
+        FIB_EVENT_FILTER_SET(vrf_id, HAL_RT_V6_AFINDEX, type);
+    } else {
+        FIB_EVENT_FILTER_RESET(vrf_id, HAL_RT_V4_AFINDEX, type);
+        FIB_EVENT_FILTER_RESET(vrf_id, HAL_RT_V6_AFINDEX, type);
+    }
     return cps_api_ret_code_OK;
 }
 

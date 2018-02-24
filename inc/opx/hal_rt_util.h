@@ -78,7 +78,7 @@ void fib_check_threshold_for_all_cams (int action);
 
 unsigned long fib_tick_get( void );
 
-t_std_error hal_rt_validate_intf(int if_index);
+t_std_error hal_rt_validate_intf(hal_vrf_id_t vrf_id, int if_index, bool *is_mgmt_intf);
 
 /*!
  * @brief Converts mac address to a string format
@@ -118,13 +118,13 @@ int hal_rt_rif_ref_get(hal_ifindex_t if_index);
 t_std_error hal_rif_info_get (hal_ifindex_t if_index, ndi_rif_id_t *rif_id, uint32_t *ref_count);
 hal_ifindex_t hal_rt_rif_entry_get_next_if_index (hal_ifindex_t if_index);
 
-bool hal_rt_is_intf_lpbk (hal_ifindex_t if_index);
-
+bool hal_rt_is_intf_lpbk (hal_vrf_id_t vrf_id, hal_ifindex_t if_index);
+bool hal_rt_is_intf_mgmt (hal_vrf_id_t vrf_id, hal_ifindex_t if_index);
 
 BASE_CMN_AF_TYPE_t nas_route_af_to_cps_af(unsigned short af);
 t_std_error nas_rt_fill_opaque_data(cps_api_object_t obj, uint64_t attr, int npu_id, next_hop_id_t *p_ndi_id);
 
-t_std_error hal_rt_get_intf_name(int if_index, char *p_if_name);
+t_std_error hal_rt_get_intf_name(hal_vrf_id_t vrf_id, int if_index, char *p_if_name);
 uint32_t nas_rt_get_clock_sec();
 int nas_rt_process_msg(t_fib_msg *p_msg);
 int fib_msg_main(void);
@@ -139,5 +139,11 @@ bool nas_rt_is_nh_npu_prg_done(t_fib_nh *p_entry);
 void hal_rt_sort_array(uint64_t data[], uint32_t count);
 const char *hal_rt_intf_mode_to_str (uint32_t mode);
 t_std_error hal_rt_get_if_index_from_if_name(char *if_name, uint32_t *p_if_index);
-bool hal_rt_is_intf_mac_vlan (hal_ifindex_t if_index);
+bool hal_rt_is_intf_mac_vlan (hal_vrf_id_t vrf_id, hal_ifindex_t if_index);
+bool hal_rt_get_vrf_id(const char *vrf_name, hal_vrf_id_t *vrf_id);
+bool hal_rt_get_vrf_name(hal_vrf_id_t vrf_id, char *vrf_name);
+int fib_process_route_del_on_mgmt_ip_del_event (hal_ifindex_t if_index, hal_vrf_id_t vrf_id,
+                                                t_fib_ip_addr *prefix, uint8_t prefix_len);
+int nas_rt_get_mask (uint8_t af_index, uint8_t prefix_len, t_fib_ip_addr *mask);
 #endif /* __HAL_RT_UTIL_H__ */
+

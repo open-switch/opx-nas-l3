@@ -27,16 +27,15 @@
 #include "hal_rt_route.h"
 #include "hal_rt_util.h"
 #include "hal_rt_api.h"
-#include "hal_rt_debug.h"
 #include "hal_rt_mem.h"
 #include "nas_rt_api.h"
 
 #include "event_log.h"
 #include "std_ip_utils.h"
+#include "std_utils.h"
 
 #include "cps_api_interface_types.h"
 #include "cps_api_events.h"
-#include "cps_api_route.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -143,8 +142,12 @@ bool hal_rt_cps_obj_to_route(cps_api_object_t obj, t_fib_msg **p_msg_ret) {
                        cps_api_object_attr_len (it.attr));
                 break;
             case BASE_ROUTE_OBJ_VRF_NAME:
-                memcpy(&r->vrf_name, cps_api_object_attr_data_bin(it.attr),
-                       cps_api_object_attr_len (it.attr));
+                safestrncpy((char*)r->vrf_name, (const char *)cps_api_object_attr_data_bin(it.attr),
+                            sizeof(r->vrf_name));
+                if (hal_rt_get_vrf_id((char*)r->vrf_name, (hal_vrf_id_t*)&r->vrfid) == false) {
+                    HAL_RT_LOG_ERR("HAL-RT-INTF","Invalid VRF name:%s", r->vrf_name);
+                    r->vrfid = 0;
+                }
                 break;
             case BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN:
                 r->prefix_masklen = cps_api_object_attr_data_uint(it.attr);
@@ -244,7 +247,7 @@ int fib_proc_dr_download (t_fib_route_entry *p_rt_entry, uint32_t nas_num_route_
     int           ix,nh_info_size = 0;
     uint32_t      vrf_id = 0;
     uint8_t       af_index = 0;
-    bool          rt_change = false, is_rt_replace = false;
+    bool          rt_change = false, is_rt_replace = false, is_mgmt_intf = false;
     hal_ifindex_t nh_if_index = 0;
     static uint32_t num_route_msgs_processed_before_signalling_dr_walker = 0;
     static bool     pending_dr_walker_thread_wakeup = false;
@@ -287,8 +290,7 @@ int fib_proc_dr_download (t_fib_route_entry *p_rt_entry, uint32_t nas_num_route_
         (!(STD_IP_IS_ADDR_LINK_LOCAL(&p_rt_entry->prefix)))) {
         for (ix=0; ix<p_rt_entry->hop_count; ix++) {
             nh_if_index = p_rt_entry->nh_list[ix].nh_if_index;
-            if(hal_rt_validate_intf(nh_if_index) != STD_ERR_OK) {
-
+            if(hal_rt_validate_intf(vrf_id, nh_if_index, &is_mgmt_intf) != STD_ERR_OK) {
                 HAL_RT_LOG_INFO("HAL-RT", "Invalid interface, so skipping route add. msg_type: %d vrf_id %d, af-index %d"
                                 " nh_count %d addr:%s on if_index %d",
                                 p_rt_entry->msg_type, vrf_id, af_index, p_rt_entry->hop_count,
@@ -299,8 +301,9 @@ int fib_proc_dr_download (t_fib_route_entry *p_rt_entry, uint32_t nas_num_route_
     } else if (STD_IP_IS_ADDR_LINK_LOCAL(&p_rt_entry->prefix)) {
         for (ix=0; ix<p_rt_entry->hop_count; ix++) {
             nh_if_index = p_rt_entry->nh_list[ix].nh_if_index;
-            if (hal_rt_is_intf_lpbk(nh_if_index)) {
-                HAL_RT_LOG_INFO("HAL-RT", "skipping link local route with loopback intf msg_type: %d"
+            if ((hal_rt_is_intf_lpbk(vrf_id, nh_if_index)) ||
+                (hal_rt_is_intf_mgmt(vrf_id, nh_if_index))) {
+                HAL_RT_LOG_INFO("HAL-RT", "skipping link local route with loopback/mgmt intf msg_type: %d"
                                 "vrf_id %d, af-index %d"
                                 " nh_count %d addr:%s on if_index %d",
                                 p_rt_entry->msg_type, vrf_id, af_index, p_rt_entry->hop_count,
@@ -337,7 +340,7 @@ int fib_proc_dr_download (t_fib_route_entry *p_rt_entry, uint32_t nas_num_route_
             is_rt_replace = true;
         case FIB_RT_MSG_ADD:
             FIB_INCR_CNTRS_ROUTE_ADD (vrf_id, af_index);
-            fib_proc_dr_add_msg (af_index, p_rt_entry, &nh_info_size, is_rt_replace);
+            fib_proc_dr_add_msg (af_index, p_rt_entry, &nh_info_size, is_rt_replace, is_mgmt_intf);
             rt_change = true;
             break;
 
@@ -458,7 +461,9 @@ t_fib_link_node *fib_get_intf_ip (t_fib_intf *p_intf, t_fib_ip_addr *p_ip)
 
     return NULL;
 }
-int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_size, bool is_rt_replace)
+
+int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_size,
+                         bool is_rt_replace, bool is_mgmt_route)
 {
     t_fib_dr           *p_dr = NULL;
     t_fib_dr_msg_info   dr_msg_info;
@@ -475,9 +480,8 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
     memset (&dr_msg_info, 0, sizeof (dr_msg_info));
 
     fib_form_dr_msg_info (af_index, p_rtm_fib_cmd, &dr_msg_info);
-
     HAL_RT_LOG_DEBUG("HAL-RT-DR(RT-START)",
-               "vrf_id: %d, prefix: %s, prefix_len: %d, proto: %d",
+                     "vrf_id: %d, prefix: %s, prefix_len: %d, proto: %d",
                 dr_msg_info.vrf_id,
                FIB_IP_ADDR_TO_STR (&dr_msg_info.prefix), dr_msg_info.prefix_len,
                dr_msg_info.proto);
@@ -504,6 +508,9 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
     nas_l3_lock();
 
     p_dr = fib_get_dr (dr_msg_info.vrf_id, &dr_msg_info.prefix, dr_msg_info.prefix_len);
+    /* if there is a default route thru mgmt interface received from the kernel and
+     * FIB route added in the NPU for generating the ICMP unreachable already,
+     * override the existing FIB default route with the mgmt default route. */
     if (p_dr && (FIB_IS_DR_DEFAULT (p_dr)) && (FIB_IS_DEFAULT_DR_OWNER_FIB (p_dr))) {
         p_dr->status_flag |= FIB_DR_STATUS_DEL;
         fib_proc_dr_del (p_dr);
@@ -534,6 +541,7 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
             return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
         }
 
+        p_dr->is_mgmt_route = is_mgmt_route;
         std_dll_init (&p_dr->nh_list);
         std_dll_init (&p_dr->fh_list);
         std_dll_init (&p_dr->dep_nh_list);
@@ -676,6 +684,9 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
      */
     if (is_skip_route_install != true) {
         p_dr->status_flag |= FIB_DR_STATUS_ADD;
+    }
+    if (is_mgmt_route) {
+        nas_route_publish_route(p_dr, (is_rt_replace ? FIB_RT_MSG_UPD : FIB_RT_MSG_ADD));
     }
     fib_mark_dr_for_resolution (p_dr);
 
@@ -915,6 +926,13 @@ int fib_proc_dr_del (t_fib_dr *p_dr)
     if (p_fh && FIB_IS_NH_ZERO(p_fh)) {
         if_index = p_fh->key.if_index;
         nas_rt_handle_dest_change(p_dr, NULL, false);
+        if ((p_dr->is_mgmt_route) &&
+            (!(FIB_IS_DR_DEFAULT (p_dr)))) {
+            /* The below function calls this function again,
+             * please make sure this fib_proc_dr_del is re-entrant always */
+            fib_process_route_del_on_mgmt_ip_del_event(if_index, p_dr->vrf_id,
+                                                       &p_dr->key.prefix, p_dr->prefix_len);
+        }
         /* Dont delete the RIF count for link route del here
          * since it's already done in the fib_proc_dr_del_msg() */
         if (FIB_IS_DR_WRITTEN(p_dr) &&
@@ -924,6 +942,9 @@ int fib_proc_dr_del (t_fib_dr *p_dr)
         }
     }
 
+    if (p_dr->is_mgmt_route) {
+        nas_route_publish_route(p_dr, FIB_RT_MSG_DEL);
+    }
     if (p_dr->status_flag & FIB_DR_STATUS_DEL)
     {
     fib_mark_dr_dep_nh_for_resolution (p_dr);
@@ -1094,7 +1115,7 @@ int fib_proc_dr_nh_add (t_fib_dr *p_dr, void *p_rtm_fib_cmd, int *p_nh_info_size
             continue;
 
         p_nh = fib_proc_nh_add (nh_msg_info.vrf_id, &nh_msg_info.ip_addr,
-                                nh_msg_info.if_index, FIB_NH_OWNER_TYPE_RTM, 0);
+                                nh_msg_info.if_index, FIB_NH_OWNER_TYPE_RTM, 0, p_dr->is_mgmt_route);
 
         HAL_RT_LOG_DEBUG("HAL-RT-DR",
                          "vrf_id: %d, ip_addr: %s, nh_loop_idx %d if_index: %d",
@@ -1283,7 +1304,7 @@ int fib_form_dr_msg_info (uint8_t af_index, void *p_rtm_fib_cmd,
         p_fib_dr_msg_info->prefix.af_index = af_index;
 
         p_fib_dr_msg_info->prefix_len = p_rtm_v6_fib_cmd->prefix_masklen;
-        p_fib_dr_msg_info->vrf_id     = FIB_DEFAULT_VRF;
+        p_fib_dr_msg_info->vrf_id     = p_rtm_v6_fib_cmd->vrfid;
         p_fib_dr_msg_info->proto      = p_rtm_v6_fib_cmd->protocol;
         p_fib_dr_msg_info->rt_type    = p_rtm_v6_fib_cmd->rt_type;
     }
@@ -2866,6 +2887,12 @@ int fib_resolve_dr (t_fib_dr *p_dr)
         {
             return STD_ERR_OK;
         }
+    }
+
+    if (FIB_IS_MGMT_ROUTE(p_dr->vrf_id, p_dr)) {
+        /* Dont go for NPU programming for out of band routes,
+         * once the in band mgmt is needed, make sure to program the route into the NPU */
+        return STD_ERR_OK;
     }
 
     hal_err = hal_fib_route_add (p_dr->vrf_id, p_dr);

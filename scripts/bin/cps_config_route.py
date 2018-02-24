@@ -19,17 +19,29 @@ import cps_utils
 import socket
 import nas_ut_framework as nas_ut
 import nas_route_utils as nas_route
+import netaddr as net
+import time
+from netaddr import *
 '''
 Note: User need to install the python-netaddr
       package to use this script
 '''
 
 
-def build_route_obj(route_ip, version):
-    ver, prefix_len, ip_addr = nas_route.extract_ip_netmask(route_ip)
+IPV4_PREFIX_LEN = 24
+IPV6_PREFIX_LEN = 64
+
+def extract_version(ip_addr):
+        ip = net.IPNetwork(str(ip_addr))
+        return ip.version
+
+def build_route_obj(route_prefix, prefix_len, version):
+    ver = extract_version(route_prefix)
 
     if version != 'ipv' + str(ver):
         print 'Improper IP Address'
+        print  str(ver)
+        print version
         usage()
 
     obj = cps_utils.CPSObject(nas_route.get_route_key()[int(0)])
@@ -41,8 +53,11 @@ def build_route_obj(route_ip, version):
         obj.add_attr("af", socket.AF_INET6)
 
     obj.add_attr_type("route-prefix", version)
-    obj.add_attr("route-prefix", str(ip_addr))
+    obj.add_attr("route-prefix", str(route_prefix))
     obj.add_attr("prefix-len", int(prefix_len))
+
+#    print  "Configuring Route prefix:" + str(route_prefix),"pref_len:",prefix_len,"Version:"+ str(ver)
+
     return obj
 
 
@@ -80,11 +95,15 @@ def usage():
     print '    --ip6 : IP v6  address that needs to be configured'
     print '-n, --nh  : next-hop ip adress, needs ipv6 address if --ip6 used otherwise ipv4'
     print '            multiple ip address needs to supply as string separated by space'
+    print '-c, --count : Route count'
     print '-u, --update: update existing route information\n'
     print 'Example:'
     print 'cps_config_route.py  --add --ip 192.168.10.2 --nh "127.0.0.1 127.0.0.2"'
+    print 'cps_config_route.py  --add --ip 192.168.20.0/24 --nh "127.0.0.1 127.0.0.2"'
     print 'cps_config_route.py  --del --ip 192.168.10.2'
     print 'cps_config_route.py  --update --ip 192.168.10.2 --nh "127.0.0.1 127.0.0.3"'
+    print 'cps_config_route.py  --add --ip6 192:168:10::2 --nh "127:0:0::1 127:0:0::2"'
+    print 'cps_config_route.py  --add --ip6 192:168:20::0/24 --nh "127:0:0::1 127:0:0::2"'
     sys.exit(1)
 
 
@@ -97,10 +116,11 @@ def main(argv):
     ver = 'ipv4'
     nh_ip_addr = ''
     choice = ''
+    num_of_routes = 1
 
     try:
         opts, args = getopt.getopt(
-            argv, "audhi:n:", ["add", "update", "del", "help", "ip=", "nh=", "ip6="])
+            argv, "audhi:n:", ["add", "update", "del", "help", "ip=", "nh=", "ip6=","count="])
 
     except getopt.GetoptError:
         usage()
@@ -125,27 +145,53 @@ def main(argv):
         elif opt in ('-n', '--nh'):
             nh_ip_addr = arg
 
+        elif opt in ('-c', '--count'):
+           num_of_routes = arg
+
         elif opt == '--ip6':
             ip_addr = arg
             ver = 'ipv6'
 
     if choice == 'add' and ip_addr != '' and nh_ip_addr != '':
+        start = time.time()
         nh_ip_list = str.split(nh_ip_addr)
-        cps_obj = build_route_obj(ip_addr, ver)
-        add_embd_param(cps_obj, "nh-list", "nh-addr", nh_ip_list, ver)
-        cps_obj.add_attr("nh-count", len(nh_ip_list))
-        nas_route_op("create", cps_obj, ver)
+        version, prefix_len, route_prefix = nas_route.extract_ip_netmask(ip_addr)
+        for i in range(0,int(num_of_routes)):
+            cps_obj = build_route_obj(route_prefix, prefix_len, ver)
+            add_embd_param(cps_obj, "nh-list", "nh-addr", nh_ip_list, ver)
+            cps_obj.add_attr("nh-count", len(nh_ip_list))
+            nas_route_op("create", cps_obj, ver)
+            if (ver == 'ipv6'):
+                route_prefix += 2**(128-prefix_len)
+            else:
+                route_prefix += 2**(32-prefix_len)
+        end = time.time()
+        print 'Total time for adding %d routes = %f seconds' % (int (num_of_routes),(end - start))
+
 
     elif choice == 'update'and ip_addr != '' and nh_ip_addr != '':
         nh_ip_list = str.split(nh_ip_addr)
-        cps_obj = build_route_obj(ip_addr, ver)
+        version, prefix_len, route_prefix = nas_route.extract_ip_netmask(ip_addr)
+        cps_obj = build_route_obj(route_prefix, prefix_len, ver)
         add_embd_param(cps_obj, "nh-list", "nh-addr", nh_ip_list, ver)
         cps_obj.add_attr("nh-count", len(nh_ip_list))
         nas_route_op("set", cps_obj, ver)
 
     elif choice == 'del'and ip_addr != '':
-        cps_obj = build_route_obj(ip_addr, ver)
-        nas_route_op("delete", cps_obj, ver)
+        start = time.time()
+        nh_ip_list = str.split(nh_ip_addr)
+        version, prefix_len, route_prefix = nas_route.extract_ip_netmask(ip_addr)
+        for i in range(0,int(num_of_routes)):
+            cps_obj = build_route_obj(route_prefix, prefix_len, ver)
+            add_embd_param(cps_obj, "nh-list", "nh-addr", nh_ip_list, ver)
+            cps_obj.add_attr("nh-count", len(nh_ip_list))
+            nas_route_op("delete", cps_obj, ver)
+            if (ver == 'ipv6'):
+                route_prefix += 2**(128-prefix_len)
+            else:
+                route_prefix += 2**(32-prefix_len)
+        end = time.time()
+        print 'Total time for deleting %d routes = %f seconds' % (int (num_of_routes),(end - start))
 
     else:
         usage()

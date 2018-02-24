@@ -1603,7 +1603,7 @@ void fib_dump_all_rif ()
     while (if_index)
     {
         if (hal_rif_info_get (if_index, &rif_id, &ref_count) == STD_ERR_OK) {
-            printf ("%-10d %-10d %-10d\r\n", if_index, (int) rif_id, ref_count);
+            printf ("%-10d %-10lx %-10d\r\n", if_index, (long int) rif_id, ref_count);
             count++;
         }
 
@@ -1627,7 +1627,7 @@ void fib_dump_intf_rif (uint32_t if_index)
     if (hal_rif_info_get (if_index, &rif_id, &ref_count) == STD_ERR_OK) {
         printf ("%-10s %-10s %-10s\r\n", "Intf", "RIF Id", "Ref count");
         printf ("*********************************************************\r\n");
-        printf ("%-10d %-10d %-10d\r\n", if_index, (int) rif_id, ref_count);
+        printf ("%-10d %-10lx %-10d\r\n", if_index, (long int) rif_id, ref_count);
     }
     return;
 }

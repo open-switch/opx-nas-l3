@@ -69,6 +69,9 @@ dn_hal_route_err hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr) {
         return DN_HAL_ROUTE_E_PARAM;
     }
 
+    if (FIB_IS_MGMT_ROUTE(vrf_id, p_dr)) {
+        return DN_HAL_ROUTE_E_PARAM;
+    }
     /*
      * ECMP case
      */
@@ -148,6 +151,9 @@ dn_hal_route_err hal_fib_route_del(uint32_t vrf_id, t_fib_dr *p_dr) {
         return DN_HAL_ROUTE_E_PARAM;
     }
 
+    if (FIB_IS_MGMT_ROUTE(vrf_id, p_dr)) {
+        return DN_HAL_ROUTE_E_PARAM;
+    }
     hal_fib_set_all_dr_fh_to_un_written(p_dr);
 
     if (p_dr->ecmp_handle_created == false) {
@@ -252,7 +258,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                     return DN_HAL_ROUTE_E_FAIL;
                 }
                 HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                        "RIF ID %d!" "Vrf_id: %d.", rif_id, vrf_id);
+                        "RIF ID 0x%llx!" "Vrf_id: %d.", rif_id, vrf_id);
 
                 memset(&nbr_entry, 0, sizeof(nbr_entry));
                 if (hal_form_nbr_entry(&nbr_entry, p_fh) == STD_ERR_OK) {
@@ -329,7 +335,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
             }
 
             HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                    "RIF ID %d, Vrf_id: %d.", rif_id, vrf_id);
+                    "RIF ID 0x%llx, Vrf_id: %d.", rif_id, vrf_id);
 
             memset(&nbr_entry, 0, sizeof(nbr_entry));
             if (hal_form_nbr_entry(&nbr_entry, p_nh) == STD_ERR_OK) {
@@ -409,7 +415,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                 p_dr->a_is_written[npu_id] = true;
                 p_dr->nh_handle = nh_handle;
                 HAL_RT_LOG_INFO("HAL-RT-NDI(RT-END)",
-                                "Route Add: Successful. VRF %d. Prefix: %s/%d: NH:%s NH Handle %d RIF %d action:%s",
+                                "Route Add: Successful. VRF %d. Prefix: %s/%d: NH:%s NH Handle %d RIF 0x%llx action:%s",
                                 vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                                 p_dr->prefix_len, (p_fh ? FIB_IP_ADDR_TO_STR(&p_fh->key.ip_addr):
                                                    (p_nh ? FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr): "N/A")),
@@ -442,7 +448,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                     break;
                 }
                 HAL_RT_LOG_INFO("HAL-RT-NDI(RT-END)",
-                                "RT modified - VRF %d. Prefix: %s/%d: NH:%s old hdl %d, new hdl %d RIF %d",
+                                "RT modified - VRF %d. Prefix: %s/%d: NH:%s old hdl %d, new hdl %d RIF 0x%llx",
                                 vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
                                 (p_fh ? FIB_IP_ADDR_TO_STR(&p_fh->key.ip_addr):
                                  (p_nh ? FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr): "N/A")),

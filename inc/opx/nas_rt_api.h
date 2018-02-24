@@ -144,5 +144,8 @@ cps_api_return_code_t nas_route_process_cps_ip_unreachables_msg(cps_api_transact
 cps_api_return_code_t nas_route_get_all_ip_unreach_info(cps_api_object_list_t list, uint32_t af, char *if_name,
                                               bool is_specific_get);
 cps_api_return_code_t nas_route_os_ip_unreachable_config(uint32_t af, char *if_name, bool is_del, bool is_enable);
+bool nas_route_publish_route(t_fib_dr *p_dr, t_fib_rt_msg_type type);
+cps_api_return_code_t nas_route_handle_event_filter(cps_api_transaction_params_t * param, size_t ix);
+cps_api_return_code_t nas_route_get_all_event_filter_info(cps_api_object_list_t list);
 cps_api_return_code_t nas_route_flush_acls(next_hop_id_t *next_hop_id);
 #endif /* NAS_RT_API_H */

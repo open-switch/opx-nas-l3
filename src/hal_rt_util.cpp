@@ -108,34 +108,42 @@ uint8_t  *fib_get_scratch_buf ()
     return ga_fib_scratch_buf [g_fib_scratch_buf_index];
 }
 
-t_std_error hal_rt_validate_intf(int if_index)
+t_std_error hal_rt_validate_intf(hal_vrf_id_t vrf_id, int if_index, bool *is_mgmt_intf)
 {
     interface_ctrl_t intf_ctrl;
     memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
     intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF;
+    intf_ctrl.vrf_id = vrf_id;
     intf_ctrl.if_index = if_index;
 
+    *is_mgmt_intf = false;
     if ((dn_hal_get_interface_info(&intf_ctrl)) != STD_ERR_OK) {
         return (STD_ERR_MK(e_std_err_NPU, e_std_err_code_PARAM, 0));
     }
-
     /* Add other invalid interfaces here, to skip the route/neighbor updates */
     /* skip events for manangement vlan */
     if ((intf_ctrl.int_type == nas_int_type_MGMT) ||
-        (intf_ctrl.int_type == nas_int_type_MACVLAN) ||
-        ((intf_ctrl.int_type == nas_int_type_VLAN) &&
-         (intf_ctrl.int_sub_type == BASE_IF_VLAN_TYPE_MANAGEMENT)))
+        ((intf_ctrl.int_type == nas_int_type_VLAN) &&       
+         (intf_ctrl.int_sub_type == BASE_IF_VLAN_TYPE_MANAGEMENT))) {
+        *is_mgmt_intf = true;
+        return STD_ERR_OK;
+    }
+
+    /* skip events for MAC VLAN interface */
+    if (intf_ctrl.int_type == nas_int_type_MACVLAN) {
         return (STD_ERR_MK(e_std_err_NPU, e_std_err_code_PARAM, 0));
+    }
     return STD_ERR_OK;
 }
 
-t_std_error hal_rt_get_intf_name(int if_index, char *p_if_name)
+t_std_error hal_rt_get_intf_name(hal_vrf_id_t vrf_id, int if_index, char *p_if_name)
 {
     interface_ctrl_t intf_ctrl;
     memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
 
     memset(p_if_name, '\0', HAL_IF_NAME_SZ);
     intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF;
+    intf_ctrl.vrf_id = vrf_id;
     intf_ctrl.if_index = if_index;
 
     if(dn_hal_get_interface_info(&intf_ctrl) != STD_ERR_OK) {
@@ -242,7 +250,7 @@ uint32_t hal_rt_rif_ref_inc(hal_ifindex_t if_index)
     if (it != g_rif_entry_table.end()) {
         auto& rif_info = (it->second);
         ref_cnt = ++rif_info.ref_count;
-        HAL_RT_LOG_INFO("HAL-RT-RIF", "Incr Ref count for RIF id (%d) if_index (%d)"
+        HAL_RT_LOG_INFO("HAL-RT-RIF", "Incr Ref count for RIF id (0x%llx) if_index (%d)"
                       "is %d", rif_info.rif_id, if_index, rif_info.ref_count);
     } else
         HAL_RT_LOG_INFO("HAL-RT-RIF", "Incr RIF not found for if_index (%d)", if_index);
@@ -260,7 +268,7 @@ bool hal_rt_rif_ref_dec(hal_ifindex_t if_index)
         auto& rif_info = (it->second);
         if(rif_info.ref_count != 0) {
             ref_cnt = --rif_info.ref_count;
-            HAL_RT_LOG_INFO("HAL-RT-RIF", "Decr Ref count for RIF id (%d) if_index (%d)"
+            HAL_RT_LOG_INFO("HAL-RT-RIF", "Decr Ref count for RIF id (0x%llx) if_index (%d)"
                              "is %d", rif_info.rif_id, if_index, rif_info.ref_count);
         }
     } else {
@@ -366,18 +374,19 @@ ndi_rif_id_t hal_rif_id_get (npu_id_t npu_id, hal_vrf_id_t vrf_id, hal_ifindex_t
     if (it != g_rif_entry_table.end()) {
         rif_info = (it->second);
         rif_id   = rif_info.rif_id;
-        HAL_RT_LOG_DEBUG("HAL-RT", "RIF id is %d for if_index %d refcnt %d",
+        HAL_RT_LOG_DEBUG("HAL-RT", "RIF id is 0x%llx for if_index %d refcnt %d",
                          rif_id, if_index, rif_info.ref_count);
     }
     return (rif_id);
 }
 
-bool hal_rt_is_intf_lpbk (hal_ifindex_t if_index)
+bool hal_rt_is_intf_lpbk (hal_vrf_id_t vrf_id, hal_ifindex_t if_index)
 {
     interface_ctrl_t    intf_ctrl;
 
     memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
     intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF;
+    intf_ctrl.vrf_id = vrf_id;
     intf_ctrl.if_index = if_index;
 
     if ((dn_hal_get_interface_info(&intf_ctrl)) != STD_ERR_OK) {
@@ -390,12 +399,36 @@ bool hal_rt_is_intf_lpbk (hal_ifindex_t if_index)
     return (intf_ctrl.int_type == nas_int_type_LPBK);
 }
 
-bool hal_rt_is_intf_mac_vlan (hal_ifindex_t if_index)
+bool hal_rt_is_intf_mgmt (hal_vrf_id_t vrf_id, hal_ifindex_t if_index)
 {
     interface_ctrl_t    intf_ctrl;
 
     memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
     intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF;
+    intf_ctrl.vrf_id = vrf_id;
+    intf_ctrl.if_index = if_index;
+
+    if ((dn_hal_get_interface_info(&intf_ctrl)) != STD_ERR_OK) {
+        return false;
+    }
+
+    HAL_RT_LOG_DEBUG("HAL-RT-INTF", "intf:%s(%d) type:%d",
+                     intf_ctrl.if_name, if_index, intf_ctrl.int_type);
+    if ((intf_ctrl.int_type == nas_int_type_MGMT) ||
+        ((intf_ctrl.int_type == nas_int_type_VLAN) &&
+         (intf_ctrl.int_sub_type == BASE_IF_VLAN_TYPE_MANAGEMENT))) {
+        return true;
+    }
+    return false;
+}
+
+bool hal_rt_is_intf_mac_vlan (hal_vrf_id_t vrf_id, hal_ifindex_t if_index)
+{
+    interface_ctrl_t    intf_ctrl;
+
+    memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
+    intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF;
+    intf_ctrl.vrf_id = vrf_id;
     intf_ctrl.if_index = if_index;
 
     if ((dn_hal_get_interface_info(&intf_ctrl)) != STD_ERR_OK) {
@@ -407,7 +440,6 @@ bool hal_rt_is_intf_mac_vlan (hal_ifindex_t if_index)
 
     return (intf_ctrl.int_type == nas_int_type_MACVLAN);
 }
-
 
 /*
  * This function gets the maximum mtu supported in the base switch configuration
@@ -496,7 +528,7 @@ t_std_error hal_rif_index_get_or_create (npu_id_t npu_id, hal_vrf_id_t vrf_id,
     if (it != g_rif_entry_table.end()) {
         rif_info = (it->second);
         *rif_id   = rif_info.rif_id;
-        HAL_RT_LOG_DEBUG("HAL-RT", "RIF id is %d for if_index %d refcnt %d",
+        HAL_RT_LOG_DEBUG("HAL-RT", "RIF id is 0x%llx for if_index %d refcnt %d",
                          *rif_id, if_index, rif_info.ref_count);
         return STD_ERR_OK;
     }
@@ -589,8 +621,8 @@ t_std_error hal_rif_index_get_or_create (npu_id_t npu_id, hal_vrf_id_t vrf_id,
     }
 
     if (ndi_rif_create(&rif_entry, rif_id)!= STD_ERR_OK) {
-        HAL_RT_LOG_ERR("NAS-RT-RIF", "%s ():RIF id creation "
-                       " failed for if_index = %d", __FUNCTION__, if_index);
+        HAL_RT_LOG_ERR("NAS-RT-RIF", "RIF id creation "
+                       " failed for if_index = %d", if_index);
         return STD_ERR(ROUTE,FAIL,0);
     }
 
@@ -600,7 +632,7 @@ t_std_error hal_rif_index_get_or_create (npu_id_t npu_id, hal_vrf_id_t vrf_id,
     rif_entry.rif_id = *rif_id;
     rif_entry.flags = NDI_RIF_ATTR_MTU;
     rif_entry.mtu = hal_rt_get_max_mtu();
-    HAL_RT_LOG_INFO("HAL-RT-RIF", "RIF MTU for rif-id:%d if_index %d is %d",
+    HAL_RT_LOG_INFO("HAL-RT-RIF", "RIF MTU for rif-id:0x%llx if_index %d is %d",
                     *rif_id, if_index, rif_entry.mtu);
     if (ndi_rif_set_attribute(&rif_entry) != STD_ERR_OK) {
         HAL_RT_LOG_DEBUG("NAS-RT-RIF",
@@ -615,7 +647,7 @@ t_std_error hal_rif_index_get_or_create (npu_id_t npu_id, hal_vrf_id_t vrf_id,
     rif_info.ref_count = 0;
     g_rif_entry_table.insert(std::make_pair(if_index, rif_info));
 
-    HAL_RT_LOG_INFO("HAL-RT-RIF", "RIF entry created for rif-id:%d intf:%s(%d) mac:%s type:%d",
+    HAL_RT_LOG_INFO("HAL-RT-RIF", "RIF entry created for rif-id:0x%llx intf:%s(%d) mac:%s type:%d",
                     *rif_id, intf_ctrl.if_name, if_index,
                     hal_rt_mac_to_str (&mac_addr, buf, HAL_RT_MAX_BUFSZ), intf_ctrl.int_type);
     return STD_ERR_OK;
@@ -646,7 +678,7 @@ t_std_error hal_rif_index_remove (npu_id_t npu_id, hal_vrf_id_t vrf_id, hal_ifin
      * Erase the RIF ID from the rif entry table
      */
     g_rif_entry_table.erase(if_index);
-    HAL_RT_LOG_INFO("HAL-RT-RIF", "RIF entry deleted: %d for if_index %d",
+    HAL_RT_LOG_INFO("HAL-RT-RIF", "RIF entry deleted successfully: 0x%llx for if_index %d",
                  rif_id, if_index);
     return STD_ERR_OK;
 }
@@ -810,6 +842,43 @@ void hal_rt_sort_array(uint64_t data[], uint32_t count) {
 
     std::sort(data,data+count);
 }
+
+bool hal_rt_get_vrf_id(const char *vrf_name, hal_vrf_id_t *vrf_id) {
+    if (strncmp(vrf_name, FIB_DEFAULT_VRF_NAME, sizeof(FIB_DEFAULT_VRF_NAME)) == 0) {
+        *vrf_id = FIB_DEFAULT_VRF;
+    } else if (strncmp(vrf_name, FIB_MGMT_VRF_NAME, sizeof(FIB_MGMT_VRF_NAME)) == 0) {
+        *vrf_id = FIB_MGMT_VRF;
+    } else {
+        /* @@TODO Allocate the VRF-ids for other regular VRF-names here also,
+         * do the VR create in the HW */
+        return false;
+    }
+    return true;
+}
+
+bool hal_rt_get_vrf_name(hal_vrf_id_t vrf_id, char *vrf_name) {
+    if (vrf_id == FIB_DEFAULT_VRF) {
+        safestrncpy(vrf_name, FIB_DEFAULT_VRF_NAME, sizeof(FIB_DEFAULT_VRF_NAME));
+    } else if (vrf_id == FIB_MGMT_VRF) {
+        safestrncpy(vrf_name, FIB_MGMT_VRF_NAME, sizeof(FIB_MGMT_VRF_NAME));
+    } else {
+        return false;
+    }
+    return true;
+}
+
+int nas_rt_get_mask (uint8_t af_index, uint8_t prefix_len, t_fib_ip_addr *mask) {
+    if (!FIB_IS_AFINDEX_VALID(af_index)) {
+        return false;
+    }
+    std_ip_get_mask_from_prefix_len (af_index, prefix_len, mask);
+    /* @@TODO the above function is not giving the mask for IPv4 in the correct order, fix it */
+    if (STD_IP_IS_AFINDEX_V4 (af_index)) {
+        mask->u.v4_addr = htonl(mask->u.v4_addr);
+    }
+    return true;
+}
+
 
 #ifdef __cplusplus
 }

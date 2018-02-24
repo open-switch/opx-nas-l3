@@ -80,6 +80,9 @@ dn_hal_route_err hal_fib_next_hop_add(t_fib_nh *p_nh)
     next_hop_id_t nh_handle = 0;
     ndi_neighbor_t nbr_entry;
 
+    if (FIB_IS_MGMT_NH(p_nh->vrf_id, p_nh)) {
+        return DN_HAL_ROUTE_E_NONE;
+    }
     HAL_RT_LOG_INFO("HAL-RT-NDI(NH-Add)","NH Add: Addr: %s, Interface: %d, nh_id %d",
                  FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr), p_nh->key.if_index, p_nh->next_hop_id);
 
@@ -93,7 +96,7 @@ dn_hal_route_err hal_fib_next_hop_add(t_fib_nh *p_nh)
             }
 
             HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                         "NH Group: RIF ID %d!" "Vrf_id: %d.",
+                         "NH Group: RIF ID 0x%llx!" "Vrf_id: %d.",
                          rif_id, p_nh->vrf_id);
 
             memset(&nbr_entry, 0, sizeof(nbr_entry));
@@ -121,6 +124,9 @@ dn_hal_route_err hal_fib_next_hop_del(t_fib_nh *p_nh)
     t_std_error rc = STD_ERR_OK;
     npu_id_t    unit;
 
+    if (FIB_IS_MGMT_NH(p_nh->vrf_id, p_nh)) {
+        return DN_HAL_ROUTE_E_NONE;
+    }
     HAL_RT_LOG_INFO("HAL-RT-NDI(ARP-END)",
                  "NH Del: Addr: %s, Interface: %d, nh_id %d RIF-cnt%d",
                   FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr), p_nh->key.if_index,
@@ -210,7 +216,7 @@ inline void hal_dump_nbr_entry(ndi_neighbor_t *p_nbr_entry)
 {
     char           p_buf[HAL_RT_MAX_BUFSZ];
     HAL_RT_LOG_DEBUG( "HAL-RT-NDI", "VRF %d. Nbr Addr: %s "
-                 "npu_id %d, port %d Rif %d MAC %s state %d action %d",
+                 "npu_id %d, port %d Rif 0x%llx MAC %s state %d action %d",
                  p_nbr_entry->vrf_id, FIB_IP_ADDR_TO_STR(&(p_nbr_entry->ip_addr)),
                  p_nbr_entry->npu_id, p_nbr_entry->egress_data.port_tgid,
                  p_nbr_entry->rif_id, hal_rt_mac_to_str (&p_nbr_entry->egress_data.neighbor_mac,
@@ -288,7 +294,7 @@ dn_hal_route_err _hal_fib_host_add (uint32_t vrf_id, t_fib_nh *p_fh)
                 p_fh->a_is_written [unit] = true;
                 hal_rt_rif_ref_inc(p_fh->key.if_index);
                 HAL_RT_LOG_INFO("HAL-RT-NDI", "Host: %s mac_addr: %s, state: %d, port: %d "
-                               "status:0x%x NPU status:%d unit:%d rif:%d action: %s added successfully",
+                               "status:0x%x NPU status:%d unit:%d rif:0x%llx action: %s added successfully",
                                FIB_IP_ADDR_TO_STR(&(p_fh->key.ip_addr)),
                                hal_rt_mac_to_str (&p_fh->p_arp_info->mac_addr, p_buf, HAL_RT_MAX_BUFSZ),
                                p_fh->p_arp_info->state, p_fh->p_arp_info->if_index, p_fh->p_arp_info->arp_status,
@@ -300,7 +306,7 @@ dn_hal_route_err _hal_fib_host_add (uint32_t vrf_id, t_fib_nh *p_fh)
             rc = ndi_route_neighbor_delete(&nbr_entry);
             if(rc != STD_ERR_OK) {
                 HAL_RT_LOG_ERR("HAL-RT-NDI", "Host: %s mac_addr: %s, state: %d, port: %d "
-                               "status:0x%x NPU status:%d unit:%d rif:%d action: %s del failed",
+                               "status:0x%x NPU status:%d unit:%d rif:0x%llx action: %s del failed",
                                FIB_IP_ADDR_TO_STR(&(p_fh->key.ip_addr)),
                                hal_rt_mac_to_str (&p_fh->p_arp_info->mac_addr, p_buf, HAL_RT_MAX_BUFSZ),
                                p_fh->p_arp_info->state, p_fh->p_arp_info->if_index, p_fh->p_arp_info->arp_status,
@@ -313,7 +319,7 @@ dn_hal_route_err _hal_fib_host_add (uint32_t vrf_id, t_fib_nh *p_fh)
                 error_occured = true;
             } else {
                 HAL_RT_LOG_INFO("HAL-RT-NDI", "Host: %s mac_addr: %s, state: %d, port: %d "
-                               "status:0x%x NPU status:%d unit:%d rif:%d action: %s replaced successfully",
+                               "status:0x%x NPU status:%d unit:%d rif:0x%llx action: %s replaced successfully",
                                FIB_IP_ADDR_TO_STR(&(p_fh->key.ip_addr)),
                                hal_rt_mac_to_str (&p_fh->p_arp_info->mac_addr, p_buf, HAL_RT_MAX_BUFSZ),
                                p_fh->p_arp_info->state, p_fh->p_arp_info->if_index, p_fh->p_arp_info->arp_status,
@@ -324,10 +330,14 @@ dn_hal_route_err _hal_fib_host_add (uint32_t vrf_id, t_fib_nh *p_fh)
         }
         if (error_occured == true) {
             HAL_RT_LOG_ERR("HAL-RT-NDI", "Failed to add : host: %s mac_addr: %s, state: %d, port: %d "
-                           "status:0x%x NPU status:%d action: %d Err %d", FIB_IP_ADDR_TO_STR(&(p_fh->key.ip_addr)),
+                           "status:0x%x NPU status:%d unit:%d rif:0x%llx action: %s Err %d",
+                           FIB_IP_ADDR_TO_STR(&(p_fh->key.ip_addr)),
                            hal_rt_mac_to_str (&p_fh->p_arp_info->mac_addr, p_buf, HAL_RT_MAX_BUFSZ),
                            p_fh->p_arp_info->state, p_fh->p_arp_info->if_index, p_fh->p_arp_info->arp_status,
-                           p_fh->a_is_written [unit], action, rc);
+                           p_fh->a_is_written [unit], unit, nbr_entry.rif_id,
+                           ((action == NDI_ROUTE_PACKET_ACTION_FORWARD) ? "Forward" :
+                            ((action == NDI_ROUTE_PACKET_ACTION_DROP) ? "Drop" : "TrapToCPU")), rc);
+
 
             _hal_fib_host_del (vrf_id, p_fh);
             return DN_HAL_ROUTE_E_FAIL;

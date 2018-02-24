@@ -173,14 +173,14 @@ int hal_rt_vrf_init (void)
     vr_entry.flags |= NDI_VR_ATTR_SRC_MAC_ADDRESS;
 
     for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id ++) {
-
-        /* Create default VRF and other vrfs as per FIB_MAX_VRF */
-         if ((rc = ndi_route_vr_create(&vr_entry, &ndi_vr_id))!= STD_ERR_OK) {
-            HAL_RT_LOG_ERR( "HAL-RT", "%s ():VR creation failed",
-                         __FUNCTION__);
-            return STD_ERR(ROUTE, FAIL, rc);
+        if (vrf_id != FIB_MGMT_VRF) {
+            /* Create default VRF and other vrfs as per FIB_MAX_VRF */
+            if ((rc = ndi_route_vr_create(&vr_entry, &ndi_vr_id))!= STD_ERR_OK) {
+                HAL_RT_LOG_ERR( "HAL-RT", "%s ():VR creation failed",
+                                __FUNCTION__);
+                return STD_ERR(ROUTE, FAIL, rc);
+            }
         }
-
         if ((p_vrf = FIB_VRF_MEM_MALLOC ()) == NULL) {
             HAL_RT_LOG_DEBUG("HAL-RT", "Memory alloc failed.Vrf_id: %d", vrf_id);
             continue;
@@ -199,6 +199,8 @@ int hal_rt_vrf_init (void)
             p_vrf_info = hal_rt_access_fib_vrf_info(vrf_id, af_index);
 
             p_vrf_info->vrf_id = vrf_id;
+            hal_rt_get_vrf_name(vrf_id, (char*)p_vrf_info->vrf_name);
+            HAL_RT_LOG_INFO("HAL-RT-VRF", "Vrf_id: %d name:%s", vrf_id, p_vrf_info->vrf_name);
             p_vrf_info->af_index = af_index;
 
             /* Create the DR Tree */
@@ -359,7 +361,7 @@ int hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac_config_
                 rif_entry.rif_type = NDI_RIF_TYPE_VLAN;
                 rif_entry.attachment.vlan_id = intf_ctrl.vlan_id;
             } else {
-                HAL_RT_LOG_ERR("HAL-RT", "Invalid RIF entry creation ignored for rif-id:%d intf:%s(%d) type:%d",
+                HAL_RT_LOG_ERR("HAL-RT", "Invalid RIF entry creation ignored for rif-id:0x%llx intf:%s(%d) type:%d",
                                rif_id, intf_ctrl.if_name, intf_ctrl.if_index, intf_ctrl.int_type);
                 return 0;
             }
@@ -373,6 +375,9 @@ int hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac_config_
                 return (0);
             } else {
                 p_status->rif_obj_id = rif_id;
+
+                HAL_RT_LOG_INFO ("HAL-RT-RIF", "Peer-routing RIF entry created successfully: 0x%llx for if_index %d",
+                                 rif_id, intf_ctrl.if_index);
             }
         }
 
@@ -402,6 +407,9 @@ int hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac_config_
                                vrf_id, p_status->if_name,
                                hal_rt_mac_to_str(&p_status->mac, p_buf, HAL_RT_MAX_BUFSZ));
                 return (STD_ERR(ROUTE, PARAM, 0));
+            } else {
+                HAL_RT_LOG_INFO ("HAL-RT-RIF", "Peer-routing RIF entry deleted successfully: 0x%llx for if_name %s",
+                                 cur_mac_info.rif_obj_id, p_status->if_name);
             }
         }
         nas_rt_peer_mac_db_del(p_status);
@@ -480,6 +488,10 @@ int hal_rt_default_link_local_route_init (void)
     HAL_RT_LOG_DEBUG("HAL-RT", "Init Default Link Local Route");
 
     for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id ++) {
+        /* Dont create default LLA for mgmt. VRF */
+        if (vrf_id == FIB_MGMT_VRF) {
+            continue;
+        }
         fib_add_default_link_local_route (vrf_id);
     }
 

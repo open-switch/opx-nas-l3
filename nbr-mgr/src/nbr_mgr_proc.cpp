@@ -1006,9 +1006,11 @@ bool nbr_data::handle_fdb_change(nbr_mgr_evt_type_t evt, unsigned long status) c
     if ((evt == NBR_MGR_NBR_DEL) || (status & NBR_MGR_NUD_STALE)) {
         /* If the neighbor is dynamic, refresh the nbr on MAC delete
          * On MAC entry status STALE, refresh the nbr in order to refresh the MAC.
-         * If nbr is already in FAILED state, then no need to refresh nbr when MAC
+         * If nbr is already in INCOMPLETE/FAILED state, then no need to refresh nbr when MAC
          * is deleted or becomes stale */
-        if (!(m_status & NBR_MGR_NUD_PERMANENT) && !(m_status & NBR_MGR_NUD_FAILED)) {
+        if (!(m_status & NBR_MGR_NUD_PERMANENT) &&
+            !(m_status & NBR_MGR_NUD_FAILED) &&
+            !(m_status & NBR_MGR_NUD_INCOMPLETE)) {
             m_flags |= NBR_MGR_NBR_REFRESH;
             return trigger_refresh();
         }

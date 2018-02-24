@@ -258,6 +258,7 @@ typedef struct _t_fib_vrf_info {
     std_radix_version_t dr_ha_max_radix_ver;
     std_radix_version_t nh_ha_max_radix_ver;
     t_fib_route_summary route_summary;
+    uint32_t            event_filter_info;
 } t_fib_vrf_info;
 
 typedef struct _t_fib_vrf_cntrs {
@@ -364,6 +365,8 @@ typedef struct {
     int admin_status;
     bool is_op_del;
     hal_mac_addr_t mac_addr;
+    unsigned long  vrf_id;
+    char if_name[HAL_IF_NAME_SZ]; /* interface name */
 } t_fib_intf_entry;
 
 /* IP unreachable msg to be generated
@@ -404,9 +407,13 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf);
 /* Common Data Structures */
 #define FIB_DEFAULT_VRF                0
 #define FIB_DEFAULT_VRF_NAME           "default"
+#define FIB_MGMT_VRF_NAME              "management"
 #define FIB_MIN_VRF                    0
-#define FIB_MAX_VRF                    1
+#define FIB_MAX_VRF                    2
+#define FIB_MGMT_VRF                   1
 #define FIB_IS_VRF_ID_VALID(_vrf_id)   ((_vrf_id) < FIB_MAX_VRF)
+#define FIB_IS_MGMT_ROUTE(_vrf_id, _dr)   (((_vrf_id) == FIB_MGMT_VRF) || ((_dr)->is_mgmt_route))
+#define FIB_IS_MGMT_NH(_vrf_id, _nh)   (((_vrf_id) == FIB_MGMT_VRF) || ((_nh)->is_mgmt_nh))
 
 #define FIB_MASK_V6_BYTES(_p_ip_addr1, _p_ip_addr2, _p_mask, _index)           \
         ((((_p_ip_addr1)->u.v6_addr[(_index)] &                                \
@@ -474,6 +481,9 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf);
 
 #define FIB_IS_VRF_CREATED(_vrf_id, _af_index)                               \
         (((hal_rt_access_fib_vrf_info(_vrf_id, _af_index))->is_vrf_created) == true)
+
+#define FIB_IS_EVENT_FILTER_ENABLED(_vrf_id, _af_index, event_filter)  \
+        (((hal_rt_access_fib_vrf_info(_vrf_id, _af_index))->event_filter_info) & event_filter)
 
 #define FIB_GET_ROUTE_SUMMARY(_vrf_id, _af_index)                            \
         (&((hal_rt_access_fib_vrf_info(_vrf_id, _af_index))->route_summary))
@@ -640,6 +650,15 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf);
 
 #define FIB_GET_CNTRS_CATCH_ALL_ENTRIES(_vrf_id, _af_index)                  \
         ((hal_rt_access_fib_vrf_cntrs(_vrf_id, _af_index))->num_catch_all_intf_entries)
+
+#define FIB_EVENT_FILTER_SET(_vrf_id, _af_index, event_filter)  \
+        (((hal_rt_access_fib_vrf_info(_vrf_id, _af_index))->event_filter_info) |= event_filter)
+
+#define FIB_EVENT_FILTER_RESET(_vrf_id, _af_index, event_filter)  \
+        (((hal_rt_access_fib_vrf_info(_vrf_id, _af_index))->event_filter_info) &= ~event_filter)
+
+#define FIB_GET_VRF_NAME(_vrf_id, _af_index)                   \
+        ((hal_rt_access_fib_vrf_info(_vrf_id, _af_index))->vrf_name)
 
 #define HAL_RT_LOG_EMERG(ID, ...) EV_LOGGING(ROUTE, EMERG, ID, __VA_ARGS__)
 #define HAL_RT_LOG_ALERT(ID, ...) EV_LOGGING(ROUTE, ALERT, ID, __VA_ARGS__)

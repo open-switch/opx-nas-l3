@@ -19,6 +19,7 @@
  */
 #include "hal_rt_util.h"
 #include "nas_rt_api.h"
+#include "std_utils.h"
 
 const char *hal_rt_intf_mode_to_str (uint32_t mode) {
 
@@ -421,8 +422,8 @@ int fib_process_link_local_address_del_on_intf_event (t_fib_intf *p_intf, t_fib_
                          FIB_IP_ADDR_TO_STR (&p_del_dr->key.prefix),
                          p_del_dr->prefix_len, p_del_dr->num_ipv6_link_local,
                          p_del_dr->num_ipv6_rif_link_local, p_del_dr->rt_type);
-
-        p_del_dr->num_ipv6_rif_link_local--;
+        if (p_del_dr->num_ipv6_rif_link_local)
+            p_del_dr->num_ipv6_rif_link_local--;
 
         /* Don't delete the LLA route from NDI if the DR's
          * num_ipv6_link_local is > 1,
@@ -506,9 +507,11 @@ int fib_handle_intf_admin_status_change(int vrf_id, int af_index, t_fib_intf_ent
 
             return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
         }
+        safestrncpy(p_intf->if_name, p_intf_chg->if_name, sizeof(p_intf->if_name));
     }
-    HAL_RT_LOG_INFO ("HAL-RT-DR", "Admin status if_index: %d, vrf_id: %d, af_index: %d admin_up:%d is_del:%d p_intf:%p",
-                     p_intf_chg->if_index, vrf_id, af_index, p_intf_chg->admin_status, p_intf_chg->is_op_del, p_intf);
+    HAL_RT_LOG_INFO ("HAL-RT-DR", "Admin status if_index: %d, vrf_id: %d, af_index: %d admin_up:%d "
+                     "is_del:%d name:%s p_intf:%p", p_intf_chg->if_index, vrf_id, af_index,
+                     p_intf_chg->admin_status, p_intf_chg->is_op_del, p_intf_chg->if_name, p_intf);
     /* if interface notification is received for the first time,
      * just update the admin status from kernel.
      */
@@ -704,3 +707,53 @@ t_std_error fib_process_intf_mode_change (int vrf_id, int af_index, uint32_t if_
 
     return STD_ERR_OK;
 }
+
+int fib_process_route_del_on_mgmt_ip_del_event (hal_ifindex_t if_index, hal_vrf_id_t vrf_id,
+                                                t_fib_ip_addr *prefix, uint8_t prefix_len) {
+    t_fib_nh        *p_nh = NULL;
+    t_fib_nh_holder nh_holder;
+    t_fib_nh_dep_dr   *p_nh_dep_dr = NULL;
+    t_fib_intf *p_intf = NULL;
+    t_fib_ip_addr mask;
+    t_fib_dr *p_dr = NULL;
+
+    HAL_RT_LOG_INFO("MGMT-RT-DEL", "intf:%d vrf_id: %d, prefix: %s, prefix_len: %d",
+                   if_index, vrf_id, FIB_IP_ADDR_TO_STR (prefix), prefix_len);
+    p_intf = fib_get_intf (if_index, vrf_id, prefix->af_index);
+    if (p_intf == NULL) {
+        HAL_RT_LOG_ERR("MGMT-RT-DEL", "intf:%d not present for vrf_id: %d, prefix: %s, prefix_len: %d",
+                       if_index, vrf_id, FIB_IP_ADDR_TO_STR (prefix), prefix_len);
+        return STD_ERR_OK;
+    }
+    memset (&mask, 0, sizeof (t_fib_ip_addr));
+    if (nas_rt_get_mask (prefix->af_index, prefix_len, &mask) == false) {
+        HAL_RT_LOG_ERR("MGMT-RT-DEL", "intf:%d vrf_id: %d, prefix: %s, prefix_len: %d get mask failed",
+                       if_index, vrf_id, FIB_IP_ADDR_TO_STR (prefix), prefix_len);
+        return STD_ERR_OK;
+    }
+
+    /* Loop for all the FH and associated routes for deletion */
+    FIB_FOR_EACH_FH_FROM_INTF (p_intf, p_nh, nh_holder) {
+        if (FIB_IS_NH_ZERO(p_nh)) {
+            HAL_RT_LOG_INFO("MGMT-RT-DEL", "intf:%d vrf_id: %d, prefix: %s, prefix_len: %d NH zero",
+                           if_index, vrf_id, FIB_IP_ADDR_TO_STR (prefix), prefix_len);
+            continue;
+        }
+        if (FIB_IS_IP_ADDR_IN_PREFIX(&p_nh->key.ip_addr, &mask, prefix)) {
+            p_nh_dep_dr = fib_get_first_nh_dep_dr (p_nh);
+            while ((p_nh_dep_dr != NULL) && (p_nh_dep_dr->p_dr != NULL)) {
+                HAL_RT_LOG_INFO("MGMT-RT-DEL", "intf:%d vrf_id: %d, prefix: %s, prefix_len: %d NH:%s",
+                               if_index, vrf_id, FIB_IP_ADDR_TO_STR (&p_nh_dep_dr->p_dr->key.prefix),
+                               p_nh_dep_dr->p_dr->prefix_len, FIB_IP_ADDR_TO_STR(&p_nh->key.ip_addr));
+                p_nh_dep_dr->p_dr->status_flag |= FIB_DR_STATUS_DEL;
+                p_dr = p_nh_dep_dr->p_dr;
+                p_nh_dep_dr = fib_get_next_nh_dep_dr (p_nh, p_nh_dep_dr->key.vrf_id,
+                                                      &p_nh_dep_dr->key.dr_key.prefix,
+                                                      p_nh_dep_dr->prefix_len);
+                fib_proc_dr_del (p_dr);
+            }
+        }
+    }
+    return STD_ERR_OK;
+}
+

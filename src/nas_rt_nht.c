@@ -290,18 +290,6 @@ t_fib_nht *fib_get_next_nht (uint32_t vrf_id, t_fib_ip_addr *p_dest_addr) {
     return p_nht;
 }
 
-static int nas_rt_get_mask (uint8_t af_index, uint8_t prefix_len, t_fib_ip_addr *mask) {
-    if (!FIB_IS_AFINDEX_VALID(af_index)) {
-        return false;
-    }
-    std_ip_get_mask_from_prefix_len (af_index, prefix_len, mask);
-    /* @@TODO the above function is not giving the mask for IPv4 in the correct order, fix it */
-    if (STD_IP_IS_AFINDEX_V4 (af_index)) {
-        mask->u.v4_addr = htonl(mask->u.v4_addr);
-    }
-    return true;
-}
-
 /* Active prefix is down, find the next best prefix for the all NHTs or find the best nexthop/Route
  * for the given p_fib_nht if not NULL */
 int nas_rt_find_next_best_dr_for_nht(t_fib_nht *p_fib_nht, int vrf_id, t_fib_ip_addr *dest_addr, uint8_t prefix_len,
@@ -340,6 +328,10 @@ int nas_rt_find_next_best_dr_for_nht(t_fib_nht *p_fib_nht, int vrf_id, t_fib_ip_
                          " nh_handle:%d nh-resolved:%d", vrf_id, FIB_IP_ADDR_TO_STR (&p_best_dr->key.prefix),
                          p_best_dr->prefix_len, FIB_IP_ADDR_TO_STR(dest_addr), prefix_len, p_best_dr->nh_handle,
                          p_best_dr->is_nh_resolved);
+        if (p_best_dr->is_mgmt_route) {
+            p_best_dr = fib_get_next_best_fit_dr(vrf_id, &p_best_dr->key.prefix);
+            continue;
+        }
         if ((is_multiple_nht == false) &&
             (!(STD_IP_IS_ADDR_ZERO(&p_best_dr->key.prefix))) &&
             ((p_nh = FIB_GET_FIRST_NH_FROM_DR(p_best_dr, nh_holder)) != NULL) &&
@@ -358,7 +350,7 @@ int nas_rt_find_next_best_dr_for_nht(t_fib_nht *p_fib_nht, int vrf_id, t_fib_ip_
         if (is_conn_route_found) {
             /* There is a connected route to reach the NHT nexthop, resolve the NH thru Nbr-Mgr */
             fib_proc_nh_add (vrf_id, dest_addr, p_nh->key.if_index,
-                             FIB_NH_OWNER_TYPE_CLIENT, 0);
+                             FIB_NH_OWNER_TYPE_CLIENT, 0, false);
         }
         return STD_ERR_OK;
     }
@@ -563,9 +555,15 @@ int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
     uint8_t prefix_len = 0;
 
     if (p_dr) {
+        if (p_dr->is_mgmt_route) {
+            return STD_ERR_OK;
+        }
         /* no NHT entries configured, so simply return */
         if (FIB_GET_CNTRS_NHT_ENTRIES (p_dr->vrf_id, p_dr->key.prefix.af_index) == 0) return STD_ERR_OK;
     } else if (p_nh) {
+        if (p_nh->is_mgmt_nh) {
+            return STD_ERR_OK;
+        }
         /* no NHT entries configured, so simply return */
         if (FIB_GET_CNTRS_NHT_ENTRIES (p_nh->vrf_id, p_nh->key.ip_addr.af_index) == 0) return STD_ERR_OK;
     }
@@ -648,7 +646,7 @@ int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
             if (is_add) {
                 if (is_conn_route) {
                     fib_proc_nh_add (p_fib_nht->vrf_id, &p_fib_nht->key.dest_addr,
-                                     p_fh->key.if_index, FIB_NH_OWNER_TYPE_CLIENT, 0);
+                                     p_fh->key.if_index, FIB_NH_OWNER_TYPE_CLIENT, 0, false);
                     /* Check if this Route is better match for NHT(s) */
                 } else if ((!(FIB_IS_AFINDEX_VALID (p_fib_nht->fib_match_dest_addr.af_index)) &&
                             (STD_IP_IS_ADDR_ZERO(&p_fib_nht->fib_match_dest_addr))) ||
@@ -861,7 +859,8 @@ int nas_rt_handle_nht (t_fib_nht *p_nht_info, bool is_add) {
      * if NH is not present or NH address is different from NHT address or
      * ARP is not resolved for that NH.
      */
-    if ((p_nh == NULL) || (memcmp(&p_nh->key.ip_addr, &p_nht->key.dest_addr, sizeof(t_fib_ip_addr)))) {
+    if ((p_nh == NULL) || (p_nh->is_mgmt_nh) ||
+        (memcmp(&p_nh->key.ip_addr, &p_nht->key.dest_addr, sizeof(t_fib_ip_addr)))) {
 
         HAL_RT_LOG_DEBUG("HAL-RT-NHT", "vrf_id: %d, dest_addr: %s is_add:%d "
                          "exact resolved fit not found in NH table", p_nht->vrf_id,
@@ -886,7 +885,7 @@ int nas_rt_handle_nht (t_fib_nht *p_nht_info, bool is_add) {
                          p_nh->next_hop_id, p_nh->rtm_ref_count);
 
         fib_proc_nh_add (p_nht_info->vrf_id, &p_nht_info->key.dest_addr,
-                         p_nh->key.if_index, FIB_NH_OWNER_TYPE_CLIENT, 0);
+                         p_nh->key.if_index, FIB_NH_OWNER_TYPE_CLIENT, 0, false);
         if (p_nh->p_arp_info->state != FIB_ARP_RESOLVED) {
             return STD_ERR_OK;
         }

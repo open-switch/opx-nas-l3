@@ -237,7 +237,8 @@ int fib_destroy_intf_tree (void)
 }
 
 t_fib_nh *fib_proc_nh_add (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr,
-                      uint32_t if_index, t_fib_nh_owner_type owner_type, uint32_t owner_value)
+                      uint32_t if_index, t_fib_nh_owner_type owner_type, uint32_t owner_value,
+                      bool is_mgmt_nh)
 {
     t_fib_nh    *p_nh = NULL;
     bool   resolve_nh = false;
@@ -277,6 +278,7 @@ t_fib_nh *fib_proc_nh_add (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr,
         }
 
         p_nh->vrf_id = vrf_id;
+        p_nh->is_mgmt_nh = is_mgmt_nh;
 
         fib_create_nh_dep_dr_tree (p_nh);
 
@@ -387,7 +389,7 @@ t_fib_nh *fib_proc_nh_add (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr,
         fib_resolve_connected_tunnel_nh (vrf_id, p_nh);
     }
 
-    if ((!(STD_IP_IS_ADDR_ZERO(&p_nh->key.ip_addr))) &&
+    if ((is_mgmt_nh== false) && (!(STD_IP_IS_ADDR_ZERO(&p_nh->key.ip_addr))) &&
         (((owner_type == FIB_NH_OWNER_TYPE_RTM) && (!FIB_IS_NH_OWNER_CLIENT(p_nh))
           && (p_nh->rtm_ref_count == 1)) ||
          ((owner_type == FIB_NH_OWNER_TYPE_CLIENT) && (p_nh->rtm_ref_count == 0))))
@@ -469,7 +471,7 @@ int fib_proc_nh_delete (t_fib_nh *p_nh, t_fib_nh_owner_type owner_type,
         FIB_RESET_NH_OWNER (p_nh, owner_type, owner_value);
     }
 
-    if ((!(STD_IP_IS_ADDR_ZERO(&p_nh->key.ip_addr))) &&
+    if ((p_nh->is_mgmt_nh == false) && (!(STD_IP_IS_ADDR_ZERO(&p_nh->key.ip_addr))) &&
         (((owner_type == FIB_NH_OWNER_TYPE_RTM) && (!FIB_IS_NH_OWNER_CLIENT(p_nh))
           && (p_nh->rtm_ref_count == 0)) ||
          ((owner_type == FIB_NH_OWNER_TYPE_CLIENT) && (p_nh->rtm_ref_count == 0))))
@@ -541,19 +543,18 @@ int fib_proc_nh_delete (t_fib_nh *p_nh, t_fib_nh_owner_type owner_type,
 
     HAL_RT_LOG_DEBUG("HAL-RT-NH",
                  " vrf_id: %d, ip_addr: %s, if_index: %d, "
-                 "owner_flag: 0x%x, status_flag: 0x%x, resolve_nh: %d ",
+                 "owner_flag: 0x%x, status_flag: 0x%x, resolve_nh:%d mgmt_nh:%d",
                  p_nh->vrf_id, FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr),
-                 p_nh->key.if_index, p_nh->owner_flag, p_nh->status_flag, resolve_nh);
+                 p_nh->key.if_index, p_nh->owner_flag, p_nh->status_flag,
+                 resolve_nh, p_nh->is_mgmt_nh);
 
-    if ((resolve_nh == true))
-    {
+    if (resolve_nh == true) {
         fib_mark_nh_for_resolution (p_nh);
         /*
          * NH thread need not be resumed here. Let the DR thread continue the execution
          * and once DRs are updated with the new NHs, the NH thread can be resumed to continue
          * with the deletion of old NH.
          */
-        //fib_resume_nh_walker_thread(af_index);
     }
 
     return STD_ERR_OK;
@@ -1956,7 +1957,7 @@ t_fib_intf *fib_add_intf (uint32_t if_index, uint32_t vrf_id, uint8_t af_index)
     p_intf->key.if_index = if_index;
     p_intf->key.vrf_id   = vrf_id;
     p_intf->key.af_index = af_index;
-    if (hal_rt_get_intf_name(if_index, p_intf->if_name) != STD_ERR_OK) {
+    if (hal_rt_get_intf_name(vrf_id, if_index, p_intf->if_name) != STD_ERR_OK) {
         HAL_RT_LOG_ERR ("HAL-RT-DR", "Intf name get failed for if_index:%d ",
                             if_index);
     }
@@ -2616,7 +2617,8 @@ int fib_nh_walker_call_back (std_radical_head_t *p_rt_head, va_list ap)
         /* First Hop */
         if (FIB_IS_NH_FH (p_nh))
         {
-            if (is_host_ready == true)
+            if ((!FIB_IS_MGMT_NH(p_nh->vrf_id, p_nh)) &&
+                (is_host_ready == true))
             {
                 if (FIB_IS_FH_PENDING (p_nh))
                 {
