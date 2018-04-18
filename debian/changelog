@@ -1,3 +1,9 @@
+opx-nas-l3 (3.2.0+opx3) unstable; urgency=medium
+
+  * Bugfix: Ignore del message if dr nh count is 1 and incoming message hop count is more than 1
+
+ -- Dell EMC <ops-dev@lists.openswitch.net>  Wed, 18 Apr 2018 15:00:00 -0800
+
 opx-nas-l3 (3.2.0+opx2) unstable; urgency=medium
 
   * Update: Modified code to not trigger neighbor refresh on MAC delete/stale notification if the 

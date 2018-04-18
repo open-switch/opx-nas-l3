@@ -884,6 +884,28 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
             nas_l3_unlock();
             return STD_ERR_OK;
         }
+    } else {
+        /* during interface admin down or delete scenarios,
+         * Kernel will send route delete notifications for IPv6,
+         * but not for IPv4. So in such cases, for IPv6 route delete
+         * there might be duplicate events one from Kernel and one from
+         * RTM event published locally from CPS config flow. Due to that
+         * sometimes there is a possibility that this NH would have been
+         * already deleted from this Route, but both NH and Route might
+         * still exists. In such cases, DR nh count will be less than
+         * the incoming hop_count. Ignore processing in such cases.
+         */
+        if ((((t_fib_route_entry  *)p_rtm_fib_cmd)->hop_count > 1) &&
+            (p_dr->num_nh == 1)) {
+            HAL_RT_LOG_DEBUG ("HAL-RT-DR-DEL",
+                 "vrf_id:%d, prefix:%s, prefix_len:%d, proto:%d curr-nh-cnt:%d nh-cnt:%d",
+                 dr_msg_info.vrf_id,
+                 FIB_IP_ADDR_TO_STR (&dr_msg_info.prefix), dr_msg_info.prefix_len,
+                 dr_msg_info.proto, p_dr->num_nh , ((t_fib_route_entry  *)p_rtm_fib_cmd)->hop_count);
+
+            nas_l3_unlock();
+            return STD_ERR_OK;
+        }
     }
     // TODO This needs to revisited to handle the DR del in the DR walker
     // fib_mark_dr_for_resolution (p_dr);
