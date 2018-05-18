@@ -7,17 +7,24 @@ pyutils_SCRIPTS = scripts/lib/python/*.py
 
 lib_LTLIBRARIES=libopx_hal_routing.la
 
+COMMON_HARDEN_FLAGS=-fexceptions -fstack-protector-strong -fstack-protector-all -D_FORTIFY_SOURCE=2 -Wall -Wformat -Wformat-security -Werror
+C_HARDEN_FLAGS=-Wimplicit-function-declaration
+LD_HARDEN_FLAGS=-Wl,-z,defs -Wl,-z,now -Wl,-z,relo
+
+
 libopx_hal_routing_la_SOURCES=src/hal_rt_arp.c src/hal_rt_host.c  src/hal_rt_mpath.c src/hal_rt_nh.c \
                               src/nas_rt_api.c src/nas_rt_nht.c src/hal_rt_debug.c  src/hal_rt_main.c \
                               src/hal_rt_mpath_grp.c src/hal_rt_route.c src/nas_rt_cps.c src/hal_rt_dr.c \
                               src/hal_rt_mem.c src/hal_rt_mpath_util.c src/hal_rt_util.cpp \
                               src/nas_rt_mac.cpp src/hal_rt_intf_util.c
 
-libopx_hal_routing_la_CPPFLAGS= -D_FILE_OFFSET_BITS=64 -I$(top_srcdir)/inc/opx -I$(includedir)/opx
+libopx_hal_routing_la_CPPFLAGS= -D_FILE_OFFSET_BITS=64 -I$(top_srcdir)/inc/opx -I$(includedir)/opx $(COMMON_HARDEN_FLAGS) -fPIC
 
 libopx_hal_routing_la_CXXFLAGS=-std=c++11
 
-libopx_hal_routing_la_LDFLAGS=-shared -version-info 1:1:0
+libopx_hal_routing_la_CFLAGS=$(C_HARDEN_FLAGS)
+
+libopx_hal_routing_la_LDFLAGS=-shared -version-info 1:1:0 $(LD_HARDEN_FLAGS)
 
 libopx_hal_routing_la_LIBADD=-lopx_nas_linux -lopx_nas_common -lopx_common -lopx_nas_ndi -lopx_cps_api_common -lopx_logging -lcrypto
 
@@ -32,7 +39,9 @@ base_nbr_mgr_svc_SOURCES+=nbr-mgr/src/nbr_mgr_nl_evt.cpp nbr-mgr/src/nbr_mgr_rsl
 
 base_nbr_mgr_svc_LDADD=-lopx_nas_linux -lopx_common -lopx_logging -lopx_cps_api_common -lsystemd
 
-base_nbr_mgr_svc_CPPFLAGS=-I$(top_srcdir)/inc/opx -I$(top_srcdir)/inc/opx/nbr-mgr -I$(includedir)/opx 
+base_nbr_mgr_svc_CPPFLAGS=-I$(top_srcdir)/inc/opx -I$(top_srcdir)/inc/opx/nbr-mgr -I$(includedir)/opx $(COMMON_HARDEN_FLAGS)
+base_nbr_mgr_svc_CFLAGS=$(C_HARDEN_FLAGS)
+base_nbr_mgr_svc_LDFLAGS=$(LD_HARDEN_FLAGS)
 
 systemdconfdir=/lib/systemd/system
 systemdconf_DATA = scripts/init/*.service
