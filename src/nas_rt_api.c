@@ -409,6 +409,40 @@ static cps_api_object_t nas_intf_ip_unreach_info_to_cps_object(t_fib_intf *p_int
     return obj;
 }
 
+static cps_api_object_t nas_intf_ip_redirects_info_to_cps_object(t_fib_intf *p_intf){
+
+    if(p_intf == NULL){
+        HAL_RT_LOG_ERR("HAL-RT-API","Null Intf entry pointer passed to convert it to cps object");
+        return NULL;
+    }
+
+    cps_api_object_t obj = cps_api_object_create();
+    if(obj == NULL){
+        HAL_RT_LOG_ERR("HAL-RT-API","Failed to allocate memory to cps object");
+        return NULL;
+    }
+
+    cps_api_key_t key;
+    cps_api_key_from_attr_with_qual(&key, BASE_ROUTE_IP_REDIRECTS_CONFIG_OBJ,
+                                    cps_api_qualifier_TARGET);
+    cps_api_object_set_key(obj,&key);
+
+    char  vrf_name[HAL_IF_NAME_SZ];
+    memset (vrf_name,0,sizeof(vrf_name));
+
+    if (!hal_rt_get_vrf_name (p_intf->key.vrf_id, vrf_name)) {
+        HAL_RT_LOG_ERR("HAL-RT-API","Failed to retrieve vrf_name for vrf_id:%d", p_intf->key.vrf_id);
+        return NULL;
+    }
+
+    cps_api_set_key_data (obj, BASE_ROUTE_IP_REDIRECTS_CONFIG_VRF_NAME, cps_api_object_ATTR_T_BIN,
+                          vrf_name, (strlen(vrf_name)+1));
+    cps_api_set_key_data (obj, BASE_ROUTE_IP_REDIRECTS_CONFIG_IFNAME, cps_api_object_ATTR_T_BIN,
+                          p_intf->if_name, (strlen(p_intf->if_name)+1));
+    return obj;
+}
+
+
 static cps_api_object_t nas_route_event_filter_info_to_cps_object(char *vrf_name, uint8_t type,
                                                                   uint8_t enable) {
 
@@ -438,9 +472,14 @@ static cps_api_object_t nas_route_event_filter_info_to_cps_object(char *vrf_name
 
 cps_api_return_code_t nas_route_get_all_event_filter_info(cps_api_object_list_t list) {
     hal_vrf_id_t    vrf_id = 0;
+    t_fib_vrf      *p_vrf = NULL;
     t_fib_vrf_info *p_vrf_info = NULL;
 
     for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id ++) {
+        p_vrf = hal_rt_access_fib_vrf(vrf_id);
+        if (p_vrf == NULL) {
+            continue;
+        }
         p_vrf_info = hal_rt_access_fib_vrf_info(vrf_id, HAL_RT_V4_AFINDEX);
         cps_api_object_t obj =
             nas_route_event_filter_info_to_cps_object((char*)p_vrf_info->vrf_name,
@@ -510,6 +549,52 @@ cps_api_return_code_t nas_route_get_all_ip_unreach_info(cps_api_object_list_t li
     return cps_api_ret_code_OK;
 }
 
+cps_api_return_code_t nas_route_get_all_ip_redirects_info (cps_api_object_list_t list,
+                                                           hal_vrf_id_t vrf_id, char *if_name) {
+    t_fib_intf *p_intf = NULL;
+    uint32_t    if_index = 0;
+
+    if (if_name) {
+        hal_vrf_id_t intf_vrf_id = 0;
+        if (hal_rt_get_if_index_from_if_name (if_name, &intf_vrf_id, &if_index) != STD_ERR_OK) {
+            return cps_api_ret_code_OK;
+        }
+        /* User given vrf-id is not matching with the interface associated VRF-id */
+        if (vrf_id != intf_vrf_id) {
+            return cps_api_ret_code_OK;
+        }
+        /* retrieve the info for IPv4 only for now */
+        p_intf = fib_get_intf (if_index, vrf_id, HAL_RT_V4_AFINDEX);
+    } else {
+        p_intf = fib_get_first_intf();
+    }
+
+    while (p_intf != NULL) {
+        /* retrieve the info for IPv4 only for now */
+        if ((p_intf->is_ip_redirects_set == true) &&
+            (p_intf->key.af_index == HAL_RT_V4_AFINDEX) &&
+            (p_intf->key.vrf_id == vrf_id) &&
+            (!if_name || (strncmp(if_name, p_intf->if_name, strlen(if_name)) == 0))) {
+
+            cps_api_object_t obj = nas_intf_ip_redirects_info_to_cps_object (p_intf);
+
+            if(obj != NULL){
+                if (!cps_api_object_list_append(list,obj)) {
+
+                    cps_api_object_delete(obj);
+                    HAL_RT_LOG_ERR("HAL-RT-API","Failed to append object to object list");
+                    return cps_api_ret_code_ERR;
+                }
+                if (if_name)
+                    break;
+            }
+        }
+        p_intf = fib_get_next_intf (p_intf->key.if_index, p_intf->key.vrf_id, p_intf->key.af_index);
+    }
+    return cps_api_ret_code_OK;
+}
+
+
 static cps_api_object_t nas_route_info_to_cps_object(cps_api_operation_types_t op, t_fib_dr *entry,
                                                      bool is_pub){
     t_fib_nh       *p_nh = NULL;
@@ -535,7 +620,6 @@ static cps_api_object_t nas_route_info_to_cps_object(cps_api_operation_types_t o
         cps_api_object_set_type_operation(&key, op);
     }
     cps_api_object_set_key(obj,&key);
-    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_VRF_ID,entry->vrf_id);
     cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME,
                             FIB_GET_VRF_NAME(entry->vrf_id, entry->key.prefix.af_index),
                             strlen((const char*)FIB_GET_VRF_NAME(entry->vrf_id, entry->key.prefix.af_index))+1);
@@ -556,11 +640,13 @@ static cps_api_object_t nas_route_info_to_cps_object(cps_api_operation_types_t o
                 BASE_ROUTE_OBJ_ENTRY_SPECIAL_NEXT_HOP,
                 hal_rt_type_to_cps_obj_type(entry->rt_type));
     }
-
     FIB_FOR_EACH_NH_FROM_DR (entry, p_nh, nh_holder1)
     {
         cps_api_attr_id_t parent_list[3];
 
+        cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_ENTRY_NH_VRF_NAME,
+                            FIB_GET_VRF_NAME(p_nh->vrf_id, entry->key.prefix.af_index),
+                            strlen((const char*)FIB_GET_VRF_NAME(p_nh->vrf_id, entry->key.prefix.af_index))+1);
         parent_list[0] = BASE_ROUTE_OBJ_ENTRY_NH_LIST;
         parent_list[1] = nh_itr;
         parent_list[2] = BASE_ROUTE_OBJ_ENTRY_NH_LIST_NH_ADDR;
@@ -653,7 +739,6 @@ cps_api_object_t nas_route_nh_to_arp_cps_object(t_fib_nh *entry, cps_api_operati
     }
     cps_api_object_attr_add(obj, BASE_ROUTE_OBJ_NBR_MAC_ADDR, (const void *)mac_addr,
                             strlen(mac_addr)+1);
-    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_VRF_ID,entry->vrf_id);
     cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME,
                             FIB_GET_VRF_NAME(entry->vrf_id, entry->key.ip_addr.af_index),
                             strlen((const char*)FIB_GET_VRF_NAME(entry->vrf_id, entry->key.ip_addr.af_index))+1);
@@ -710,10 +795,51 @@ cps_api_object_t nas_route_nh_to_arp_cps_object(t_fib_nh *entry, cps_api_operati
     return obj;
 }
 
+static t_std_error nas_route_get_all_vrf_routes_info(cps_api_object_list_t list, uint32_t vrf_id_get,
+                                                     uint32_t af_index, bool is_specific_vrf_get) {
+    t_fib_dr *p_dr = NULL;
+    uint32_t vrf_id = (is_specific_vrf_get ? vrf_id_get : FIB_MIN_VRF);
+
+    for (; vrf_id < FIB_MAX_VRF; vrf_id++) {
+        if ((hal_rt_access_fib_vrf(vrf_id) == NULL) ||
+            (FIB_GET_VRF_INFO (vrf_id, af_index) == NULL)) {
+            if (is_specific_vrf_get) {
+                break;
+            }
+            continue;
+        }
+        p_dr = fib_get_first_dr(vrf_id, af_index);
+        while (p_dr != NULL){
+            cps_api_object_t obj = nas_route_info_to_cps_object(0, p_dr, false);
+            if(obj != NULL){
+                if (!cps_api_object_list_append(list,obj)) {
+                    cps_api_object_delete(obj);
+                    HAL_RT_LOG_ERR("HAL-RT-API","Failed to append object to object list");
+                    return STD_ERR(ROUTE,FAIL,0);
+                }
+            }
+
+            p_dr = fib_get_next_dr (vrf_id, &p_dr->key.prefix, p_dr->prefix_len);
+        }
+
+        if (is_specific_vrf_get) {
+            break;
+        }
+    }
+    return STD_ERR_OK;
+}
+
 t_std_error nas_route_get_all_route_info(cps_api_object_list_t list, uint32_t vrf_id, uint32_t af,
-                                         hal_ip_addr_t *p_prefix, uint32_t pref_len, bool is_specific_prefix_get) {
+                                         hal_ip_addr_t *p_prefix, uint32_t pref_len, bool is_specific_prefix_get,
+                                         bool is_specific_vrf_get) {
 
     t_fib_dr *p_dr = NULL;
+
+    if ((is_specific_vrf_get == false) && (is_specific_prefix_get == false)) {
+        return (nas_route_get_all_vrf_routes_info(list, vrf_id, af, false));
+    } else if ((is_specific_vrf_get) && (is_specific_prefix_get == false)) {
+        return (nas_route_get_all_vrf_routes_info(list, vrf_id, af, true));
+    }
 
     if (af >= FIB_MAX_AFINDEX)
     {
@@ -1016,9 +1142,10 @@ cps_api_object_t nas_route_nh_to_nbr_cps_object(t_fib_nh *entry, cps_api_operati
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_AF,entry->key.ip_addr.af_index);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_IFINDEX,entry->key.if_index);
 
-    HAL_RT_LOG_INFO("HAL-RT-NH-PUB", "op:%d Resolve ARP for VRF %d. Addr: %s, Interface: %d "
+    HAL_RT_LOG_INFO("HAL-RT-NH-PUB", "op:%d Resolve ARP for VRF %d(%s) Addr: %s, Interface: %d "
                    "route-cnt:%d nht-active:%d",
-                   op, entry->vrf_id, FIB_IP_ADDR_TO_STR (&entry->key.ip_addr),
+                   op, entry->vrf_id, FIB_GET_VRF_NAME(entry->vrf_id, entry->key.ip_addr.af_index),
+                   FIB_IP_ADDR_TO_STR (&entry->key.ip_addr),
                    entry->key.if_index, entry->rtm_ref_count, entry->is_nht_active);
     return obj;
 }
@@ -1191,6 +1318,10 @@ cps_api_return_code_t nas_route_handle_event_filter(cps_api_transaction_params_t
         return cps_api_ret_code_ERR;
     }
 
+    if (!(FIB_IS_VRF_ID_VALID (vrf_id))) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "Event filter - VRF:%d is not valid!", vrf_id);
+        return cps_api_ret_code_ERR;
+    }
     int32_t enable = false;
     if (enable_attr) {
         enable = cps_api_object_attr_data_uint(enable_attr);
@@ -1218,12 +1349,6 @@ cps_api_return_code_t nas_route_process_cps_ip_unreachables_msg(cps_api_transact
 
     cps_api_object_t obj = cps_api_object_list_get(param->change_list,ix);
 
-    cps_api_object_t cloned = cps_api_object_create();
-    if (!cloned) {
-        HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "CPS malloc error");
-        return cps_api_ret_code_ERR;
-    }
-
     cps_api_object_attr_t af_attr = cps_api_get_key_data(obj, BASE_ROUTE_IP_UNREACHABLES_CONFIG_AF);
     cps_api_object_attr_t if_name_attr = cps_api_get_key_data(obj, BASE_ROUTE_IP_UNREACHABLES_CONFIG_IFNAME);
     if ((af_attr == NULL) || (if_name_attr == NULL)) {
@@ -1243,11 +1368,19 @@ cps_api_return_code_t nas_route_process_cps_ip_unreachables_msg(cps_api_transact
     /* @@TODO We wont be able to get if-index from if-name
      * if interface does not exist the HAL INTF DB, explore solution. */
     uint32_t if_index = 0;
-    if (hal_rt_get_if_index_from_if_name(if_name, &if_index) != STD_ERR_OK) {
+    hal_vrf_id_t vrf_id = 0;
+    if (hal_rt_get_if_index_from_if_name(if_name, &vrf_id, &if_index) != STD_ERR_OK) {
         HAL_RT_LOG_ERR("NAS-RT-CPS", "Unable to get if-index from if-name:%s",
                        if_name);
         return cps_api_ret_code_ERR;
     }
+
+    cps_api_object_t cloned = cps_api_object_create();
+    if (!cloned) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "CPS malloc error");
+        return cps_api_ret_code_ERR;
+    }
+
     cps_api_object_clone(cloned,obj);
     cps_api_object_list_append(param->prev,cloned);
 
@@ -1262,6 +1395,61 @@ cps_api_return_code_t nas_route_process_cps_ip_unreachables_msg(cps_api_transact
                                           HAL_RT_V4_AFINDEX : HAL_RT_V6_AFINDEX);
         if (cps_api_object_type_operation(cps_api_object_key(obj)) == cps_api_oper_DELETE)
             p_msg->ip_unreach_cfg.is_op_del = true;
+
+        nas_rt_process_msg(p_msg);
+    }
+    return cps_api_ret_code_OK;
+}
+
+
+cps_api_return_code_t nas_route_process_cps_ip_redirects_msg(cps_api_transaction_params_t * param, size_t ix) {
+    cps_api_object_t obj = cps_api_object_list_get(param->change_list,ix);
+
+    cps_api_object_attr_t vrf_attr = cps_api_get_key_data(obj, BASE_ROUTE_IP_REDIRECTS_CONFIG_VRF_NAME);
+    cps_api_object_attr_t if_name_attr = cps_api_get_key_data(obj, BASE_ROUTE_IP_REDIRECTS_CONFIG_IFNAME);
+
+    if (if_name_attr == NULL) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS", "Missing interface name attribute");
+        return cps_api_ret_code_ERR;
+    }
+    char if_name[HAL_IF_NAME_SZ];
+    memset(if_name, '\0', sizeof(if_name));
+    safestrncpy(if_name, (const char *)cps_api_object_attr_data_bin(if_name_attr),
+                sizeof(if_name));
+
+    uint32_t if_index = 0;
+    hal_vrf_id_t vrf_id = 0;
+    if (hal_rt_get_if_index_from_if_name(if_name, &vrf_id, &if_index) != STD_ERR_OK) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS", "Unable to get if-index from if-name:%s",
+                       if_name);
+        return cps_api_ret_code_ERR;
+    }
+
+    cps_api_object_t cloned = cps_api_object_create();
+    if (!cloned) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "CPS malloc error");
+        return cps_api_ret_code_ERR;
+    }
+
+    cps_api_object_clone(cloned,obj);
+    cps_api_object_list_append(param->prev,cloned);
+
+    t_fib_msg *p_msg = hal_rt_alloc_mem_msg();
+    if (p_msg) {
+        memset(p_msg, 0, sizeof(t_fib_msg));
+        p_msg->type = FIB_MSG_TYPE_INTF_IP_REDIRECTS_CFG;
+        p_msg->ip_redirects_cfg .if_index = if_index;
+        safestrncpy(p_msg->ip_redirects_cfg.if_name, if_name,
+                    sizeof(p_msg->ip_redirects_cfg.if_name));
+        if (vrf_attr == NULL) {
+            safestrncpy(p_msg->ip_redirects_cfg.vrf_name, (const char *) FIB_DEFAULT_VRF_NAME,
+                        sizeof(p_msg->ip_redirects_cfg.vrf_name));
+        } else {
+            safestrncpy(p_msg->ip_redirects_cfg.vrf_name, (const char *) cps_api_object_attr_data_bin(vrf_attr),
+                        sizeof(p_msg->ip_redirects_cfg.vrf_name));
+        }
+        if (cps_api_object_type_operation(cps_api_object_key(obj)) == cps_api_oper_DELETE)
+            p_msg->ip_redirects_cfg.is_op_del = true;
 
         nas_rt_process_msg(p_msg);
     }

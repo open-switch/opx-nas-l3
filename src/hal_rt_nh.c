@@ -202,7 +202,7 @@ int fib_create_intf_tree (void)
     if (rt_intf_tree != NULL)
     {
         HAL_RT_LOG_DEBUG("HAL-RT-NH",
-                   " Intf tree already created", __FUNCTION__);
+                         "Intf tree already created");
 
         return STD_ERR_OK;
     }
@@ -410,7 +410,10 @@ t_fib_nh *fib_proc_nh_add (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr,
     {
         p_nh->status_flag |= FIB_NH_STATUS_ADD;
 
-        fib_mark_nh_for_resolution (p_nh);
+        /* Dont resolve for zero IP NH */
+        if (!(STD_IP_IS_ADDR_ZERO(&p_nh->key.ip_addr))) {
+            fib_mark_nh_for_resolution (p_nh);
+        }
     }
 
     HAL_RT_LOG_INFO("NH-ADD-RSLV",
@@ -549,7 +552,10 @@ int fib_proc_nh_delete (t_fib_nh *p_nh, t_fib_nh_owner_type owner_type,
                  resolve_nh, p_nh->is_mgmt_nh);
 
     if (resolve_nh == true) {
-        fib_mark_nh_for_resolution (p_nh);
+        /* Dont resolve for zero IP NH */
+        if (!(STD_IP_IS_ADDR_ZERO(&p_nh->key.ip_addr))) {
+            fib_mark_nh_for_resolution (p_nh);
+        }
         /*
          * NH thread need not be resumed here. Let the DR thread continue the execution
          * and once DRs are updated with the new NHs, the NH thread can be resumed to continue
@@ -1128,9 +1134,8 @@ int fib_del_nh (t_fib_nh *p_nh)
 
     if (p_nh == NULL)
     {
-        HAL_RT_LOG_ERR("HAL-RT-NH",
-                   "%s (): Invalid input param. p_nh: %p",
-                   __FUNCTION__, p_nh);
+        HAL_RT_LOG_ERR("HAL-RT-NH", "Invalid input param. p_nh: %p",
+                       p_nh);
 
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
@@ -1267,7 +1272,7 @@ int fib_del_nh_fh (t_fib_nh *p_nh, t_fib_link_node *p_link_node)
     {
         p_fh->nh_ref_count--;
 
-        fib_check_and_delete_nh (p_fh);
+        fib_check_and_delete_nh (p_fh, false);
     }
 
     std_dll_remove (&p_nh->fh_list, &p_link_node->glue);
@@ -1463,7 +1468,7 @@ int fib_del_nh_tunnel_fh (t_fib_nh *p_nh, t_fib_nh *p_fh)
 
     fib_check_and_delete_tunnel_fh (p_tunnel_fh);
 
-    fib_check_and_delete_nh (p_fh);
+    fib_check_and_delete_nh (p_fh, false);
 
     return STD_ERR_OK;
 }
@@ -1958,11 +1963,12 @@ t_fib_intf *fib_add_intf (uint32_t if_index, uint32_t vrf_id, uint8_t af_index)
     p_intf->key.vrf_id   = vrf_id;
     p_intf->key.af_index = af_index;
     if (hal_rt_get_intf_name(vrf_id, if_index, p_intf->if_name) != STD_ERR_OK) {
-        HAL_RT_LOG_ERR ("HAL-RT-DR", "Intf name get failed for if_index:%d ",
-                            if_index);
+        HAL_RT_LOG_INFO ("HAL-RT-DR", "Intf name get failed for if_index:%d ",
+                        if_index);
     }
 
     p_intf->rt_head.rth_addr = (uint8_t *) (&(p_intf->key));
+
 
     p_radix_head = std_radix_insert (rt_intf_tree, (std_rt_head *)(&p_intf->rt_head),
                                      FIB_RDX_INTF_KEY_LEN);
@@ -2065,7 +2071,7 @@ int fib_del_intf (t_fib_intf *p_intf)
     }
 
     HAL_RT_LOG_INFO("HAL-RT-NH",
-               "if_index: 0x%x, del vrf_id: %d, af_index: %d",
+               "Interface deletion - if_index: %d, del vrf_id: %d, af_index: %d",
                p_intf->key.if_index, p_intf->key.vrf_id,
                p_intf->key.af_index);
 
@@ -2294,7 +2300,7 @@ int fib_del_intf_pending_fh (t_fib_intf *p_intf, t_fib_link_node *p_link_node)
     return STD_ERR_OK;
 }
 
-int fib_check_and_delete_nh (t_fib_nh *p_nh)
+int fib_check_and_delete_nh (t_fib_nh *p_nh, bool is_force_del)
 {
     if (!p_nh)
     {
@@ -2314,7 +2320,7 @@ int fib_check_and_delete_nh (t_fib_nh *p_nh)
                p_nh->key.if_index, p_nh->status_flag, p_nh->owner_flag,
                p_nh->rtm_ref_count, p_nh->dr_ref_count, p_nh->nh_ref_count);
 
-    if (FIB_IS_NH_REQ_RESOLVE (p_nh))
+    if ((is_force_del == false) && (FIB_IS_NH_REQ_RESOLVE (p_nh)))
     {
         HAL_RT_LOG_DEBUG("HAL-RT-NH",
                    "NH in request resolving state. "
@@ -2326,8 +2332,8 @@ int fib_check_and_delete_nh (t_fib_nh *p_nh)
         return STD_ERR_OK;
     }
 
-    if ((!(FIB_IS_NH_OWNER_RTM (p_nh))) &&
-        (!(FIB_IS_NH_OWNER_ARP (p_nh))))
+    if (is_force_del || ((!(FIB_IS_NH_OWNER_RTM (p_nh))) &&
+                         (!(FIB_IS_NH_OWNER_ARP (p_nh)))))
     {
         if (FIB_IS_FH_PENDING (p_nh))
         {
@@ -2335,7 +2341,7 @@ int fib_check_and_delete_nh (t_fib_nh *p_nh)
         }
     }
 
-    if (FIB_IS_NH_REF_COUNT_ZERO (p_nh))
+    if (is_force_del || (FIB_IS_NH_REF_COUNT_ZERO (p_nh)))
     {
         if (FIB_IS_NH_FH (p_nh))
         {
@@ -2399,16 +2405,24 @@ int fib_check_and_delete_intf (t_fib_intf *p_intf)
         return STD_ERR_OK;
     }
 
-    HAL_RT_LOG_DEBUG("HAL-RT-NH",
-               "Intf: if_index: 0x%x, vrf_id: %d, af_index: %d",
+    HAL_RT_LOG_INFO("HAL-RT-NH",
+               "Intf delete: if_index: %d, vrf_id: %d, af_index: %d FH-list:%p "
+               "Pending-FH-list:%p IP-list:%p unreachble IPv4:%d IPv6:%d rif-id:0x%lx",
                p_intf->key.if_index, p_intf->key.vrf_id,
-               p_intf->key.af_index);
+               p_intf->key.af_index, std_dll_getfirst (&p_intf->fh_list),
+               std_dll_getfirst (&p_intf->pending_fh_list),
+               std_dll_getfirst (&p_intf->ip_list),
+               p_intf->is_ipv4_unreachables_set,
+               p_intf->is_ipv6_unreachables_set,
+               p_intf->rif_info.rif_id);
 
     if ((std_dll_getfirst (&p_intf->fh_list) == NULL) &&
         (std_dll_getfirst (&p_intf->pending_fh_list) == NULL) &&
         (std_dll_getfirst (&p_intf->ip_list) == NULL) &&
+        (p_intf->is_ip_redirects_set == false) &&
         (p_intf->is_ipv4_unreachables_set == false) &&
-        (p_intf->is_ipv6_unreachables_set == false))
+        (p_intf->is_ipv6_unreachables_set == false) &&
+        (p_intf->rif_info.rif_id == 0))
     {
         fib_del_intf (p_intf);
     }
@@ -2436,22 +2450,6 @@ int fib_nh_walker_main (void)
     int                  af_index = 0;
     int                  rc = STD_ERR_OK;
 
-    HAL_RT_LOG_DEBUG("HAL-RT-NH", "af_index: %d", af_index);
-
-    for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id++) {
-        for (af_index = FIB_MIN_AFINDEX; af_index < FIB_MAX_AFINDEX; af_index++) {
-            p_vrf_info = FIB_GET_VRF_INFO (vrf_id, af_index);
-            if (p_vrf_info == NULL) {
-                HAL_RT_LOG_DEBUG("HAL-RT-NH", "Vrf info NULL. "
-                             "vrf_id: %d, af_index: %d", vrf_id, af_index);
-                continue;
-            }
-            memset (&p_vrf_info->nh_radical_marker, 0, sizeof (std_radical_ref_t));
-            std_radical_walkconstructor (p_vrf_info->nh_tree,
-                                   &p_vrf_info->nh_radical_marker);
-        }
-    }
-
     for ( ; ;)
     {
         pthread_mutex_lock( &fib_nh_mutex );
@@ -2467,22 +2465,27 @@ int fib_nh_walker_main (void)
 
         for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id++) {
             for (af_index = FIB_MIN_AFINDEX; af_index < FIB_MAX_AFINDEX; af_index++) {
+                nas_l3_lock();
+                if (hal_rt_access_fib_vrf(vrf_id) == NULL) {
+                    nas_l3_unlock();
+                    break;
+                }
                 p_vrf_info = FIB_GET_VRF_INFO (vrf_id, af_index);
                 if (p_vrf_info == NULL) {
                     HAL_RT_LOG_DEBUG("HAL-RT-NH", "Vrf info NULL. "
-                               "vrf_id: %d, af_index: %d", vrf_id, af_index);
+                                     "vrf_id: %d, af_index: %d", vrf_id, af_index);
+                    nas_l3_unlock();
                     continue;
                 }
 
                 if ((p_vrf_info->dr_clear_on == true) ||
                     (p_vrf_info->dr_ha_on == true)) {
                     HAL_RT_LOG_DEBUG("HAL-RT-NH", "DR clear or HA in progress."
-                           "vrf_id: %d, af_index: %d, dr_clear_on: %d, dr_ha_on: %d",
-                           vrf_id, af_index, p_vrf_info->dr_clear_on, p_vrf_info->dr_ha_on);
+                                     "vrf_id: %d, af_index: %d, dr_clear_on: %d, dr_ha_on: %d",
+                                     vrf_id, af_index, p_vrf_info->dr_clear_on, p_vrf_info->dr_ha_on);
+                    nas_l3_unlock();
                     continue;
                 }
-
-                nas_l3_lock();
 
                 p_vrf_info->num_nh_processed_by_walker = 0;
                 if (p_vrf_info->nh_clear_on == true) {
@@ -2496,12 +2499,12 @@ int fib_nh_walker_main (void)
                 /* Process a maximum of FIB_NH_WALKER_COUNT nodes per vrf */
 
                 std_radical_walkchangelist (p_vrf_info->nh_tree,
-                                      &p_vrf_info->nh_radical_marker,
-                                      fib_nh_walker_call_back,
-                                      0,
-                                      FIB_NH_WALKER_COUNT,
-                                      max_walker_version,
-                                      &rc);
+                                            &p_vrf_info->nh_radical_marker,
+                                            fib_nh_walker_call_back,
+                                            0,
+                                            FIB_NH_WALKER_COUNT,
+                                            max_walker_version,
+                                            &rc);
 
                 /* @@TODO: Need to handle version wrap */
 
@@ -2516,7 +2519,7 @@ int fib_nh_walker_main (void)
                  * fib_nh_walker_call_back ().
                  */
                 if (p_vrf_info->num_nh_processed_by_walker == FIB_NH_WALKER_COUNT) {
-                    HAL_RT_LOG_DEBUG("HAL-RT-NH", "Max NH processed per walk, relinquish now",
+                    HAL_RT_LOG_DEBUG("HAL-RT-NH", "Max NH (%d) processed per walk, relinquish now",
                                      tot_nh_processed);
                     is_nh_pending_for_processing = true;
                 }
@@ -2536,13 +2539,101 @@ int fib_nh_walker_main (void)
     return STD_ERR_OK;
 }
 
+t_std_error fib_nh_del_nh(t_fib_nh *p_nh, bool is_force_del) {
+    dn_hal_route_err     hal_err = DN_HAL_ROUTE_E_NONE;
+    char           p_buf[HAL_RT_MAX_BUFSZ];
+    t_fib_dr        *p_dr = NULL;
+
+    HAL_RT_LOG_INFO("FIB-NH-DEL",
+                    "NH: vrf_id: %d, ip_addr: %s, if_index: %d, "
+                    "status_flag: 0x%x, owner_flag: 0x%x MAC:%s state:%d status:0x%x",
+                    p_nh->vrf_id, FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr), p_nh->key.if_index,
+                    p_nh->status_flag, p_nh->owner_flag,
+                    ((p_nh->p_arp_info) ? (hal_rt_mac_to_str (&p_nh->p_arp_info->mac_addr,
+                                                              p_buf, HAL_RT_MAX_BUFSZ)) : ""),
+                    ((p_nh->p_arp_info) ? p_nh->p_arp_info->state : 0),
+                    ((p_nh->p_arp_info) ? p_nh->p_arp_info->arp_status : 0));
+
+    /* Update NH resolution status in the route entry */
+    fib_update_nh_dep_dr_resolution_status(p_nh);
+    if (FIB_IS_NH_FH (p_nh))
+    {
+        HAL_RT_LOG_DEBUG("HAL-RT-NH",
+                         "NH is a FH. "
+                         "vrf_id: %d, ip_addr: %s, if_index: 0x%x",
+                         p_nh->vrf_id,
+                         FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr),
+                         p_nh->key.if_index);
+
+        if (FIB_IS_NH_WRITTEN (p_nh))
+        {
+            hal_err = hal_fib_host_del (p_nh->vrf_id, p_nh);
+
+            if (hal_err == DN_HAL_ROUTE_E_NONE)
+            {
+                fib_check_threshold_for_all_cams (false);
+
+                p_nh->status_flag &= ~FIB_NH_STATUS_WRITTEN;
+
+                FIB_DECR_CNTRS_CAM_HOST_ENTRIES (p_nh->vrf_id, p_nh->key.ip_addr.af_index);
+
+                /* Check if there is any full length route for programming with the nexthop
+                 * when the directly connected neighbor is no longer available. */
+                p_dr = fib_get_dr (p_nh->vrf_id, &p_nh->key.ip_addr, FIB_AFINDEX_TO_PREFIX_LEN(p_nh->key.ip_addr.af_index));
+
+                /* If the full length route is not expected to be programmed into the HW i.e only cache route,
+                 * skip the HW programming */
+                if ((p_dr != NULL) && (p_dr->rt_type != RT_CACHE) && (!(FIB_IS_DR_WRITTEN (p_dr))))
+                {
+                    HAL_RT_LOG_DEBUG("HAL-RT-NH", "Full length route is available for resolution "
+                                     "Vrf_id: %d, prefix %s",  p_nh->vrf_id,
+                                     FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr));
+
+                    /* set ADD flag to trigger route download to walker */
+                    p_dr->status_flag |= FIB_DR_STATUS_ADD;
+                    fib_mark_dr_for_resolution (p_dr);
+                }
+            }
+            else
+            {
+                HAL_RT_LOG_DEBUG("HAL-RT-NH",
+                                 "Error hal_fib_host_del. "
+                                 "vrf_id: %d, ip_addr: %s, if_index: 0x%x, "
+                                 "hal_err: %d (%s)",
+                                 p_nh->vrf_id,
+                                 FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr),
+                                 p_nh->key.if_index, hal_err,
+                                 HAL_RT_GET_ERR_STR (hal_err));
+            }
+        }
+        if (!(p_nh->status_flag & FIB_NH_STATUS_DEAD)) {
+            cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_nh, cps_api_oper_DELETE);
+            if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
+                HAL_RT_LOG_ERR("HAL-RT-DR","Failed to publish neighbor delete");
+            }
+        }
+    }
+
+    fib_mark_nh_dep_dr_for_resolution (p_nh);
+
+    fib_del_nh_best_fit_dr (p_nh);
+
+    fib_delete_all_nh_fh (p_nh);
+
+    fib_delete_all_nh_dep_dr (p_nh);
+
+    p_nh->status_flag &= ~FIB_NH_STATUS_REQ_RESOLVE;
+
+    fib_check_and_delete_nh (p_nh, is_force_del);
+    return STD_ERR_OK;
+}
+
 int fib_nh_walker_call_back (std_radical_head_t *p_rt_head, va_list ap)
 {
     t_fib_vrf_info   *p_vrf_info = NULL;
     t_fib_nh        *p_nh = NULL;
     dn_hal_route_err     hal_err = DN_HAL_ROUTE_E_NONE;
     bool           is_host_ready = true;
-    t_fib_dr        *p_dr = NULL;
     char           p_buf[HAL_RT_MAX_BUFSZ];
 
     if (!p_rt_head)
@@ -2581,7 +2672,7 @@ int fib_nh_walker_call_back (std_radical_head_t *p_rt_head, va_list ap)
 
     HAL_RT_LOG_DEBUG("HAL-RT-NH",
                "num_nh_processed_by_walker: %d, nh_clear_on: %d, "
-               "nh_ha_on: %d, arp_last_update_time: %lld",
+               "nh_ha_on: %d, arp_last_update_time: %lu",
                p_vrf_info->num_nh_processed_by_walker, p_vrf_info->nh_clear_on,
                p_vrf_info->nh_ha_on, p_nh->arp_last_update_time);
 
@@ -2702,73 +2793,7 @@ int fib_nh_walker_call_back (std_radical_head_t *p_rt_head, va_list ap)
     }
     else if (p_nh->status_flag & FIB_NH_STATUS_DEL) /* Deletion */
     {
-        /* Update NH resolution status in the route entry */
-        fib_update_nh_dep_dr_resolution_status(p_nh);
-        if (FIB_IS_NH_FH (p_nh))
-        {
-            HAL_RT_LOG_DEBUG("HAL-RT-NH",
-                       "NH is a FH. "
-                       "vrf_id: %d, ip_addr: %s, if_index: 0x%x",
-                        p_nh->vrf_id,
-                       FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr),
-                       p_nh->key.if_index);
-
-            if (FIB_IS_NH_WRITTEN (p_nh))
-            {
-                hal_err = hal_fib_host_del (p_nh->vrf_id, p_nh);
-
-                if (hal_err == DN_HAL_ROUTE_E_NONE)
-                {
-                    fib_check_threshold_for_all_cams (false);
-
-                    p_nh->status_flag &= ~FIB_NH_STATUS_WRITTEN;
-
-                    FIB_DECR_CNTRS_CAM_HOST_ENTRIES (p_nh->vrf_id, p_nh->key.ip_addr.af_index);
-
-                    p_dr = fib_get_dr (p_nh->vrf_id, &p_nh->key.ip_addr, FIB_AFINDEX_TO_PREFIX_LEN(p_nh->key.ip_addr.af_index));
-
-                    if ((p_dr != NULL) && (!(FIB_IS_DR_WRITTEN (p_dr))))
-                    {
-                        HAL_RT_LOG_DEBUG("HAL-RT-NH", "Full length route is available for resolution "
-                                "Vrf_id: %d, prefix %s",  p_nh->vrf_id,
-                                FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr));
-
-                        /* set ADD flag to trigger route download to walker */
-                        p_dr->status_flag |= FIB_DR_STATUS_ADD;
-                        fib_mark_dr_for_resolution (p_dr);
-                    }
-                }
-                else
-                {
-                    HAL_RT_LOG_DEBUG("HAL-RT-NH",
-                               "Error hal_fib_host_del. "
-                               "vrf_id: %d, ip_addr: %s, if_index: 0x%x, "
-                               "hal_err: %d (%s)",
-                               p_nh->vrf_id,
-                               FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr),
-                               p_nh->key.if_index, hal_err,
-                               HAL_RT_GET_ERR_STR (hal_err));
-                }
-            }
-            if (!(p_nh->status_flag & FIB_NH_STATUS_DEAD)) {
-                cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_nh, cps_api_oper_DELETE);
-                if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
-                    HAL_RT_LOG_ERR("HAL-RT-DR","Failed to publish neighbor delete");
-                }
-            }
-        }
-
-        fib_mark_nh_dep_dr_for_resolution (p_nh);
-
-        fib_del_nh_best_fit_dr (p_nh);
-
-        fib_delete_all_nh_fh (p_nh);
-
-        fib_delete_all_nh_dep_dr (p_nh);
-
-        p_nh->status_flag &= ~FIB_NH_STATUS_REQ_RESOLVE;
-
-        fib_check_and_delete_nh (p_nh);
+        fib_nh_del_nh(p_nh, false);
     }
     else if (p_nh->status_flag & FIB_NH_STATUS_DEAD) /* port admin/mode change */
     {

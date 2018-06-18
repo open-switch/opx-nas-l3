@@ -1,3 +1,17 @@
+opx-nas-l3 (3.6.0) unstable; urgency=medium
+
+  * Feature: Routing VRF
+  * Update: ICMP Redirect support
+  * Update: Data VRF support in NAS-l3
+  * Update: Program loopback address in NPU
+  * Update: Added support for virtual routing IP configuration to configure peer's link local
+            address in hardware.
+  * Bugfix: Update the mgmt route status when the default route with eth0 is getting replaced 
+            with default route with null interface.
+
+
+ -- Dell EMC <ops-dev@lists.openswitch.net>  Fri, 25 May 2018 15:00:00 -0800
+
 opx-nas-l3 (3.2.0+opx4) unstable; urgency=medium
 
   * Update: Add compiler/linker hardening flags

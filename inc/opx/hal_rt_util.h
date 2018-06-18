@@ -111,12 +111,11 @@ ndi_rif_id_t hal_rif_id_get (npu_id_t npu_id, hal_vrf_id_t vrf_id, hal_ifindex_t
 
 ndi_vrf_id_t hal_vrf_obj_get (npu_id_t npu_id, hal_vrf_id_t vrf_id);
 
-uint32_t hal_rt_rif_ref_inc(hal_ifindex_t if_index);
+uint32_t hal_rt_rif_ref_inc(hal_vrf_id_t vrf_id, hal_ifindex_t if_index);
 
-bool hal_rt_rif_ref_dec(hal_ifindex_t if_index);
-int hal_rt_rif_ref_get(hal_ifindex_t if_index);
-t_std_error hal_rif_info_get (hal_ifindex_t if_index, ndi_rif_id_t *rif_id, uint32_t *ref_count);
-hal_ifindex_t hal_rt_rif_entry_get_next_if_index (hal_ifindex_t if_index);
+bool hal_rt_rif_ref_dec(hal_vrf_id_t vrf_id, hal_ifindex_t if_index);
+int hal_rt_rif_ref_get(hal_vrf_id_t vrf_id, hal_ifindex_t if_index);
+t_std_error hal_rif_info_get (hal_vrf_id_t vrf_id, hal_ifindex_t if_index, ndi_rif_id_t *rif_id, uint32_t *ref_count);
 
 bool hal_rt_is_intf_lpbk (hal_vrf_id_t vrf_id, hal_ifindex_t if_index);
 bool hal_rt_is_intf_mgmt (hal_vrf_id_t vrf_id, hal_ifindex_t if_index);
@@ -130,20 +129,41 @@ int nas_rt_process_msg(t_fib_msg *p_msg);
 int fib_msg_main(void);
 bool nas_rt_peer_mac_db_add (nas_rt_peer_mac_config_t* mac_info);
 t_std_error nas_route_delete_vrf_peer_mac_config(uint32_t vrf_id);
+t_std_error nas_route_delete_vrf_virtual_routing_ip_config(uint32_t vrf_id);
 bool nas_rt_peer_mac_get (const nas_rt_peer_mac_config_t* req,
                           nas_rt_peer_mac_config_t* reply_p);
 bool nas_rt_peer_mac_db_del (nas_rt_peer_mac_config_t* mac_info);
 cps_api_object_t nas_route_peer_routing_config_to_cps_object(uint32_t vrf_id,
                                                              nas_rt_peer_mac_config_t *p_status);
+bool nas_rt_virtual_routing_ip_db_add (nas_rt_virtual_routing_ip_config_t * ip_info);
+bool nas_rt_virtual_routing_ip_db_del (nas_rt_virtual_routing_ip_config_t * ip_info);
+bool nas_rt_virtual_routing_ip_get (const nas_rt_virtual_routing_ip_config_t * req,
+                                    nas_rt_virtual_routing_ip_config_t* reply_p);
+uint32_t nas_rt_virtual_routing_ip_list_size (const nas_rt_virtual_routing_ip_config_t * req);
+cps_api_object_t nas_route_virtual_routing_ip_config_to_cps_object(uint32_t vrf_id,
+                                              nas_rt_virtual_routing_ip_config_t *p_status);
 bool nas_rt_is_nh_npu_prg_done(t_fib_nh *p_entry);
 void hal_rt_sort_array(uint64_t data[], uint32_t count);
 const char *hal_rt_intf_mode_to_str (uint32_t mode);
-t_std_error hal_rt_get_if_index_from_if_name(char *if_name, uint32_t *p_if_index);
+t_std_error hal_rt_get_if_index_from_if_name(char *if_name, hal_vrf_id_t *vrf_id, uint32_t *p_if_index);
 bool hal_rt_is_intf_mac_vlan (hal_vrf_id_t vrf_id, hal_ifindex_t if_index);
 bool hal_rt_get_vrf_id(const char *vrf_name, hal_vrf_id_t *vrf_id);
 bool hal_rt_get_vrf_name(hal_vrf_id_t vrf_id, char *vrf_name);
 int fib_process_route_del_on_mgmt_ip_del_event (hal_ifindex_t if_index, hal_vrf_id_t vrf_id,
                                                 t_fib_ip_addr *prefix, uint8_t prefix_len);
 int nas_rt_get_mask (uint8_t af_index, uint8_t prefix_len, t_fib_ip_addr *mask);
+bool hal_rt_is_local_ip_conflict(hal_vrf_id_t vrf_id, hal_ip_addr_t *nbr);
+int fib_route_del_on_intf_down (t_fib_intf *p_intf);
+int fib_process_link_local_address_del_on_intf_event (t_fib_intf *p_intf, t_fib_intf_event_type intf_event);
+int fib_process_nh_del_on_intf_event (t_fib_intf *p_intf, t_fib_intf_event_type intf_event);
+t_std_error hal_rt_get_parent_if_index_from_l3_intf(hal_vrf_id_t vrf_id, uint32_t if_index,
+                                                    uint32_t *p_parent_if_index);
+bool hal_rt_flush_vrf_info(hal_vrf_id_t vrf_id);
+int fib_process_route_del_on_intf_event (t_fib_intf *p_intf, t_fib_intf_event_type intf_event);
+bool hal_rt_form_neigh_flush_msg (t_fib_offload_msg *p_offload_msg, t_fib_dr *p_dr,
+                                  bool is_neigh_flush_with_intf, hal_ifindex_t if_index);
+int nas_rt_process_offload_msg(t_fib_offload_msg *p_offload_msg);
+int fib_offload_msg_main(void);
+bool hal_rt_is_vrf_valid(hal_vrf_id_t vrf_id);
 #endif /* __HAL_RT_UTIL_H__ */
 

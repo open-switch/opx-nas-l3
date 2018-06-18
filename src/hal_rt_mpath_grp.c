@@ -379,7 +379,7 @@ t_fib_mp_obj *hal_rt_check_and_reuse_mp_obj (t_fib_dr *p_dr,
             HAL_RT_LOG_INFO ("HAL-RT-MP",
                              "ECMP NH removal scenario. Found MP obj for OLD NH list. "
                              "VRF %d Prefix: %s/%d "
-                             "mp nh_count:%d, mp GID:%d, ref_cnt:%d",
+                             "mp nh_count:%d, mp GID:%lu, ref_cnt:%d",
                              p_dr->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
                              p_mp_obj->ecmp_count, p_mp_obj->sai_ecmp_gid, p_mp_obj->ref_count);
 
@@ -395,7 +395,7 @@ t_fib_mp_obj *hal_rt_check_and_reuse_mp_obj (t_fib_dr *p_dr,
                 {
                     HAL_RT_LOG_ERR ("HAL-RT-MP",
                                     "Failed to update Multipath mp_obj Node for NH removal. "
-                                    "Unit:%d, Vrf_id:%d, Prefix: %s/%d mp GID:%d\n",
+                                    "Unit:%d, Vrf_id:%d, Prefix: %s/%d mp GID:%lu\n",
                                     unit, p_dr->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                                     p_dr->prefix_len, p_mp_obj->sai_ecmp_gid);
                     /* failed to update MP group. So switch to regular flow and create a new group */
@@ -407,7 +407,7 @@ t_fib_mp_obj *hal_rt_check_and_reuse_mp_obj (t_fib_dr *p_dr,
                     HAL_RT_LOG_INFO ("HAL-RT-MP",
                                      "ECMP NH removal scenario. Removed NH's from current MP obj. "
                                      "VRF %d Prefix: %s/%d "
-                                     "removed nh_count:%d, mp GID:%d, ref_cnt:%d",
+                                     "removed nh_count:%d, mp GID:%lu, ref_cnt:%d",
                                      p_dr->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
                                      removed_nh_group_entry->nhop_count, p_mp_obj->sai_ecmp_gid, p_mp_obj->ref_count);
                 }
@@ -440,7 +440,7 @@ t_std_error hal_rt_delete_ecmp_group(t_fib_dr *p_dr, ndi_route_t  *entry,
     if (p_mp_obj == NULL)
     {
         HAL_RT_LOG_DEBUG("HAL-RT-NDI",
-                   "Multipath Object is NULL. Vrf_id: %d, Unit: "
+                   "Multipath Object is NULL. Vrf_id: %lu, Unit: "
                    "%d.\n", entry->vrf_id, unit);
         return STD_ERR_OK;
     }
@@ -455,7 +455,7 @@ t_std_error hal_rt_delete_ecmp_group(t_fib_dr *p_dr, ndi_route_t  *entry,
         if (rc != STD_ERR_OK) {
             HAL_RT_LOG_DEBUG("HAL-RT-MP",
                     "NH Group: Failed to delete ECMP group:%d mp_obj_id:%d "
-                    "Vrf_id: %d, Unit: %d. Err: %d ", (int) p_dr->nh_handle,
+                    "Vrf_id: %lu, Unit: %d. Err: %d ", (int) p_dr->nh_handle,
                     (int) p_mp_obj->sai_ecmp_gid, entry->vrf_id, entry->npu_id, rc);
 
             return (STD_ERR(ROUTE, FAIL, 0));

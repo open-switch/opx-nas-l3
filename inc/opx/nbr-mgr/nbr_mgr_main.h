@@ -46,6 +46,7 @@
 
 #define NBR_MGR_INTF_ADMIN_MSG 0x1
 #define NBR_MGR_INTF_VLAN_MSG  0x2
+#define NBR_MGR_DEFAULT_VRF_ID 0
 
 enum {
     NBR_MGR_AUTO_REFRESH_INIT,
@@ -64,7 +65,7 @@ bool nbr_mgr_program_npu(nbr_mgr_op_t op, const nbr_mgr_nbr_entry_t& entry);
 bool nbr_mgr_notify_intf_status(nbr_mgr_op_t op, const nbr_mgr_intf_entry_t& entry);
 bool nbr_mgr_get_all_nh(uint8_t af);
 
-int nbr_mgr_enqueue_flush_msg(uint32_t if_index);
+int nbr_mgr_enqueue_flush_msg(uint32_t if_index, hal_vrf_id_t vrf_id);
 bool nbr_mgr_get_auto_refresh_status (const char *vrf_name, uint32_t family);
 bool nbr_mgr_is_mac_present_in_hw(hal_mac_addr_t mac, hal_ifindex_t if_index,
                                   bool& is_mac_present_in_hw);

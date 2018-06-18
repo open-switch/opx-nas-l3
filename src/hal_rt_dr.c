@@ -141,13 +141,12 @@ bool hal_rt_cps_obj_to_route(cps_api_object_t obj, t_fib_msg **p_msg_ret) {
                 memcpy(&r->prefix.u, cps_api_object_attr_data_bin(it.attr),
                        cps_api_object_attr_len (it.attr));
                 break;
+            case BASE_ROUTE_OBJ_VRF_ID:
+                r->vrfid = cps_api_object_attr_data_uint(it.attr);
+                break;
             case BASE_ROUTE_OBJ_VRF_NAME:
                 safestrncpy((char*)r->vrf_name, (const char *)cps_api_object_attr_data_bin(it.attr),
                             sizeof(r->vrf_name));
-                if (hal_rt_get_vrf_id((char*)r->vrf_name, (hal_vrf_id_t*)&r->vrfid) == false) {
-                    HAL_RT_LOG_ERR("HAL-RT-INTF","Invalid VRF name:%s", r->vrf_name);
-                    r->vrfid = 0;
-                }
                 break;
             case BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN:
                 r->prefix_masklen = cps_api_object_attr_data_uint(it.attr);
@@ -157,6 +156,13 @@ bool hal_rt_cps_obj_to_route(cps_api_object_t obj, t_fib_msg **p_msg_ret) {
                 break;
             case BASE_ROUTE_OBJ_ENTRY_NH_COUNT:
                 r->hop_count = cps_api_object_attr_data_uint(it.attr);
+                break;
+            case BASE_ROUTE_OBJ_ENTRY_VRF_ID:
+                r->nh_vrfid = cps_api_object_attr_data_uint(it.attr);
+                break;
+            case BASE_ROUTE_OBJ_ENTRY_NH_VRF_NAME:
+                safestrncpy((char*)r->nh_vrf_name, (const char *)cps_api_object_attr_data_bin(it.attr),
+                            sizeof(r->nh_vrf_name));
                 break;
             case BASE_ROUTE_OBJ_ENTRY_NH_LIST:
                 hal_rt_cps_obj_nh_list_to_route_nh_list(it, r);
@@ -255,6 +261,16 @@ int fib_proc_dr_download (t_fib_route_entry *p_rt_entry, uint32_t nas_num_route_
     num_route_msgs_processed_before_signalling_dr_walker++;
 
     vrf_id   = p_rt_entry->vrfid;
+    if ((!(FIB_IS_VRF_ID_VALID (vrf_id))) || (!(FIB_IS_VRF_ID_VALID (p_rt_entry->nh_vrfid)))) {
+        HAL_RT_LOG_INFO("HAL-RT-DR", "Invalid vrf_id. rt-vrf_id: %d nh-vrf-id:%lu",
+                       vrf_id, p_rt_entry->nh_vrfid);
+        return STD_ERR_OK;
+    }
+
+    /* If VRF related info. already cleared, return success */
+    if ((hal_rt_is_vrf_valid(vrf_id) == false) || (hal_rt_is_vrf_valid(p_rt_entry->nh_vrfid) == false)) {
+        return STD_ERR_OK;
+    }
     af_index = HAL_RT_ADDR_FAM_TO_AFINDEX(p_rt_entry->prefix.af_index);
 
     /* if there are no more route msgs in queue and there is pending
@@ -265,12 +281,13 @@ int fib_proc_dr_download (t_fib_route_entry *p_rt_entry, uint32_t nas_num_route_
      */
     if (pending_dr_walker_thread_wakeup && !nas_num_route_msgs_in_queue)
         fib_resume_dr_walker_thread (af_index);
-    HAL_RT_LOG_INFO("HAL-RT", "Route %s vrf_id %d, af-index %d"
-                    " prefix %s/%d nh_cnt:%d distance %d type:%d",
+    HAL_RT_LOG_INFO("HAL-RT-MSG", "Route %s rt-vrf:%s(%d), af-index:%d"
+                    " prefix:%s/%d nh-vrf:%s(%lu) nh_cnt:%lu distance:%d type:%d",
                     ((p_rt_entry->msg_type == FIB_RT_MSG_ADD) ? "Add" :
                      ((p_rt_entry->msg_type == FIB_RT_MSG_DEL) ? "Del" : "Update")),
-                    vrf_id, af_index, FIB_IP_ADDR_TO_STR(&p_rt_entry->prefix),
-                    p_rt_entry->prefix_masklen, p_rt_entry->hop_count,
+                    p_rt_entry->vrf_name, vrf_id, af_index, FIB_IP_ADDR_TO_STR(&p_rt_entry->prefix),
+                    p_rt_entry->prefix_masklen, p_rt_entry->nh_vrf_name,
+                    p_rt_entry->nh_vrfid, p_rt_entry->hop_count,
                     p_rt_entry->distance, p_rt_entry->rt_type);
 
     /*
@@ -290,10 +307,10 @@ int fib_proc_dr_download (t_fib_route_entry *p_rt_entry, uint32_t nas_num_route_
         (!(STD_IP_IS_ADDR_LINK_LOCAL(&p_rt_entry->prefix)))) {
         for (ix=0; ix<p_rt_entry->hop_count; ix++) {
             nh_if_index = p_rt_entry->nh_list[ix].nh_if_index;
-            if(hal_rt_validate_intf(vrf_id, nh_if_index, &is_mgmt_intf) != STD_ERR_OK) {
-                HAL_RT_LOG_INFO("HAL-RT", "Invalid interface, so skipping route add. msg_type: %d vrf_id %d, af-index %d"
-                                " nh_count %d addr:%s on if_index %d",
-                                p_rt_entry->msg_type, vrf_id, af_index, p_rt_entry->hop_count,
+            if(hal_rt_validate_intf(p_rt_entry->nh_vrfid, nh_if_index, &is_mgmt_intf) != STD_ERR_OK) {
+                HAL_RT_LOG_INFO("HAL-RT", "Invalid interface, so skipping route add. msg_type: %d rt-vrf_id %d, af-index %d"
+                                " nh-vrf-id:%lu nh_count %lu addr:%s on if_index %d",
+                                p_rt_entry->msg_type, vrf_id, af_index, p_rt_entry->nh_vrfid, p_rt_entry->hop_count,
                                 FIB_IP_ADDR_TO_STR(&p_rt_entry->prefix), nh_if_index);
                 return STD_ERR_OK;
             }
@@ -301,26 +318,20 @@ int fib_proc_dr_download (t_fib_route_entry *p_rt_entry, uint32_t nas_num_route_
     } else if (STD_IP_IS_ADDR_LINK_LOCAL(&p_rt_entry->prefix)) {
         for (ix=0; ix<p_rt_entry->hop_count; ix++) {
             nh_if_index = p_rt_entry->nh_list[ix].nh_if_index;
-            if ((hal_rt_is_intf_lpbk(vrf_id, nh_if_index)) ||
-                (hal_rt_is_intf_mgmt(vrf_id, nh_if_index))) {
+            if ((hal_rt_is_intf_lpbk(p_rt_entry->nh_vrfid, nh_if_index)) ||
+                (hal_rt_is_intf_mgmt(p_rt_entry->nh_vrfid, nh_if_index))) {
                 HAL_RT_LOG_INFO("HAL-RT", "skipping link local route with loopback/mgmt intf msg_type: %d"
-                                "vrf_id %d, af-index %d"
-                                " nh_count %d addr:%s on if_index %d",
-                                p_rt_entry->msg_type, vrf_id, af_index, p_rt_entry->hop_count,
+                                "rt-vrf_id %d, af-index %d"
+                                " nh-vrf-id:%lu nh_count %lu addr:%s on if_index %d",
+                                p_rt_entry->msg_type, vrf_id, af_index, p_rt_entry->nh_vrfid, p_rt_entry->hop_count,
                                 FIB_IP_ADDR_TO_STR(&p_rt_entry->prefix), nh_if_index);
                 return STD_ERR_OK;
             }
         }
     }
     HAL_RT_LOG_DEBUG("HAL-RT", "type: %d vrf_id %d, af-index %d"
-                     " route count %d, nh_count %d distance %d", p_rt_entry->msg_type,
+                     " route count %d, nh_count %lu distance %d", p_rt_entry->msg_type,
                      vrf_id, af_index, 1, p_rt_entry->hop_count, p_rt_entry->distance);
-
-    if (!(FIB_IS_VRF_ID_VALID (vrf_id))) {
-        HAL_RT_LOG_ERR("HAL-RT-DR", "%s (): Invalid vrf_id. vrf_id: %d",
-                   __FUNCTION__, vrf_id);
-        return STD_ERR_OK;
-    }
 
     p_rt_entry->prefix.af_index = af_index;
     if (hal_rt_is_reserved_ipv4(&p_rt_entry->prefix)) {
@@ -462,13 +473,42 @@ t_fib_link_node *fib_get_intf_ip (t_fib_intf *p_intf, t_fib_ip_addr *p_ip)
     return NULL;
 }
 
+t_std_error fib_del_all_intf_ip (t_fib_intf *p_intf)
+{
+    t_fib_link_node  *p_link_node = NULL;
+    t_fib_ip_addr    *p_temp_ip = NULL;
+    t_fib_ip_holder  ip_holder;
+
+    if (p_intf == NULL)
+    {
+        HAL_RT_LOG_ERR("HAL-RT-IP", "Interface is NULL");
+        return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
+    }
+
+    FIB_FOR_EACH_IP_FROM_INTF (p_intf, p_temp_ip, ip_holder)
+    {
+        HAL_RT_LOG_INFO("HAL-RT-IP-GET", "ip_addr: %s, if_index: %d",
+                        FIB_IP_ADDR_TO_STR (p_temp_ip),
+                        p_intf->key.if_index);
+        p_link_node = FIB_GET_LINK_NODE_FROM_IP_HOLDER (ip_holder);
+        fib_del_intf_ip(p_intf, p_link_node);
+    }
+
+    return STD_ERR_OK;
+}
+
+
 int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_size,
                          bool is_rt_replace, bool is_mgmt_route)
 {
     t_fib_dr           *p_dr = NULL;
+    t_fib_offload_msg   offload_msg;
+    t_fib_nh           *p_fh = NULL;
+    t_fib_nh_holder     nh_holder;
     t_fib_dr_msg_info   dr_msg_info;
     bool                is_route_present = false;
     bool                is_skip_route_install = false;
+    bool                is_neigh_flush_required = false;
     ndi_rif_id_t        rif_id = 0;
 
     if (!p_rtm_fib_cmd) {
@@ -505,13 +545,37 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
 
-    nas_l3_lock();
-
+    /* Check if there is any neighbor already present for this local IP,
+     * if yes, remove it since local IP takes precetance than remote neighbor */
+    if (FIB_AFINDEX_TO_PREFIX_LEN (af_index) == dr_msg_info.prefix_len) {
+        HAL_RT_LOG_INFO("HAL-RT-NH-DEL", "Local IP:%s",  FIB_IP_ADDR_TO_STR (&dr_msg_info.prefix));
+        t_fib_nh *p_nh = fib_get_next_nh(dr_msg_info.vrf_id, &dr_msg_info.prefix, 0);
+        if (p_nh && (memcmp(&p_nh->key.ip_addr, &dr_msg_info.prefix, sizeof(t_fib_ip_addr)) == 0)) {
+            HAL_RT_LOG_INFO("HAL-RT-NH-DEL", "NH:%s found", FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr));
+            /* Mark as dead to remove this neighbor from HW not from cache,
+             * nbr data cache is expected to be deleted from nbr-mgr nbr delete. */
+            p_nh->status_flag |= FIB_NH_STATUS_DEAD;
+            fib_proc_nh_dead (p_nh);
+            p_nh->status_flag &= ~FIB_NH_STATUS_DEAD;
+            cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_nh, cps_api_oper_DELETE);
+            if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
+                HAL_RT_LOG_ERR("HAL-RT-DR","Failed to publish neighbor delete");
+            }
+        }
+        if (dr_msg_info.rt_type == RT_CACHE) {
+            is_skip_route_install =  true;
+        }
+    }
     p_dr = fib_get_dr (dr_msg_info.vrf_id, &dr_msg_info.prefix, dr_msg_info.prefix_len);
     /* if there is a default route thru mgmt interface received from the kernel and
      * FIB route added in the NPU for generating the ICMP unreachable already,
-     * override the existing FIB default route with the mgmt default route. */
-    if (p_dr && (FIB_IS_DR_DEFAULT (p_dr)) && (FIB_IS_DEFAULT_DR_OWNER_FIB (p_dr))) {
+     * override the existing FIB default route with the mgmt default route.
+     *
+     * If the route event being received is for mgmt route and there is a matching non-mgmt route already
+     * delete the route that's programmed in the NPU first and then handle the mgmt route.
+     * */
+    if (p_dr && (((FIB_IS_DR_DEFAULT (p_dr)) && (FIB_IS_DEFAULT_DR_OWNER_FIB (p_dr))) ||
+        ((p_dr->is_mgmt_route == false) && is_mgmt_route))) {
         p_dr->status_flag |= FIB_DR_STATUS_DEL;
         fib_proc_dr_del (p_dr);
         p_dr = NULL;
@@ -537,11 +601,9 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
                        FIB_IP_ADDR_TO_STR (&dr_msg_info.prefix),
                        dr_msg_info.prefix_len);
 
-            nas_l3_unlock();
             return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
         }
 
-        p_dr->is_mgmt_route = is_mgmt_route;
         std_dll_init (&p_dr->nh_list);
         std_dll_init (&p_dr->fh_list);
         std_dll_init (&p_dr->dep_nh_list);
@@ -554,10 +616,10 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
     } else {
         is_route_present = true;
     }
+    p_dr->is_mgmt_route = is_mgmt_route;
     if ((dr_msg_info.rt_type != RT_UNREACHABLE) &&
         (STD_IP_IS_ADDR_LINK_LOCAL(&dr_msg_info.prefix))) {
         if (((t_fib_route_entry  *)p_rtm_fib_cmd)->msg_type != FIB_RT_MSG_ADD) {
-            nas_l3_unlock();
             return STD_ERR_OK;
         }
         /* @@TODO If there is a duplicate link local route update from kernel,
@@ -569,7 +631,8 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
                         " proto: %d out-if:%d updated link-local-cnt:%d route-present:%d RIF-ref-cnt:%d",
                         dr_msg_info.vrf_id, FIB_IP_ADDR_TO_STR (&dr_msg_info.prefix),
                         dr_msg_info.prefix_len, dr_msg_info.proto, if_index,
-                        p_dr->num_ipv6_link_local, is_route_present, hal_rt_rif_ref_get(if_index));
+                        p_dr->num_ipv6_link_local, is_route_present,
+                        hal_rt_rif_ref_get(dr_msg_info.vrf_id, if_index));
 
         t_fib_intf *p_intf = fib_get_intf (if_index, dr_msg_info.vrf_id, af_index);
         if (p_intf == NULL) {
@@ -579,7 +642,6 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
                                 "if_index: 0x%x, vrf_id: %d, af_index: %d",
                                 if_index, dr_msg_info.vrf_id, af_index);
 
-                nas_l3_unlock();
                 return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
             }
 
@@ -593,12 +655,12 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
          * if not, add it to the list*/
         if (fib_get_intf_ip (p_intf, &dr_msg_info.prefix) != NULL) {
             HAL_RT_LOG_ERR("HAL-RT-LLA", "IP already exists vrf_id: %d, prefix: %s/%d,"
-                        " proto: %d out-if:%d link-local-cnt:%d route-present:%d RIF-ref-cnt:%d",
+                           " proto: %d out-if:%d link-local-cnt:%d RIF-ref-cnt:%d route-present:%d RIF-ref-cnt:%d",
                         dr_msg_info.vrf_id, FIB_IP_ADDR_TO_STR (&dr_msg_info.prefix),
                         dr_msg_info.prefix_len, dr_msg_info.proto, if_index,
-                        p_dr->num_ipv6_link_local, is_route_present, hal_rt_rif_ref_get(if_index));
+                           p_dr->num_ipv6_link_local, p_dr->num_ipv6_rif_link_local, is_route_present,
+                           hal_rt_rif_ref_get(dr_msg_info.vrf_id, if_index));
 
-            nas_l3_unlock();
             return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
         }
         if (fib_add_intf_ip(p_intf, &dr_msg_info.prefix) != STD_ERR_OK) {
@@ -606,9 +668,9 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
                            " proto: %d out-if:%d link-local-cnt:%d route-present:%d RIF-ref-cnt:%d",
                            dr_msg_info.vrf_id, FIB_IP_ADDR_TO_STR (&dr_msg_info.prefix),
                            dr_msg_info.prefix_len, dr_msg_info.proto, if_index,
-                           p_dr->num_ipv6_link_local, is_route_present, hal_rt_rif_ref_get(if_index));
+                           p_dr->num_ipv6_link_local, is_route_present,
+                           hal_rt_rif_ref_get(dr_msg_info.vrf_id, if_index));
 
-            nas_l3_unlock();
             return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
         }
         /* increment RIF ref count only when the mode is L3.
@@ -619,20 +681,20 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
         if (FIB_IS_INTF_MODE_L3(p_intf->mode) &&
             (p_intf->admin_status == RT_INTF_ADMIN_STATUS_UP)) {
             if (hal_rif_index_get_or_create(0, dr_msg_info.vrf_id, if_index, &rif_id) == STD_ERR_OK) {
-                hal_rt_rif_ref_inc(if_index);
+                hal_rt_rif_ref_inc(dr_msg_info.vrf_id, if_index);
                 p_dr->num_ipv6_rif_link_local++;
             } else {
                 HAL_RT_LOG_ERR("HAL-RT-LLA", " RIF get failed for Route add vrf_id: %d, prefix: %s/%d,"
                                " proto: %d out-if:%d link-local-cnt:%d route-present:%d RIF-ref-cnt:%d",
                                dr_msg_info.vrf_id, FIB_IP_ADDR_TO_STR (&dr_msg_info.prefix),
                                dr_msg_info.prefix_len, dr_msg_info.proto, if_index,
-                               p_dr->num_ipv6_link_local, is_route_present, hal_rt_rif_ref_get(if_index));
+                               p_dr->num_ipv6_link_local, is_route_present,
+                               hal_rt_rif_ref_get(dr_msg_info.vrf_id, if_index));
             }
         }
 
         if (is_route_present) {
             p_dr->last_update_time = fib_tick_get ();
-            nas_l3_unlock();
             return STD_ERR_OK;
         }
 
@@ -661,12 +723,28 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
      */
     /* In case of IPv4 when netlink is received with replace flag, then it is handled as FIB_RT_MSG_UPD */
     if(is_rt_replace) {
+        if (!is_mgmt_route) {
+            /* On route replace, trigger neighbor flush for the route prefix and interface.
+             * This is done for following cases:
+             * 1) Connected route replace
+             * 2) Route with exit interface replaced with another exit interface or with Gw.
+             * Currently kernel wouldn't flush the neighbors learnt on that route subnet
+             * whenever the existing route is replaced. Hence this work around is done
+             * to ensure that the traffic forwarding ceases to those neighbors when
+             * the route is deleted.
+             */
+            p_fh = FIB_GET_FIRST_NH_FROM_DR(p_dr, nh_holder);
+            if (p_fh && FIB_IS_NH_ZERO(p_fh)) {
+                is_neigh_flush_required = true;
+                hal_rt_form_neigh_flush_msg (&offload_msg, p_dr, false, 0);
+            }
+        }
+
         fib_delete_all_dr_nh (p_dr);
         fib_delete_all_dr_fh (p_dr);
     }
 
     if (fib_proc_dr_nh_add (p_dr, p_rtm_fib_cmd, p_nh_info_size) != STD_ERR_OK) {
-        nas_l3_unlock();
         return STD_ERR_OK;
     }
 
@@ -690,7 +768,16 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
     }
     fib_mark_dr_for_resolution (p_dr);
 
-    nas_l3_unlock();
+    if (is_neigh_flush_required) {
+        t_fib_offload_msg *p_offload_msg = hal_rt_alloc_offload_msg ();
+
+        if (!p_offload_msg) {
+            HAL_RT_LOG_ERR ("HAL-RT", "Memory alloc failed for offload msg");
+        } else {
+            memcpy (p_offload_msg, &offload_msg, sizeof (t_fib_offload_msg));
+            nas_rt_process_offload_msg (p_offload_msg);
+        }
+    }
 
     return STD_ERR_OK;
 }
@@ -698,7 +785,11 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
 int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
 {
     t_fib_dr           *p_dr = NULL;
+    t_fib_offload_msg   offload_msg;
+    t_fib_nh           *p_fh = NULL;
+    t_fib_nh_holder     nh_holder;
     t_fib_dr_msg_info   dr_msg_info;
+    bool                is_neigh_flush_required = false;
 
     if (!p_rtm_fib_cmd)
     {
@@ -738,8 +829,6 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
 
-    nas_l3_lock();
-
     p_dr = fib_get_dr (dr_msg_info.vrf_id, &dr_msg_info.prefix, dr_msg_info.prefix_len);
 
     if (p_dr == NULL)
@@ -751,7 +840,6 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
                    FIB_IP_ADDR_TO_STR (&dr_msg_info.prefix),
                    dr_msg_info.prefix_len);
 
-        nas_l3_unlock();
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
     if ((p_dr->rt_type != RT_UNREACHABLE) &&
@@ -763,8 +851,8 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
             HAL_RT_LOG_ERR("HAL-RT-LLA", "Invalid intf vrf_id: %d, prefix: %s/%d, "
                            " proto: %d out-if:%d link-local-cnt:%d RIF-ref-cnt:%d", p_dr->vrf_id,
                            FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
-                           dr_msg_info.proto, if_index, p_dr->num_ipv6_link_local, hal_rt_rif_ref_get(if_index));
-            nas_l3_unlock();
+                           dr_msg_info.proto, if_index, p_dr->num_ipv6_link_local,
+                           hal_rt_rif_ref_get(p_dr->vrf_id, if_index));
             return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
         }
 
@@ -772,11 +860,11 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
         if (p_ip_node) {
             fib_del_intf_ip(p_intf, p_ip_node);
         } else {
-            HAL_RT_LOG_ERR("HAL-RT-LLA", "Invalid IP del vrf_id: %d, prefix: %s/%d, "
+            HAL_RT_LOG_INFO("HAL-RT-LLA", "Invalid IP del vrf_id: %d, prefix: %s/%d, "
                            " proto: %d out-if:%d link-local-cnt:%d RIF-ref-cnt:%d", p_dr->vrf_id,
                            FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
-                           dr_msg_info.proto, if_index, p_dr->num_ipv6_link_local, hal_rt_rif_ref_get(if_index));
-            nas_l3_unlock();
+                           dr_msg_info.proto, if_index, p_dr->num_ipv6_link_local,
+                           hal_rt_rif_ref_get(p_dr->vrf_id, if_index));
             return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
         }
 
@@ -789,12 +877,12 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
          * accordingly.
          */
         if ((p_dr->num_ipv6_link_local > 0) &&
-            (FIB_IS_INTF_MODE_L3 (p_intf->mode)) && (hal_rt_rif_ref_get(if_index) == -1)) {
+            (FIB_IS_INTF_MODE_L3 (p_intf->mode)) &&
+            (hal_rt_rif_ref_get(p_dr->vrf_id, if_index) == -1)) {
             /* Looks like duplicate link local route delete,
              * need to analyse further if the below error is seen in the journal */
             HAL_RT_LOG_INFO("HAL-RT-DR", "Reference count already 0 while deleting "
                             "the link local address from intf:%d", if_index);
-            nas_l3_unlock();
             return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
         }
 
@@ -802,7 +890,7 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
                        " proto: %d out-if:%d intf-mode:%s link-local-cnt:%d RIF-ref-cnt:%d", p_dr->vrf_id,
                         FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
                        dr_msg_info.proto, if_index, hal_rt_intf_mode_to_str(p_intf->mode),
-                       p_dr->num_ipv6_link_local, hal_rt_rif_ref_get(if_index));
+                       p_dr->num_ipv6_link_local, hal_rt_rif_ref_get(p_dr->vrf_id, if_index));
 
         /* RIF ref count would have been decremented when the interface mode
          * changed from L3 to L2 or when interface admin changed
@@ -811,7 +899,7 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
          */
         if (FIB_IS_INTF_MODE_L3(p_intf->mode) &&
             (p_intf->admin_status == RT_INTF_ADMIN_STATUS_UP)) {
-            if (!hal_rt_rif_ref_dec(if_index))
+            if (!hal_rt_rif_ref_dec(p_dr->vrf_id, if_index))
                 hal_rif_index_remove(0, p_dr->vrf_id, if_index);
             p_dr->num_ipv6_rif_link_local--;
         }
@@ -820,7 +908,6 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
          * dont delete the route */
 
         if (p_dr->num_ipv6_link_local > 0) {
-            nas_l3_unlock();
             return STD_ERR_OK;
         }
     }
@@ -834,7 +921,7 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
      */
 
     HAL_RT_LOG_DEBUG("HAL-RT-DR(RT-START)",
-                 "vrf_id:%d, prefix:%s, prefix_len:%d, proto:%d curr-nh-cnt:%d nh-cnt:%d",
+                 "vrf_id:%d, prefix:%s, prefix_len:%d, proto:%d curr-nh-cnt:%d nh-cnt:%lu",
                  dr_msg_info.vrf_id,
                  FIB_IP_ADDR_TO_STR (&dr_msg_info.prefix), dr_msg_info.prefix_len,
                  dr_msg_info.proto, p_dr->num_nh , ((t_fib_route_entry  *)p_rtm_fib_cmd)->hop_count);
@@ -860,7 +947,6 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
             p_dr->status_flag |= FIB_DR_STATUS_ADD;
             fib_mark_dr_for_resolution (p_dr);
 
-            nas_l3_unlock();
             return STD_ERR_OK;
         }
     } else if ((((t_fib_route_entry  *)p_rtm_fib_cmd)->hop_count == 1) &&
@@ -881,7 +967,6 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
         fib_form_nh_msg_info (p_dr->key.prefix.af_index, p_rtm_fib_cmd, &nh_msg_info, 0);
         t_fib_nh *p_nh = fib_get_nh (nh_msg_info.vrf_id, &nh_msg_info.ip_addr, nh_msg_info.if_index);
         if ((p_nh == NULL) || (fib_get_nh_dep_dr(p_nh, p_dr) == NULL)) {
-            nas_l3_unlock();
             return STD_ERR_OK;
         }
     } else {
@@ -898,23 +983,67 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
         if ((((t_fib_route_entry  *)p_rtm_fib_cmd)->hop_count > 1) &&
             (p_dr->num_nh == 1)) {
             HAL_RT_LOG_DEBUG ("HAL-RT-DR-DEL",
-                 "vrf_id:%d, prefix:%s, prefix_len:%d, proto:%d curr-nh-cnt:%d nh-cnt:%d",
+                 "vrf_id:%d, prefix:%s, prefix_len:%d, proto:%d curr-nh-cnt:%d nh-cnt:%lu",
                  dr_msg_info.vrf_id,
                  FIB_IP_ADDR_TO_STR (&dr_msg_info.prefix), dr_msg_info.prefix_len,
                  dr_msg_info.proto, p_dr->num_nh , ((t_fib_route_entry  *)p_rtm_fib_cmd)->hop_count);
 
-            nas_l3_unlock();
             return STD_ERR_OK;
         }
     }
     // TODO This needs to revisited to handle the DR del in the DR walker
     // fib_mark_dr_for_resolution (p_dr);
     p_dr->status_flag |= FIB_DR_STATUS_DEL;
+
+    /* On route delete, trigger neighbor flush for the route prefix and interface.
+     * This is done for following cases:
+     * 1) Connected route delete,
+     * 2) Route with exit interface.
+     * Currently kernel wouldn't flush the neighbors learnt on that route
+     * subnet whenever the route is deleted. Hence this work around is done
+     * to ensure that the traffic forwarding ceases to those neighbors when
+     * the route is deleted.
+     */
+    if (!(p_dr->is_mgmt_route)) {
+        p_fh = FIB_GET_FIRST_NH_FROM_DR(p_dr, nh_holder);
+        if (p_fh && FIB_IS_NH_ZERO(p_fh)) {
+            is_neigh_flush_required = true;
+            hal_rt_form_neigh_flush_msg (&offload_msg, p_dr, true, p_fh->key.if_index);
+        }
+    }
+
     fib_proc_dr_del (p_dr);
 
-    nas_l3_unlock();
+    /* When the local IP is no longer available, check if there is any neighbor still present,
+     * if yes, program it in the HW */
+    if (FIB_AFINDEX_TO_PREFIX_LEN (af_index) == dr_msg_info.prefix_len) {
+        HAL_RT_LOG_INFO("HAL-RT-NH-ADD", "Local IP:%s",  FIB_IP_ADDR_TO_STR (&dr_msg_info.prefix));
+        t_fib_nh *p_nh = fib_get_next_nh(dr_msg_info.vrf_id, &dr_msg_info.prefix, 0);
+        if (p_nh && (!FIB_IS_NH_WRITTEN (p_nh)) && (memcmp(&p_nh->key.ip_addr,
+                                                           &dr_msg_info.prefix, sizeof(t_fib_ip_addr)) == 0)) {
+            HAL_RT_LOG_INFO("HAL-RT-NH-ADD", "NH:%s flags:0x%x found", FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr),
+                            p_nh->status_flag);
+            if (!(p_nh->status_flag & (FIB_NH_STATUS_DEL | FIB_NH_STATUS_DEAD))) {
+                p_nh->status_flag |= FIB_NH_STATUS_ADD;
+
+                fib_mark_nh_for_resolution (p_nh);
+            }
+        }
+    }
 
     fib_resume_nh_walker_thread(af_index);
+
+    if (is_neigh_flush_required) {
+        t_fib_offload_msg *p_offload_msg = hal_rt_alloc_offload_msg ();
+
+        if (!p_offload_msg) {
+            HAL_RT_LOG_ERR ("HAL-RT", "Memory alloc failed for offload msg");
+        } else {
+            memcpy (p_offload_msg, &offload_msg, sizeof (t_fib_offload_msg));
+            nas_rt_process_offload_msg (p_offload_msg);
+        }
+    }
+
 
     return STD_ERR_OK;
 }
@@ -959,7 +1088,7 @@ int fib_proc_dr_del (t_fib_dr *p_dr)
          * since it's already done in the fib_proc_dr_del_msg() */
         if (FIB_IS_DR_WRITTEN(p_dr) &&
             !(STD_IP_IS_ADDR_LINK_LOCAL(&p_dr->key.prefix))) {
-            if(!hal_rt_rif_ref_dec(if_index))
+            if(!hal_rt_rif_ref_dec(p_dr->vrf_id, if_index))
                 rif_del = true;
         }
     }
@@ -1108,14 +1237,14 @@ int fib_proc_dr_nh_add (t_fib_dr *p_dr, void *p_rtm_fib_cmd, int *p_nh_info_size
 
     af_index = p_dr->key.prefix.af_index;
     nh_count = ((t_fib_route_entry  *)p_rtm_fib_cmd)->hop_count;
-    HAL_RT_LOG_DEBUG("HAL-RT-DR", "nh_count=%d vrf_id: %d, prefix: %s, prefix_len: %d",
+    HAL_RT_LOG_DEBUG("HAL-RT-DR", "nh_count=%lu vrf_id: %d, prefix: %s, prefix_len: %d",
                      nh_count, p_dr->vrf_id,
                      FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len);
 
-    /* for blackhole/unreachable/prohibit routes,
+    /* for blackhole/unreachable/prohibit/cache routes,
      * simply return w/o adding NH for zero address.
      */
-    if (FIB_IS_RESERVED_RT_TYPE(p_dr->rt_type)) {
+    if ((p_dr->rt_type != RT_CACHE) && (FIB_IS_RESERVED_RT_TYPE(p_dr->rt_type))) {
         return STD_ERR_OK;
     }
     /*
@@ -1140,7 +1269,7 @@ int fib_proc_dr_nh_add (t_fib_dr *p_dr, void *p_rtm_fib_cmd, int *p_nh_info_size
                                 nh_msg_info.if_index, FIB_NH_OWNER_TYPE_RTM, 0, p_dr->is_mgmt_route);
 
         HAL_RT_LOG_DEBUG("HAL-RT-DR",
-                         "vrf_id: %d, ip_addr: %s, nh_loop_idx %d if_index: %d",
+                         "vrf_id: %d, ip_addr: %s, nh_loop_idx %lu if_index: %d",
                          vrf_id, FIB_IP_ADDR_TO_STR (&nh_msg_info.ip_addr), i, nh_if_index);
 
         p_dr_nh = fib_add_dr_nh (p_dr, p_nh, 0, 0, &is_dup);
@@ -1152,7 +1281,7 @@ int fib_proc_dr_nh_add (t_fib_dr *p_dr, void *p_rtm_fib_cmd, int *p_nh_info_size
         {
             HAL_RT_LOG_ERR("HAL-RT-DR", "DRNH Addition failed. "
                            "DR: vrfId: %d, prefix: %s, prefixLen: %d, "
-                           "NH: vrfId: %d, ipAddr: %s, nhIndex: %d nh_cnt:%d ifIndex: %d",
+                           "NH: vrfId: %d, ipAddr: %s, nhIndex: %lu nh_cnt:%lu ifIndex: %d",
                            p_dr->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                            p_dr->prefix_len, p_nh->vrf_id,
                            FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr), i, nh_count,
@@ -1166,7 +1295,7 @@ int fib_proc_dr_nh_add (t_fib_dr *p_dr, void *p_rtm_fib_cmd, int *p_nh_info_size
             HAL_RT_LOG_ERR("HAL-RT-DR",
                            "%s (): NHDep_dr Addition failed. "
                            "DR: vrf_id: %d, prefix: %s, prefix_len: %d, "
-                           "NH: vrf_id: %d, ip_addr: %s, nhIndex %d if_index: 0x%x",
+                           "NH: vrf_id: %d, ip_addr: %s, nhIndex %lu if_index: 0x%x",
                            __FUNCTION__, p_dr->vrf_id,
                            FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
                            p_nh->vrf_id, FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr),
@@ -1177,11 +1306,11 @@ int fib_proc_dr_nh_add (t_fib_dr *p_dr, void *p_rtm_fib_cmd, int *p_nh_info_size
     }
     if (is_new_nh == false) {
         HAL_RT_LOG_INFO("HAL-RT-DR", "Dup NH ignored for route: vrf_id:%d, prefix:%s/%d, "
-                        "nh_cnt:%d last NH: ip_addr:%s if_index:%d",
+                        "nh_cnt:%lu last NH: ip_addr:%s if_index:%d",
                         p_dr->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                         p_dr->prefix_len, nh_count,
-                        FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr),
-                        p_nh->key.if_index);
+                        (p_nh ? FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr) : " "),
+                        (p_nh ? p_nh->key.if_index : 0));
 
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
@@ -1211,7 +1340,7 @@ int fib_proc_dr_nh_del (t_fib_dr *p_dr, void *p_rtm_fib_cmd)
 
     af_index = p_dr->key.prefix.af_index;
     nh_count = ((t_fib_route_entry  *)p_rtm_fib_cmd)->hop_count;
-    HAL_RT_LOG_DEBUG("HAL-RT-DR", "nh_count=%d vrf_id: %d, prefix: %s, prefix_len: %d",
+    HAL_RT_LOG_DEBUG("HAL-RT-DR", "nh_count=%lu vrf_id: %d, prefix: %s, prefix_len: %d",
                     nh_count, p_dr->vrf_id,
                    FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len);
 
@@ -1245,7 +1374,7 @@ int fib_proc_dr_nh_del (t_fib_dr *p_dr, void *p_rtm_fib_cmd)
             HAL_RT_LOG_DEBUG ("HAL-RT-DR",
                               "%s (): NHDep_dr get failed. "
                               "DR: vrf_id: %d, prefix: %s, prefix_len: %d, "
-                              "NH: vrf_id: %d, ip_addr: %s, nhIndex %d if_index: 0x%x",
+                              "NH: vrf_id: %d, ip_addr: %s, nhIndex %lu if_index: 0x%x",
                               __FUNCTION__, p_dr->vrf_id,
                               FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
                               p_nh->vrf_id, FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr),
@@ -1258,7 +1387,7 @@ int fib_proc_dr_nh_del (t_fib_dr *p_dr, void *p_rtm_fib_cmd)
         fib_proc_nh_delete (p_nh, FIB_NH_OWNER_TYPE_RTM, 0);
 
         HAL_RT_LOG_DEBUG("HAL-RT-DR",
-                     "vrf_id: %d, ip_addr: %s, nh_loop_idx %d if_index: %d",
+                     "vrf_id: %d, ip_addr: %s, nh_loop_idx %lu if_index: %d",
                       vrf_id, FIB_IP_ADDR_TO_STR (&nh_msg_info.ip_addr), i, nh_if_index);
         p_dr_nh = fib_get_dr_nh(p_dr, p_nh);
         if (p_dr_nh) {
@@ -1267,7 +1396,7 @@ int fib_proc_dr_nh_del (t_fib_dr *p_dr, void *p_rtm_fib_cmd)
             {
                 HAL_RT_LOG_ERR("HAL-RT-DR", "DRNH deletion failed "
                                "DR: vrfId: %d, prefix: %s/%d,"
-                               "NH: vrfId: %d, ipAddr: %s, nhIndex: %d nn_cnt:%d ifIndex: %d",
+                               "NH: vrfId: %d, ipAddr: %s, nhIndex: %lu nn_cnt:%lu ifIndex: %d",
                                p_dr->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
                                p_nh->vrf_id, FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr),
                                i, nh_count, p_nh->key.if_index);
@@ -1372,7 +1501,7 @@ int fib_form_nh_msg_info (uint8_t af_index, void *p_rtm_nh_key, t_fib_nh_msg_inf
          * @@TODO : NH vrfid to be obtained from nh_if_index for vrfs
          * implemented with Linux namespace or other vrf implementations
          */
-        p_fib_nh_msg_info->vrf_id   = p_rtm_v4NHKey->vrfid;
+        p_fib_nh_msg_info->vrf_id   = p_rtm_v4NHKey->nh_vrfid;
     }
     else if (FIB_IS_AFINDEX_V6 (af_index))
     {
@@ -1390,7 +1519,7 @@ int fib_form_nh_msg_info (uint8_t af_index, void *p_rtm_nh_key, t_fib_nh_msg_inf
          * @@TODO : NH vrfid to be obtained from nh_if_index for vrfs
          * implemented with Linux namespace or other vrf implementations
          */
-        p_fib_nh_msg_info->vrf_id   = p_rtm_v6NHKey->vrfid;
+        p_fib_nh_msg_info->vrf_id   = p_rtm_v6NHKey->nh_vrfid;
     }
 
     if (p_fib_nh_msg_info->if_index == 0)
@@ -1413,7 +1542,7 @@ int fib_form_nh_msg_info (uint8_t af_index, void *p_rtm_nh_key, t_fib_nh_msg_inf
     }
 
     HAL_RT_LOG_DEBUG("HAL-RT-DR",
-               "vrf_id: %d, ip_addr: %s, nh_index %d if_index: 0x%x",
+               "vrf_id: %d, ip_addr: %s, nh_index %lu if_index: 0x%x",
                 p_fib_nh_msg_info->vrf_id,
                FIB_IP_ADDR_TO_STR (&p_fib_nh_msg_info->ip_addr),
                nh_index, p_fib_nh_msg_info->if_index);
@@ -1550,7 +1679,7 @@ int fib_add_default_dr (uint32_t vrf_id, uint8_t af_index)
     return STD_ERR_OK;
 }
 
-int fib_add_default_link_local_route (uint32_t vrf_id)
+int fib_handle_default_link_local_route (uint32_t vrf_id, bool is_add)
 {
     t_fib_dr        *p_dr = NULL;
     t_fib_ip_addr    ip_addr;
@@ -1559,7 +1688,7 @@ int fib_add_default_link_local_route (uint32_t vrf_id)
     uint8_t          prefix_len = 10;
     /* link local address prefix */
     char addr[HAL_RT_V6_ADDR_LEN] = {0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                                     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
     HAL_RT_LOG_DEBUG("HAL-RT-DR",
                      "vrf_id: %d, af_index: %d", vrf_id, af_index);
@@ -1578,6 +1707,10 @@ int fib_add_default_link_local_route (uint32_t vrf_id)
 
     if (p_dr == NULL)
     {
+        if (is_add == false) {
+            HAL_RT_LOG_INFO("HAL-RT-DR", "Link local Route does not exist for vrf_id:%d", vrf_id);
+            return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
+        }
         p_dr = fib_add_dr (vrf_id, &ip_addr, prefix_len);
 
         if (p_dr == NULL)
@@ -1604,16 +1737,17 @@ int fib_add_default_link_local_route (uint32_t vrf_id)
                      "vrf_id: %d, af_index: %d",
                      vrf_id, af_index);
 
-    p_dr->rt_type = RT_BLACKHOLE;
+    if (is_add) {
+        p_dr->rt_type = RT_BLACKHOLE;
+        p_dr->default_dr_owner = FIB_DEFAULT_DR_OWNER_FIB;
+        p_dr->status_flag |= FIB_DR_STATUS_ADD;
+        fib_mark_dr_for_resolution (p_dr);
 
-    p_dr->default_dr_owner = FIB_DEFAULT_DR_OWNER_FIB;
-
-    /* set ADD flag to trigger route download to walker */
-    p_dr->status_flag |= FIB_DR_STATUS_ADD;
-    fib_mark_dr_for_resolution (p_dr);
-
-    fib_resume_dr_walker_thread (af_index);
-
+        fib_resume_dr_walker_thread (af_index);
+    } else {
+        p_dr->status_flag |= FIB_DR_STATUS_DEL;
+        fib_proc_dr_del (p_dr);
+    }
     return STD_ERR_OK;
 }
 
@@ -2071,6 +2205,7 @@ int fib_delete_all_dr_nh (t_fib_dr *p_dr)
         p_dr_nh = FIB_GET_DRNH_NODE_FROM_NH_HOLDER (nh_holder);
 
         fib_del_dr_nh (p_dr, p_dr_nh);
+        fib_check_and_delete_nh (p_nh, false);
     }
 
     return STD_ERR_OK;
@@ -2210,7 +2345,7 @@ int fib_del_dr_fh (t_fib_dr *p_dr, t_fib_dr_fh *p_dr_fh)
         {
             p_fh->dr_ref_count--;
 
-            fib_check_and_delete_nh (p_fh);
+            fib_check_and_delete_nh (p_fh, false);
         }
     }
 
@@ -2557,24 +2692,6 @@ int fib_dr_walker_main (void)
     int                  af_index = 0;
     int                  rc = STD_ERR_OK;
 
-    HAL_RT_LOG_DEBUG("HAL-RT-DR", "af_index: %d", af_index);
-
-    for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id++) {
-        for (af_index = FIB_MIN_AFINDEX; af_index < FIB_MAX_AFINDEX; af_index++) {
-            p_vrf_info = FIB_GET_VRF_INFO (vrf_id, af_index);
-            if (p_vrf_info == NULL)
-            {
-                HAL_RT_LOG_DEBUG("HAL-RT-DR", "Vrf info NULL. "
-                          "vrf_id: %d, af_index: %d",
-                           vrf_id, af_index);
-                continue;
-            }
-            memset (&p_vrf_info->dr_radical_marker, 0, sizeof (std_radical_ref_t));
-            std_radical_walkconstructor (p_vrf_info->dr_tree,
-                                       &p_vrf_info->dr_radical_marker);
-        }
-    }
-
     for ( ; ;)
     {
         pthread_mutex_lock( &fib_dr_mutex );
@@ -2590,16 +2707,20 @@ int fib_dr_walker_main (void)
 
         for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id++) {
             for (af_index = FIB_MIN_AFINDEX; af_index < FIB_MAX_AFINDEX; af_index++) {
-                p_vrf_info = FIB_GET_VRF_INFO (vrf_id, af_index);
-
-                if (p_vrf_info == NULL){
-                    HAL_RT_LOG_DEBUG("HAL-RT-DR", "Vrf info NULL. "
-                               "vrf_id: %d, af_index: %d", vrf_id, af_index);
-
-                    continue;
+                nas_l3_lock();
+                if (hal_rt_access_fib_vrf(vrf_id) == NULL) {
+                    nas_l3_unlock();
+                    break;
                 }
 
-                nas_l3_lock();
+                p_vrf_info = FIB_GET_VRF_INFO (vrf_id, af_index);
+                if (p_vrf_info == NULL){
+                    HAL_RT_LOG_DEBUG("HAL-RT-DR", "Vrf info NULL. "
+                                     "vrf_id: %d, af_index: %d", vrf_id, af_index);
+
+                    nas_l3_unlock();
+                    continue;
+                }
 
                 p_vrf_info->num_dr_processed_by_walker = 0;
 
@@ -2616,12 +2737,12 @@ int fib_dr_walker_main (void)
                 /* Process a maximum of FIB_DR_WALKER_COUNT nodes per vrf */
 
                 std_radical_walkchangelist (p_vrf_info->dr_tree,
-                                      &p_vrf_info->dr_radical_marker,
-                                      fib_dr_walker_call_back,
-                                      0,
-                                      FIB_DR_WALKER_COUNT,
-                                      max_walker_version,
-                                      &rc);
+                                            &p_vrf_info->dr_radical_marker,
+                                            fib_dr_walker_call_back,
+                                            0,
+                                            FIB_DR_WALKER_COUNT,
+                                            max_walker_version,
+                                            &rc);
 
                 /* @TODO: Need to handle version wrap */
                 max_version    = std_radix_getversion (p_vrf_info->dr_tree);
@@ -2636,7 +2757,7 @@ int fib_dr_walker_main (void)
                  * fib_dr_walker_call_back ().
                  */
                 if (p_vrf_info->num_dr_processed_by_walker == FIB_DR_WALKER_COUNT) {
-                    HAL_RT_LOG_DEBUG("HAL-RT-DR", "Max DR processed per walk, relinquish now",
+                    HAL_RT_LOG_DEBUG("HAL-RT-DR", "Max DR processed %d per walk, relinquish now",
                                      tot_dr_processed);
                     is_dr_pending_for_processing = true;
                 }
@@ -2690,7 +2811,7 @@ int fib_dr_walker_call_back (std_radical_head_t *p_rt_head, va_list ap)
 
     HAL_RT_LOG_DEBUG("HAL-RT-DR",
                "num_dr_processed_by_walker: %d, clear_ip_fib_on: %d, "
-               "clear_ip_route_on: %d, dr_ha_on: %d, last_update_time: %lld, "
+               "clear_ip_route_on: %d, dr_ha_on: %d, last_update_time: %lu, "
                "default_dr_owner: %d",
                p_vrf_info->num_dr_processed_by_walker, p_vrf_info->clear_ip_fib_on,
                p_vrf_info->clear_ip_route_on, p_vrf_info->dr_ha_on,
@@ -2911,7 +3032,7 @@ int fib_resolve_dr (t_fib_dr *p_dr)
         }
     }
 
-    if (FIB_IS_MGMT_ROUTE(p_dr->vrf_id, p_dr)) {
+    if (FIB_IS_MGMT_ROUTE(p_dr->vrf_id, p_dr) || (p_dr->rt_type == RT_CACHE)) {
         /* Dont go for NPU programming for out of band routes,
          * once the in band mgmt is needed, make sure to program the route into the NPU */
         return STD_ERR_OK;
@@ -3429,5 +3550,29 @@ bool hal_rt_handle_ip_unreachable_config (t_fib_intf_ip_unreach_config *p_cfg, b
          * for the IP unreachable config reset */
         fib_check_and_delete_intf(p_db_intf);
     }
+    return true;
+}
+
+
+bool hal_rt_form_neigh_flush_msg (t_fib_offload_msg *p_offload_msg, t_fib_dr *p_dr, bool is_neigh_flush_with_intf, hal_ifindex_t if_index)
+{
+    t_fib_offload_msg_neigh_flush *flush_msg = &(p_offload_msg->neigh_flush_msg);
+
+    memset (p_offload_msg, 0, sizeof (t_fib_offload_msg));
+    p_offload_msg->type = FIB_OFFLOAD_MSG_TYPE_NEIGH_FLUSH;
+
+    flush_msg->vrf_id = p_dr->vrf_id;
+    memcpy (&flush_msg->prefix, &p_dr->key.prefix, sizeof (p_dr->key.prefix));
+    flush_msg->prefix_len = p_dr->prefix_len;
+    flush_msg->is_neigh_flush_with_intf = is_neigh_flush_with_intf;
+    if (is_neigh_flush_with_intf)
+        flush_msg->if_index = if_index;
+
+    HAL_RT_LOG_DEBUG("HAL-RT", " Neigh flush message for "
+                     "vrf_id: %d, prefix: %s, prefix_len: %d "
+                     "flush_with_intf: %s, if_index: %d", flush_msg->vrf_id,
+                     FIB_IP_ADDR_TO_STR (&flush_msg->prefix), flush_msg->prefix_len,
+                     (flush_msg->is_neigh_flush_with_intf ? "true":"false"), flush_msg->if_index);
+
     return true;
 }

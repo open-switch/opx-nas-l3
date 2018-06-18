@@ -99,6 +99,10 @@ std::string nbr_mgr_msgq_t::queue_stats ()
     return ss.str();
 }
 
+std::string nbr_mgr_netlink_q_stats() {
+    return (p_msgq_nl_nas_msg_hdl->queue_stats());
+}
+
 bool nbr_mgr_enqueue_netlink_nas_msg(nbr_mgr_msg_uptr_t msg)
 {
     return (p_msgq_nl_nas_msg_hdl->enqueue(std::move(msg)));

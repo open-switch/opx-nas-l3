@@ -37,6 +37,19 @@ const char *hal_rt_intf_mode_to_str (uint32_t mode) {
         return "Unknown";
 }
 
+const char *hal_rt_intf_admin_status_to_str (uint32_t admin) {
+
+    if (admin == RT_INTF_ADMIN_STATUS_NONE)
+        return "None";
+    else if (admin == RT_INTF_ADMIN_STATUS_UP)
+        return "Up";
+    else if (admin == RT_INTF_ADMIN_STATUS_DOWN)
+        return "Down";
+    else
+        return "Unknown";
+}
+
+
 int fib_nbr_del_on_intf_down (int if_index, int vrf_id, int af_index) {
     t_fib_nh       *p_fh = NULL;
     t_fib_nh_holder nh_holder;
@@ -183,7 +196,7 @@ int fib_process_link_local_address_add_on_intf_event (t_fib_intf *p_intf, t_fib_
         HAL_RT_LOG_INFO("HAL-RT-LLA-ADD", "vrf:%d, if_index:%d, ip_addr: %s, RIF-ref-cnt:%d",
                         p_intf->key.vrf_id, if_index,
                         FIB_IP_ADDR_TO_STR (p_temp_ip),
-                        hal_rt_rif_ref_get(if_index));
+                        hal_rt_rif_ref_get(p_intf->key.vrf_id, if_index));
 
         if (!STD_IP_IS_ADDR_LINK_LOCAL(p_temp_ip)) {
             continue;
@@ -210,14 +223,14 @@ int fib_process_link_local_address_add_on_intf_event (t_fib_intf *p_intf, t_fib_
          */
         ndi_rif_id_t rif_id = 0;
         if (hal_rif_index_get_or_create(0, p_add_dr->vrf_id, if_index, &rif_id) == STD_ERR_OK) {
-            hal_rt_rif_ref_inc(if_index);
+            hal_rt_rif_ref_inc(p_add_dr->vrf_id, if_index);
             p_add_dr->num_ipv6_rif_link_local++;
         } else {
             HAL_RT_LOG_ERR("HAL-RT-LLA-ADD", " RIF get failed for Route add vrf_id: %d, prefix: %s/%d,"
                            " proto: %d out-if:%d link-local-cnt:%d RIF-ref-cnt:%d",
                            p_add_dr->vrf_id, FIB_IP_ADDR_TO_STR (&p_add_dr->key.prefix),
                            p_add_dr->prefix_len, p_add_dr->proto, if_index,
-                           p_add_dr->num_ipv6_link_local, hal_rt_rif_ref_get(if_index));
+                           p_add_dr->num_ipv6_link_local, hal_rt_rif_ref_get(p_intf->key.vrf_id, if_index));
         }
 
         if (p_add_dr->num_ipv6_rif_link_local > 1) {
@@ -257,6 +270,10 @@ int fib_process_nh_add_on_intf_event (t_fib_intf *p_intf, t_fib_intf_event_type 
                          "owner_flag: 0x%x, status_flag: 0x%x",
                          p_fh->vrf_id, FIB_IP_ADDR_TO_STR (&p_fh->key.ip_addr),
                          p_fh->key.if_index, p_fh->owner_flag, p_fh->status_flag);
+
+        if (hal_rt_is_local_ip_conflict (p_fh->vrf_id, &p_fh->key.ip_addr)) {
+            continue;
+        }
 
         /* restore this NH only if its not already marked for deletion */
         if (!(p_fh->status_flag & FIB_NH_STATUS_DEL)) {
@@ -343,24 +360,14 @@ int fib_process_route_del_on_intf_event (t_fib_intf *p_intf, t_fib_intf_event_ty
             if (is_fib_route_del && p_del_dr &&
                 !(STD_IP_IS_ADDR_LINK_LOCAL(&p_del_dr->key.prefix))) {
 
-                /* @@TODO - kerel specific event handling.
-                 * on admin up, kernel notifies of ROUTE events for
-                 * /prefix-length and the full length routes (for the address)
-                 * are not notified again. They are notified only during
-                 * IP address assignment.
-                 * Hence on admin down, local routes will only be deleted from NPU
-                 * and retained in nas. They will be configured in NPU again on
-                 * admin UP. So don't set FIB_DR_STATUS_DEL for RT_LOCAL routes.
-                 */
-
                 /* For admin event,
-                 * delete all routes except local routes from both NPU & in cache.
-                 * local routes will be retained in cache and deleted only in NPU.
+                 * delete all routes except from both NPU & in cache.
                  * For L2 mode change event,
                  * irrespective of rt_type delete all routes from NPU only
                  * and retain in cache.
                  */
-                if ((intf_event == FIB_INTF_ADMIN_EVENT) && (p_del_dr->rt_type != RT_LOCAL)) {
+                if (((intf_event == FIB_INTF_ADMIN_EVENT) && (p_del_dr->rt_type != RT_LOCAL))
+                    || (intf_event == FIB_INTF_FORCE_DEL)) {
                     p_del_dr->status_flag |= FIB_DR_STATUS_DEL;
                 }
                 HAL_RT_LOG_INFO ("HAL-RT-DR-DEL",
@@ -403,7 +410,7 @@ int fib_process_link_local_address_del_on_intf_event (t_fib_intf *p_intf, t_fib_
         HAL_RT_LOG_INFO("HAL-RT-LLA-DEL", "vrf:%d, if_index:%d, ip_addr: %s, RIF-ref-cnt:%d",
                         p_intf->key.vrf_id, if_index,
                         FIB_IP_ADDR_TO_STR (p_temp_ip),
-                        hal_rt_rif_ref_get(if_index));
+                        hal_rt_rif_ref_get(p_intf->key.vrf_id, if_index));
 
         if (!STD_IP_IS_ADDR_LINK_LOCAL(p_temp_ip)) {
             continue;
@@ -432,11 +439,14 @@ int fib_process_link_local_address_del_on_intf_event (t_fib_intf *p_intf, t_fib_
          * is configured; hence delete the LLA from NDI.
          */
         if (p_del_dr->num_ipv6_rif_link_local >= 1) {
-            if (!hal_rt_rif_ref_dec(if_index))
+            if (!hal_rt_rif_ref_dec(p_intf->key.vrf_id, if_index))
                 hal_rif_index_remove(0, p_intf->key.vrf_id, if_index);
             continue;
         }
 
+        if (intf_event == FIB_INTF_FORCE_DEL) {
+            p_del_dr->status_flag |= FIB_DR_STATUS_DEL;
+        }
         /* For interface mode change event,
          * delete link local route from NDI only.
          * link local routes will be retained in cache and deleted
@@ -445,39 +455,80 @@ int fib_process_link_local_address_del_on_intf_event (t_fib_intf *p_intf, t_fib_
         fib_proc_dr_del (p_del_dr);
 
         /* update/remove rif */
-        if (!hal_rt_rif_ref_dec(if_index))
+        if (!hal_rt_rif_ref_dec(p_intf->key.vrf_id, if_index))
             hal_rif_index_remove(0, p_intf->key.vrf_id, if_index);
     }
     return STD_ERR_OK;
 }
 
+static t_std_error hal_rt_intf_check_lla_dep_nh(t_fib_nh *p_nh) {
+    t_fib_nh_dep_dr   *p_nh_dep_dr = NULL;
+    t_fib_dr *p_dr = NULL;
+    if (FIB_IS_NH_ZERO(p_nh)) {
+        p_nh_dep_dr = fib_get_first_nh_dep_dr (p_nh);
+        if (p_nh_dep_dr) {
+            p_dr = p_nh_dep_dr->p_dr;
+            if (p_dr && (STD_IP_IS_ADDR_LINK_LOCAL(&p_dr->key.prefix))) {
+                HAL_RT_LOG_INFO ("HAL-RT-NH-DEL",
+                                 "LLA NH skipping - vrf_id: %d, dep-dr: %s, if_index: 0x%x, "
+                                 "owner_flag: 0x%x, status_flag: 0x%x",
+                                 p_nh->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
+                                 p_nh->key.if_index, p_nh->owner_flag, p_nh->status_flag);
+                return STD_ERR_OK;
+            }
+        }
+    }
+    return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
+}
+
 int fib_process_nh_del_on_intf_event (t_fib_intf *p_intf, t_fib_intf_event_type intf_event) {
 
-    t_fib_nh       *p_fh = NULL;
+    t_fib_nh       *p_fh = NULL, *p_fh_del = NULL;
     t_fib_nh_holder nh_holder;
 
     /* Loop for all the FH associated on that interface */
     FIB_FOR_EACH_FH_FROM_INTF (p_intf, p_fh, nh_holder) {
-        p_fh->status_flag |= FIB_NH_STATUS_DEAD;
+        if (intf_event == FIB_INTF_FORCE_DEL) {
+            if (p_fh_del) {
+                /* If the NH is associated with LLA, dont delete it, since this NH could be associated with LLA,
+                 * if we delete this NH now, it will lead to radix assert when the dependent NH is deleted
+                 * and route reaches the lla count reaches zero. */
+                if (hal_rt_intf_check_lla_dep_nh(p_fh_del) == STD_ERR_OK) {
+                    continue;
+                }
+                fib_nh_del_nh(p_fh_del, true);
+            }
+            p_fh_del = p_fh;
+        } else {
+            p_fh->status_flag |= FIB_NH_STATUS_DEAD;
 
-        HAL_RT_LOG_INFO ("HAL-RT-NH-DEL",
-                         "vrf_id: %d, ip_addr: %s, if_index: 0x%x, "
-                         "owner_flag: 0x%x, status_flag: 0x%x",
-                         p_fh->vrf_id, FIB_IP_ADDR_TO_STR (&p_fh->key.ip_addr),
-                         p_fh->key.if_index, p_fh->owner_flag, p_fh->status_flag);
+            HAL_RT_LOG_INFO ("HAL-RT-NH-DEL",
+                             "vrf_id: %d, ip_addr: %s, if_index: 0x%x, "
+                             "owner_flag: 0x%x, status_flag: 0x%x",
+                             p_fh->vrf_id, FIB_IP_ADDR_TO_STR (&p_fh->key.ip_addr),
+                             p_fh->key.if_index, p_fh->owner_flag, p_fh->status_flag);
 
 
-        /* For admin/L2 mode change event, set the FIB_NH_STATUS_DEAD flag,
-         * delete the nh in NPU only and retain it in cache.
-         * NH will be deleted only via explicit triggers from ARP delete.
-         */
-        fib_proc_nh_dead (p_fh);
-        cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_fh, cps_api_oper_DELETE);
-        if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
-            HAL_RT_LOG_ERR("HAL-RT-DR","Failed to publish neighbor delete");
+            /* For admin/L2 mode change event, set the FIB_NH_STATUS_DEAD flag,
+             * delete the nh in NPU only and retain it in cache.
+             * NH will be deleted only via explicit triggers from ARP delete.
+             */
+            fib_proc_nh_dead (p_fh);
+            cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_fh, cps_api_oper_DELETE);
+            if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
+                HAL_RT_LOG_ERR("HAL-RT-DR","Failed to publish neighbor delete");
+            }
         }
     }
 
+    if (p_fh_del) {
+        /* If the NH is associated with LLA, dont delete it, since this NH could be associated with LLA,
+         * if we delete this NH now, it will lead to radix assert when the dependent NH is deleted
+         * and route reaches the lla count reaches zero. */
+        if (hal_rt_intf_check_lla_dep_nh(p_fh_del) != STD_ERR_OK) {
+            fib_nh_del_nh(p_fh_del, true);
+        }
+    }
     return STD_ERR_OK;
 }
 
@@ -501,21 +552,22 @@ int fib_handle_intf_admin_status_change(int vrf_id, int af_index, t_fib_intf_ent
         p_intf = fib_get_or_create_intf(p_intf_chg->if_index, vrf_id, af_index, &is_intf_present);
         if (p_intf == NULL) {
             HAL_RT_LOG_ERR ("HAL-RT-DR", "Handling Failed - Admin status if_index: %d, vrf_id: %d, af_index: %d "
-                            "admin_up:%d is_del:%d p_intf:%p",
-                            p_intf_chg->if_index, vrf_id, af_index, p_intf_chg->admin_status,
+                            "admin status:%s is_del:%d p_intf:%p", p_intf_chg->if_index, vrf_id, af_index,
+                            hal_rt_intf_admin_status_to_str(p_intf_chg->admin_status),
                             p_intf_chg->is_op_del, p_intf);
 
             return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
         }
         safestrncpy(p_intf->if_name, p_intf_chg->if_name, sizeof(p_intf->if_name));
     }
-    HAL_RT_LOG_INFO ("HAL-RT-DR", "Admin status if_index: %d, vrf_id: %d, af_index: %d admin_up:%d "
+    HAL_RT_LOG_INFO ("HAL-RT-DR", "Admin status if_index: %d, vrf_id: %d, af_index: %d admin status:%s "
                      "is_del:%d name:%s p_intf:%p", p_intf_chg->if_index, vrf_id, af_index,
-                     p_intf_chg->admin_status, p_intf_chg->is_op_del, p_intf_chg->if_name, p_intf);
+                     hal_rt_intf_admin_status_to_str(p_intf_chg->admin_status),
+                     p_intf_chg->is_op_del, p_intf_chg->if_name, p_intf);
     /* if interface notification is received for the first time,
      * just update the admin status from kernel.
      */
-    if (!is_intf_present) {
+    if ((p_intf_chg->is_op_del == false) && (!is_intf_present)) {
         memcpy(&p_intf->mac_addr, &p_intf_chg->mac_addr, sizeof(hal_mac_addr_t));
         p_intf->admin_status = p_intf_chg->admin_status;
         return STD_ERR_OK;
@@ -582,7 +634,7 @@ int fib_handle_intf_admin_status_change(int vrf_id, int af_index, t_fib_intf_ent
         (memcmp(&p_intf->mac_addr, &p_intf_chg->mac_addr, sizeof(hal_mac_addr_t)) != 0)) {
 
         memcpy(&p_intf->mac_addr, &p_intf_chg->mac_addr, sizeof(hal_mac_addr_t));
-        /* RIF is already created for this interface, update the RIF if MAC is changed */
+        /* If RIF is already created for this interface, update the RIF if MAC is changed */
         if (hal_rif_update (vrf_id, p_intf_chg) == false) {
             char p_buf[HAL_RT_MAX_BUFSZ];
             HAL_RT_LOG_ERR ("HAL-RT-DR",
@@ -641,11 +693,10 @@ t_std_error fib_process_intf_mode_change (int vrf_id, int af_index, uint32_t if_
         std_dll_init (&p_intf->ip_list);
         p_intf->admin_status = RT_INTF_ADMIN_STATUS_DOWN;
         p_intf->mode = mode;
-
         return STD_ERR_OK;
     }
-    HAL_RT_LOG_INFO ("HAL-RT-INTF", "vrf_id:%d af_index:%d if_index:%d admin status:%d curr mode:%s new mode:%s",
-                     vrf_id, af_index, if_index, p_intf->admin_status,
+    HAL_RT_LOG_INFO ("HAL-RT-INTF", "vrf_id:%d af_index:%d if_index:%d admin status:%s curr mode:%s new mode:%s",
+                     vrf_id, af_index, if_index, hal_rt_intf_admin_status_to_str(p_intf->admin_status),
                      hal_rt_intf_mode_to_str(p_intf->mode), hal_rt_intf_mode_to_str(mode));
 
     if (p_intf->mode == mode) {
@@ -681,21 +732,31 @@ t_std_error fib_process_intf_mode_change (int vrf_id, int af_index, uint32_t if_
             /* mode  BASE_IF_MODE_MODE_L2 or any other mode
              * is handled as L2 mode.
              */
+
+            /* On L2 mode change, disable ICMP redirect. */
+            p_intf->is_ip_redirects_set = false;
+
             /* on mode change from L3 to L2,
              * delete all route/nh configurations from hardware only
              * and retain it in cache. Route/nh information in cache will be
              * deleted only when the kernel deletes it.
              */
-            fib_process_route_del_on_intf_event (p_intf, FIB_INTF_MODE_CHANGE_EVENT);
+
+            fib_process_route_del_on_intf_event (p_intf, (vrf_id ? FIB_INTF_FORCE_DEL : FIB_INTF_MODE_CHANGE_EVENT));
 
             /* on mode change from L3 to L2,
              * delete LLA route configurations from hardware only
              * and retain it in cache. Route information in cache will be
              * deleted only when the kernel deletes it.
              */
-            fib_process_link_local_address_del_on_intf_event (p_intf, FIB_INTF_MODE_CHANGE_EVENT);
+            fib_process_link_local_address_del_on_intf_event (p_intf, (vrf_id ? FIB_INTF_FORCE_DEL : FIB_INTF_MODE_CHANGE_EVENT));
 
-            fib_process_nh_del_on_intf_event (p_intf, FIB_INTF_MODE_CHANGE_EVENT);
+            fib_process_nh_del_on_intf_event (p_intf, (vrf_id ? FIB_INTF_FORCE_DEL : FIB_INTF_MODE_CHANGE_EVENT));
+            if (vrf_id) {
+                fib_del_all_intf_ip(p_intf);
+                p_intf->is_intf_delete_pending = true;
+                fib_check_and_delete_intf(p_intf);
+            }
         }
         /* resume NH/DR walker to process nh/route programming */
         fib_resume_nh_walker_thread(HAL_RT_V4_AFINDEX);

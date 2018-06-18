@@ -109,7 +109,8 @@ void fib_help (void)
 
     printf ("  fib_dump_all_rif ()\r\n");
 
-    printf ("  fib_dump_intf_rif (uint32_t if_index)\r\n");
+    printf ("  fib_dump_intf_rif (uint32_t vrf_id, uint32_t if_index)\r\n");
+
     printf ("**************************************************\r\n");
 
     return;
@@ -303,6 +304,7 @@ void fib_dump_dr_node_key (t_fib_dr *p_dr)
     printf ("  prefix            :  %s\r\n", FIB_IP_ADDR_TO_STR (&p_dr->key.prefix));
     printf ("  prefix_len        :  %d\r\n", p_dr->prefix_len);
     printf ("  vrf_id            :  %d\r\n", p_dr->vrf_id);
+    printf ("  vrf_name          :  %s\r\n", FIB_GET_VRF_NAME(p_dr->vrf_id, p_dr->key.prefix.af_index));
 
     return;
 }
@@ -320,6 +322,7 @@ void fib_dump_nh_node_key (t_fib_nh *p_nh)
     printf ("  ip_addr           :  %s\r\n", FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr));
     printf ("  if_index          :  0x%x\r\n", p_nh->key.if_index);
     printf ("  vrf_id            :  %d\r\n", p_nh->vrf_id);
+    printf ("  vrf_name          :  %s\r\n", FIB_GET_VRF_NAME(p_nh->vrf_id, p_nh->key.ip_addr.af_index));
 
     return;
 }
@@ -538,6 +541,8 @@ void fib_dump_nh_node (t_fib_nh *p_nh)
         printf ("-------------------------------------\r\n");
 
         printf ("  vrf_id        :  %d\r\n", p_nh_dep_dr->key.vrf_id);
+        printf ("  vrf_name      :  %s\r\n", FIB_GET_VRF_NAME(p_nh_dep_dr->key.vrf_id,
+                                                              p_nh_dep_dr->key.dr_key.prefix.af_index));
         printf ("  af_index      :  %d\r\n",
                 p_nh_dep_dr->key.dr_key.prefix.af_index);
         printf ("  prefix       :  %s\r\n",
@@ -937,6 +942,8 @@ void fib_dump_intf_node_key (t_fib_intf *p_intf)
     printf ("  p_intf            :  %p\r\n", p_intf);
     printf ("  if_index          :  %d\r\n", p_intf->key.if_index);
     printf ("  vrf_id            :  %d\r\n", p_intf->key.vrf_id);
+    printf ("  vrf_name          :  %s\r\n", FIB_GET_VRF_NAME(p_intf->key.vrf_id,
+                                                              p_intf->key.af_index));
     printf ("  af_index          :  %d\r\n", p_intf->key.af_index);
     printf ("  admin             :  %d\r\n", p_intf->admin_status);
     printf ("  if_name           :  %s\r\n", p_intf->if_name);
@@ -1587,27 +1594,23 @@ void fib_dump_nht(int vrf_id, int af_index, char *p_dest_addr)
     return;
 }
 
-
 void fib_dump_all_rif ()
 {
     uint32_t       count = 0;
-    hal_ifindex_t  if_index = 0;
-    ndi_rif_id_t   rif_id = 0;
-    uint32_t       ref_count = 0;
 
-    printf ("%-10s %-10s %-10s\r\n", "Intf", "RIF Id", "Ref count");
-    printf ("*********************************************************\r\n");
-
-    if_index = hal_rt_rif_entry_get_next_if_index (if_index);
-
-    while (if_index)
-    {
-        if (hal_rif_info_get (if_index, &rif_id, &ref_count) == STD_ERR_OK) {
-            printf ("%-10d %-10lx %-10d\r\n", if_index, (long int) rif_id, ref_count);
-            count++;
+    printf ("%-5s %-5s %-15s %-5s %-15s %-32s\r\n", "VRF Id", "Intf", "RIF Id", "Ref count", "Intf name", "VRF name");
+    printf ("****************************************************************************************\r\n");
+    t_fib_intf *p_intf = fib_get_next_intf(0, 0, 0);
+    while (p_intf != NULL) {
+        if (p_intf->key.af_index == HAL_RT_V4_AFINDEX) {
+            printf ("%-5d %-5d %-15lx %-5d %-15s %-32s\r\n", p_intf->key.vrf_id, p_intf->key.if_index,
+                    p_intf->rif_info.rif_id,  p_intf->rif_info.ref_count, p_intf->if_name,
+                    FIB_GET_VRF_NAME(p_intf->key.vrf_id, p_intf->key.af_index));
+            if (p_intf->rif_info.rif_id)
+                count++;
         }
-
-        if_index = hal_rt_rif_entry_get_next_if_index (if_index);
+        p_intf = fib_get_next_intf (p_intf->key.if_index,
+                                    p_intf->key.vrf_id, p_intf->key.af_index);
     }
 
     if (count != 0)
@@ -1619,12 +1622,12 @@ void fib_dump_all_rif ()
     return;
 }
 
-void fib_dump_intf_rif (uint32_t if_index)
+void fib_dump_intf_rif (uint32_t vrf_id, uint32_t if_index)
 {
     uint32_t      ref_count = 0;
     ndi_rif_id_t  rif_id = 0;
 
-    if (hal_rif_info_get (if_index, &rif_id, &ref_count) == STD_ERR_OK) {
+    if (hal_rif_info_get (vrf_id, if_index, &rif_id, &ref_count) == STD_ERR_OK) {
         printf ("%-10s %-10s %-10s\r\n", "Intf", "RIF Id", "Ref count");
         printf ("*********************************************************\r\n");
         printf ("%-10d %-10lx %-10d\r\n", if_index, (long int) rif_id, ref_count);
@@ -1846,7 +1849,7 @@ static void nas_rt_shell_debug_rif (std_parsed_string_t handle)
             fib_dump_all_rif ();
         } else if(NULL != token) {
             uint32_t if_index = strtol(token,NULL,0);
-            fib_dump_intf_rif (if_index);
+            fib_dump_intf_rif (0, if_index);
         }
     } else {
         nas_rt_shell_debug_rif_help();

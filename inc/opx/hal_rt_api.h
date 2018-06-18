@@ -101,4 +101,6 @@ t_std_error hal_form_nbr_entry(ndi_neighbor_t *p_nbr_entry, t_fib_nh *p_nh);
 dn_hal_route_err hal_fib_next_hop_del(t_fib_nh *p_nh);
 dn_hal_route_err hal_fib_next_hop_add(t_fib_nh *p_nh);
 
+t_std_error _hal_rt_virtual_routing_ip_cfg(nas_rt_virtual_routing_ip_config_t *p_cfg, bool status);
+
 #endif /* __HAL_RT_API_H__ */

@@ -16,7 +16,8 @@ libopx_hal_routing_la_SOURCES=src/hal_rt_arp.c src/hal_rt_host.c  src/hal_rt_mpa
                               src/nas_rt_api.c src/nas_rt_nht.c src/hal_rt_debug.c  src/hal_rt_main.c \
                               src/hal_rt_mpath_grp.c src/hal_rt_route.c src/nas_rt_cps.c src/hal_rt_dr.c \
                               src/hal_rt_mem.c src/hal_rt_mpath_util.c src/hal_rt_util.cpp \
-                              src/nas_rt_mac.cpp src/hal_rt_intf_util.c
+                              src/nas_rt_mac.cpp src/hal_rt_intf_util.c src/hal_rt_offload.cpp \
+                              src/nas_rt_virt_routing.cpp
 
 libopx_hal_routing_la_CPPFLAGS= -D_FILE_OFFSET_BITS=64 -I$(top_srcdir)/inc/opx -I$(includedir)/opx $(COMMON_HARDEN_FLAGS) -fPIC
 
@@ -34,7 +35,7 @@ base_nbr_mgr_svc_CXXFLAGS=-std=c++11
 
 base_nbr_mgr_svc_SOURCES=nbr-mgr/src/nbr_mgr_main.cpp nbr-mgr/src/nbr_mgr_utils.cpp
 base_nbr_mgr_svc_SOURCES+=nbr-mgr/src/nbr_mgr_cps.cpp nbr-mgr/src/nbr_mgr_msgq.cpp
-base_nbr_mgr_svc_SOURCES+=nbr-mgr/src/nbr_mgr_proc.cpp nbr-mgr/src/nbr_mgr_timer.cpp
+base_nbr_mgr_svc_SOURCES+=nbr-mgr/src/nbr_mgr_proc.cpp nbr-mgr/src/nbr_mgr_timer.cpp nbr-mgr/src/nbr_mgr_debug.cpp
 base_nbr_mgr_svc_SOURCES+=nbr-mgr/src/nbr_mgr_nl_evt.cpp nbr-mgr/src/nbr_mgr_rslv.cpp
 
 base_nbr_mgr_svc_LDADD=-lopx_nas_linux -lopx_common -lopx_logging -lopx_cps_api_common -lsystemd

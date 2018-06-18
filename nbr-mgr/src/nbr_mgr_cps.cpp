@@ -37,6 +37,7 @@
 #include "std_mac_utils.h"
 #include "dell-base-l2-mac.h"
 #include "os-routing-events.h"
+#include "vrf-mgmt.h"
 
 #include "nbr_mgr_main.h"
 #include "nbr_mgr_cache.h"
@@ -53,6 +54,7 @@ static std::mutex _auto_refresh_mutex;
 static auto& _nbr_auto_refresh_status = *new std::unordered_map<std::string, nbr_mgr_auto_refresh_t> ;
 
 bool nbr_mgr_process_flush_cps_msg(cps_api_object_t obj, void *param);
+/* Note: Dont return false from CPS event handler */
 bool nbr_mgr_process_nas_cps_msg(cps_api_object_t obj, void *param)
 {
     cps_api_object_it_t it;
@@ -60,14 +62,14 @@ bool nbr_mgr_process_nas_cps_msg(cps_api_object_t obj, void *param)
     nbr_mgr_msg_t *p_msg = nullptr;
 
     if (obj == NULL){
-        NBR_MGR_LOG_ERR ("Invalid object sent from NAS");
-        return false;
+        NBR_MGR_LOG_ERR ("NBR-MGR-CPS", "Invalid object sent from NAS");
+        return true;
     }
 
     nbr_mgr_msg_uptr_t p_msg_uptr = nbr_mgr_alloc_unique_msg(&p_msg);
     if (p_msg == NULL) {
-        NBR_MGR_LOG_ERR ("Memory alloc failed for NAS message");
-        return false;
+        NBR_MGR_LOG_ERR ("NBR-MGR-CPS", "Memory alloc failed for NAS message");
+        return true;
     }
     memset(p_msg, 0, sizeof(nbr_mgr_msg_t));
     p_msg->type = NBR_MGR_NAS_NBR_MSG;
@@ -87,6 +89,7 @@ bool nbr_mgr_process_nas_cps_msg(cps_api_object_t obj, void *param)
             break;
     }
 
+    const char *vrf_name = (const char*)cps_api_object_get_data(obj, BASE_ROUTE_OBJ_VRF_NAME);
     cps_api_object_it_begin(obj,&it);
 
     for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it) ) {
@@ -109,11 +112,14 @@ bool nbr_mgr_process_nas_cps_msg(cps_api_object_t obj, void *param)
                 break;
         }
     }
+    if (vrf_name) {
+        safestrncpy(p_msg->nbr.vrf_name, vrf_name, sizeof(p_msg->nbr.vrf_name));
+    }
     char buff[HAL_INET6_TEXT_LEN + 1];
-    NBR_MGR_LOG_DEBUG("NAS-MSG", "Nbr resolution request for vrf:%d type:%d family:%d ip:%s if-index:%d",
-                    p_msg->nbr.vrfid, p_msg->nbr.msg_type, p_msg->nbr.family,
-                    std_ip_to_string(&(p_msg->nbr.nbr_addr), buff, HAL_INET6_TEXT_LEN),
-                    p_msg->nbr.if_index);
+    NBR_MGR_LOG_DEBUG("NAS-MSG", "Nbr resolution request for vrf:%lu(%s) type:%d family:%d ip:%s if-index:%d",
+                      p_msg->nbr.vrfid, (vrf_name ? vrf_name : " "), p_msg->nbr.msg_type, p_msg->nbr.family,
+                      std_ip_to_string(&(p_msg->nbr.nbr_addr), buff, HAL_INET6_TEXT_LEN),
+                      p_msg->nbr.if_index);
     /* Proactive resolution request from NAS-L3 if not already resolved */
     p_msg->nbr.flags = NBR_MGR_NBR_RESOLVE;
     nbr_mgr_enqueue_netlink_nas_msg(std::move(p_msg_uptr));
@@ -124,13 +130,15 @@ bool nbr_mgr_nas_nl_cps_init() {
     cps_api_event_reg_t reg;
 
     memset(&reg,0,sizeof(reg));
-    const uint_t NUM_KEYS=2;
+    const uint_t NUM_KEYS=3;
     cps_api_key_t key[NUM_KEYS];
 
     cps_api_key_from_attr_with_qual(&key[0], OS_RE_BASE_ROUTE_OBJ_NBR_OBJ,
                                     cps_api_qualifier_OBSERVED);
     // Register with NAS-Linux object for interface state change notifications
     cps_api_key_from_attr_with_qual(&key[1], BASE_IF_LINUX_IF_INTERFACES_INTERFACE_OBJ,
+                                    cps_api_qualifier_OBSERVED);
+    cps_api_key_from_attr_with_qual(&key[2], VRF_MGMT_NI_NETWORK_INSTANCES_NETWORK_INSTANCE_OBJ,
                                     cps_api_qualifier_OBSERVED);
     reg.priority = 0;
     reg.number_of_objects = NUM_KEYS;
@@ -341,7 +349,7 @@ bool nbr_mgr_refresh_status_db_read() {
     rc = cps_api_db_get(obj, list);
 
     size_t len = cps_api_object_list_size(list);
-    NBR_MGR_LOG_INFO("NBR-MGR-CPS-DB", "DB-get rc:%d len:%d", rc, len);
+    NBR_MGR_LOG_INFO("NBR-MGR-CPS-DB", "DB-get rc:%d len:%lu", rc, len);
     size_t ix = 0;
 
     for (ix=0; ix < len; ++ix)
@@ -497,6 +505,8 @@ bool nbr_mgr_program_npu(nbr_mgr_op_t op, const nbr_mgr_nbr_entry_t& entry) {
     std_mac_to_string (&(entry.nbr_hwaddr), mac_addr, NBR_MGR_MAC_STR_LEN);
     cps_api_object_attr_add(cps_obj, BASE_ROUTE_OBJ_NBR_MAC_ADDR, (const void *)mac_addr,
                             strlen(mac_addr)+1);
+    cps_api_object_attr_add(cps_obj, BASE_ROUTE_OBJ_VRF_NAME, (const void *)entry.vrf_name,
+                            strlen(entry.vrf_name)+1);
 
     cps_api_object_attr_add_u32(cps_obj,BASE_ROUTE_OBJ_NBR_VRF_ID, entry.vrfid);
     //cps_api_object_attr_add_u32(cps_obj,BASE_ROUTE_OBJ_NBR_TYPE,m_rt_type);
@@ -583,6 +593,7 @@ bool nbr_mgr_notify_intf_status(nbr_mgr_op_t op, const nbr_mgr_intf_entry_t& ent
         return false;
     }
 
+    cps_api_object_attr_add_u32(cps_obj, VRF_MGMT_NI_IF_INTERFACES_INTERFACE_VRF_ID, entry.vrfid);
     cps_api_object_attr_add_u32(cps_obj, BASE_NEIGHBOR_IF_INTERFACES_STATE_INTERFACE_IF_INDEX,
                                 entry.if_index);
     cps_api_object_attr_add_u32(cps_obj, IF_INTERFACES_INTERFACE_ENABLED, entry.is_admin_up);
@@ -639,10 +650,11 @@ bool nbr_mgr_notify_intf_status(nbr_mgr_op_t op, const nbr_mgr_intf_entry_t& ent
         return false;
     }
 
-    NBR_MGR_LOG_DEBUG("NAS-INTF-UPD", "Transaction Successfully completed. Exit");
-
+    NBR_MGR_LOG_INFO("NAS-INTF-UPD", "VRF:%lu if-index:%d is_admin_up:%d Transaction Successfully completed", entry.vrfid,
+                     entry.if_index, entry.is_admin_up);
     return true;
 }
+
 bool nbr_mgr_get_all_nh(uint8_t af) {
     cps_api_get_params_t get_req;
 
@@ -678,7 +690,7 @@ bool nbr_mgr_is_mac_present_in_hw(hal_mac_addr_t mac, hal_ifindex_t if_index,
     cps_api_get_params_t get_req;
 
     nbr_mgr_intf_entry_t intf;
-    if(nbr_get_if_data(if_index, intf)== false) {
+    if(nbr_get_if_data(0, if_index, intf)== false) {
         NBR_MGR_LOG_ERR("NBR-GET","NAS MAC get from HW, unable to get intf info!");
         return false;
     }
@@ -754,12 +766,12 @@ static void nbr_mgr_process_flush_obj_embed_attr(cps_api_object_t obj, const cps
                     if_index = cps_api_object_attr_data_u32(it_lvl_2.attr);
                     /* Refresh the VLAN associated neighbors */
                     NBR_MGR_LOG_INFO("NAS_FLUSH","Nbr refresh for VLAN:%d", if_index);
-                    nbr_mgr_enqueue_flush_msg(if_index);
+                    nbr_mgr_enqueue_flush_msg(if_index, 0);
                     break;
                 case BASE_MAC_FLUSH_EVENT_FILTER_ALL:
                     /* Refresh all the VLAN associated neighbors */
                     NBR_MGR_LOG_INFO("NAS_FLUSH","Nbr refresh all VLAN associated neighbors");
-                    nbr_mgr_enqueue_flush_msg(0);
+                    nbr_mgr_enqueue_flush_msg(0, 0);
                     break;
                 default:
                     break;
@@ -768,6 +780,7 @@ static void nbr_mgr_process_flush_obj_embed_attr(cps_api_object_t obj, const cps
     }
 }
 
+/* Note: Dont return false from CPS event handler */
 bool nbr_mgr_process_flush_cps_msg(cps_api_object_t obj, void *param) {
     cps_api_object_it_t it;
     cps_api_object_it_begin(obj,&it);

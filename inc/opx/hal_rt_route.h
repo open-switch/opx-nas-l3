@@ -383,6 +383,7 @@
 #define FIB_IS_RESERVED_RT_TYPE(_rt_type_)                                  \
         ((_rt_type_ == RT_BLACKHOLE) ||                                     \
          (_rt_type_ == RT_UNREACHABLE) ||                                   \
+         (_rt_type_ == RT_CACHE) ||                                         \
          (_rt_type_ == RT_PROHIBIT))
 #define FIB_IS_NH_RESERVED(_p_nh)                                             \
         ((FIB_IS_NH_LOOP_BACK ((_p_nh))) ||                                   \
@@ -639,9 +640,14 @@ typedef struct _t_fib_nh_dep_dr {
     t_fib_dr           *p_dr;
 } t_fib_nh_dep_dr;
 
+typedef struct _nas_rif_info_t {
+    ndi_rif_id_t rif_id;
+    uint32_t     ref_count;
+}nas_rif_info_t;
+
 typedef struct _t_fib_intf_key {
-    hal_ifindex_t if_index;
     hal_vrf_id_t  vrf_id;
+    hal_ifindex_t if_index;
     uint8_t       af_index;
 } t_fib_intf_key;
 
@@ -673,10 +679,12 @@ typedef struct _t_fib_intf {
      * the ipaddress/fh/nh on that interface is deketed.
      */
     bool is_intf_delete_pending;
+    bool is_ip_redirects_set;      /* ICMP redirects enabled for this interface in NPU */
     bool is_ipv4_unreachables_set; /* ICMP unreachable msg is generated from kernel
                                     from this intf for non-routable packets */
     bool is_ipv6_unreachables_set; /* ICMPv6 unreachable msg is generated from kernel
                                     from this intf for non-routable packets */
+    nas_rif_info_t rif_info; /* RIF information */
 } t_fib_intf;
 
 /* Function signatures for route.c - Start */
@@ -713,7 +721,7 @@ int fib_form_tnl_nh_msg_info (t_fib_tnl_dest *p_tnl_dest, t_fib_nh_msg_info *p_f
 
 int fib_add_default_dr (uint32_t vrf_id, uint8_t af_index);
 
-int fib_add_default_link_local_route (uint32_t vrf_id);
+int fib_handle_default_link_local_route (uint32_t vrf_id, bool is_add);
 
 t_fib_dr *fib_add_dr (uint32_t vrf_id, t_fib_ip_addr *p_prefix, uint8_t prefix_len);
 
@@ -909,7 +917,7 @@ t_fib_link_node *fib_get_intf_pending_fh (t_fib_intf *p_intf, t_fib_nh *p_fh);
 
 int fib_del_intf_pending_fh (t_fib_intf *p_intf, t_fib_link_node *p_link_node);
 
-int fib_check_and_delete_nh (t_fib_nh *p_nh);
+int fib_check_and_delete_nh (t_fib_nh *p_nh, bool is_force_del);
 
 int fib_check_and_delete_intf (t_fib_intf *p_intf);
 
@@ -976,5 +984,6 @@ int fib_nbr_del_on_intf_down (int if_index, int vrf_id, int af_index);
 bool hal_rt_handle_ip_unreachable_config (t_fib_intf_ip_unreach_config *p_cfg, bool *p_os_gbl_cfg_req);
 t_fib_intf *fib_get_first_intf ();
 t_fib_intf *fib_get_next_intf (uint32_t if_index, uint32_t vrf_id, uint8_t af_index);
-
+t_std_error fib_del_all_intf_ip (t_fib_intf *p_intf);
+t_std_error fib_nh_del_nh(t_fib_nh *p_nh, bool is_force_del);
 #endif /* __HAL_RT_ROUTE_H__ */

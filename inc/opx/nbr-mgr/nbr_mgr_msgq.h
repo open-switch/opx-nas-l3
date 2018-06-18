@@ -47,7 +47,8 @@ typedef enum {
     NBR_MGR_NL_RESOLVE_MSG,
     NBR_MGR_NL_REFRESH_MSG,
     NBR_MGR_NAS_FLUSH_MSG,
-    NBR_MGR_NL_DELAY_REFRESH_MSG
+    NBR_MGR_NL_DELAY_REFRESH_MSG,
+    NBR_MGR_DUMP_MSG
 } nbr_mgr_msg_type_t;
 
 typedef enum {
@@ -55,6 +56,17 @@ typedef enum {
     NBR_MGR_NBR_DEL,
     NBR_MGR_NBR_UPD
 }nbr_mgr_evt_type_t;
+
+typedef enum {
+    NBR_MGR_DUMP_NBR = 1,
+    NBR_MGR_DUMP_NBRS,
+    NBR_MGR_DUMP_MACS,
+    NBR_MGR_DUMP_INTF,
+    NBR_MGR_DUMP_GBL_STATS,
+    NBR_MGR_DUMP_GBL_STATS_CLEAR,
+    NBR_MGR_DUMP_DETAIL_NBR_STATS,
+    NBR_MGR_DUMP_DETAIL_NBR_STATS_CLEAR,
+}nbr_mgr_dump_type_t;
 
 #define NBR_MGR_NBR_RESOLVE      0x1
 #define NBR_MGR_NBR_REFRESH      0x2
@@ -68,9 +80,10 @@ typedef struct  {
     hal_ip_addr_t         nbr_addr;
     hal_mac_addr_t        nbr_hwaddr;
     hal_ifindex_t         if_index;
+    hal_ifindex_t         parent_if;
     hal_ifindex_t         mbr_if_index;
     unsigned long         vrfid;
-    uint8_t               vrf_name[HAL_IF_NAME_SZ + 1];
+    char                  vrf_name[HAL_IF_NAME_SZ + 1];
     unsigned long         expire;
     unsigned long         flags;
     unsigned long         status;
@@ -84,11 +97,26 @@ typedef struct {
     bool is_bridge;
     uint32_t vlan_id;
     uint32_t flags;
+    unsigned long vrfid;
+    hal_ifindex_t parent_or_child_if_index; /* If-index of the router interface in VRF context (child intf)
+                                               or parent interface */
+    unsigned long parent_or_child_vrfid; /* VRF-id of the router interface in VRF context (child VRF-id or
+                                            parent VRF-id */
 } nbr_mgr_intf_entry_t;
 
 typedef struct {
     hal_ifindex_t if_index; /* VLAN interface index */
+    unsigned long vrfid; /* Flush the interfaces and neighbors that are associated with the VRF */
 } nbr_mgr_flush_entry_t;
+
+typedef struct {
+    nbr_mgr_dump_type_t type;
+    uint32_t af;
+    unsigned long vrf_id;
+    char nbr_ip[HAL_INET6_TEXT_LEN + 1];
+    hal_ifindex_t if_index;
+    bool is_dump_all;
+} nbr_mgr_dump_entry_t;
 
 typedef struct {
     nbr_mgr_msg_type_t type;
@@ -96,6 +124,7 @@ typedef struct {
         nbr_mgr_nbr_entry_t nbr;
         nbr_mgr_intf_entry_t intf;
         nbr_mgr_flush_entry_t flush;
+        nbr_mgr_dump_entry_t dump;
     };
 } nbr_mgr_msg_t;
 
@@ -136,4 +165,5 @@ bool nbr_mgr_process_burst_resolve_msg(burst_resolvefunc cb);
 bool nbr_mgr_process_delay_resolve_msg(burst_resolvefunc cb);
 bool nbr_mgr_enqueue_delay_resolve_msg(nbr_mgr_msg_uptr_t msg);
 bool nbr_mgr_process_nl_msg(cps_api_object_t obj, void *param);
+std::string nbr_mgr_netlink_q_stats();
 #endif

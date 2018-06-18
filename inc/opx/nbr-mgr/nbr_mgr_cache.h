@@ -81,7 +81,7 @@ class nbr_data;
 
 using nbr_data_list = std::set<nbr_data const *>;
 enum class FDB_TYPE: std::uint32_t { FDB_INCOMPLETE, FDB_LEARNED, FDB_IGNORE};
-bool nbr_get_if_data(hal_ifindex_t idx, nbr_mgr_intf_entry_t& intf);
+bool nbr_get_if_data(hal_vrf_id_t vrfid, hal_ifindex_t idx, nbr_mgr_intf_entry_t& intf);
 
 typedef struct {
     uint32_t intf_add_msg_cnt;
@@ -103,6 +103,22 @@ typedef struct {
     uint32_t flush_trig_refresh_cnt;
     uint32_t flush_nbr_cnt;
 }nbr_mgr_stats;
+
+typedef struct {
+    uint32_t retry_cnt;
+    uint32_t mac_not_present_cnt;
+    uint32_t failed_trig_resolve_cnt;
+    uint32_t stale_trig_refresh_cnt;
+    uint32_t resolve_cnt;
+    uint32_t hw_mac_learn_refresh_cnt;
+    uint32_t refresh_cnt;
+    uint32_t delay_refresh_cnt;
+    uint32_t flush_skip_refresh;
+    uint32_t flush_failed_resolve;
+    uint32_t flush_refresh;
+    uint32_t mac_trig_refresh;
+    uint32_t npu_prg_msg_cnt;
+}nbr_mgr_nbr_stats;
 
 typedef struct {
     /* Auto refresh on stale state is enabled by default for both IPv4 and IPv6 neighbors */
@@ -154,7 +170,7 @@ public:
         if(m_fdb_type == FDB_TYPE::FDB_LEARNED ||
            m_fdb_type == FDB_TYPE::FDB_IGNORE) return true;
         nbr_mgr_intf_entry_t intf;
-        if(nbr_get_if_data(m_if_index, intf) && !intf.is_bridge) return true;
+        if(nbr_get_if_data(NBR_MGR_DEFAULT_VRF_ID, m_if_index, intf) && !intf.is_bridge) return true;
 
         return false;
     }
@@ -171,25 +187,26 @@ private:
 };
 
 using mac_data_ptr = std::shared_ptr<mac_data>;
-bool nbr_list_if_update(hal_ifindex_t, const nbr_data*, bool=true);
+bool nbr_list_if_update(hal_vrf_id_t vrf_id, hal_ifindex_t router_intf, hal_ifindex_t parent_intf, const nbr_data*, bool=true);
 
 class nbr_data {
 
 public:
     nbr_data(const nbr_mgr_nbr_entry_t& entry, std::shared_ptr<mac_data> ptr=nullptr):
-        m_ip_addr(entry.nbr_addr), m_ifindex(entry.if_index), m_status(entry.status),
-        m_family(entry.family), m_mac_data_ptr(ptr){
+        m_vrf_id(entry.vrfid), m_ip_addr(entry.nbr_addr), m_ifindex(entry.if_index), m_parent_if(entry.parent_if),
+        m_status(entry.status), m_family(entry.family), m_vrf_name(entry.vrf_name), m_mac_data_ptr(ptr) {
         if (m_mac_data_ptr)
             m_mac_data_ptr->nbr_list_add(this);
-        nbr_list_if_update(entry.if_index, this);
+        nbr_list_if_update(entry.vrfid, entry.if_index, entry.parent_if, this);
         m_failed_cnt = 0;
+        memset(&nbr_stats, 0, sizeof(nbr_stats));
         display();
     }
 
     ~nbr_data() {
         if (m_mac_data_ptr)
             m_mac_data_ptr->nbr_list_del(this);
-        nbr_list_if_update(m_ifindex, this, false);
+        nbr_list_if_update(m_vrf_id, m_ifindex, m_parent_if, this, false);
     }
 
     void set_status(uint8_t status) { };
@@ -212,6 +229,10 @@ public:
         return m_status;
     }
 
+    uint32_t get_last_pub_status() const {
+        return m_last_status_published;
+    }
+
     std::string get_ip_addr() const {
         return nbr_ip_addr_string(m_ip_addr);
     }
@@ -220,8 +241,16 @@ public:
         return m_vrf_id;
     }
 
+    std::string get_vrf_name() const {
+        return m_vrf_name;
+    }
+
     hal_ifindex_t get_if_index() const {
         return m_ifindex;
+    }
+
+    hal_ifindex_t get_parent_if_index() const {
+        return m_parent_if;
     }
 
     hal_ifindex_t get_published() const {
@@ -249,6 +278,7 @@ public:
 
     bool trigger_resolve() const;
     bool trigger_refresh() const;
+    bool trigger_delay_refresh() const;
     bool trigger_refresh_for_mac_learn() const;
     bool publish_entry(nbr_mgr_op_t op, const nbr_mgr_nbr_entry_t&) const;
     void populate_nbr_entry(nbr_mgr_nbr_entry_t& entry) const;
@@ -278,16 +308,20 @@ public:
             m_mac_data_ptr->nbr_list_del(this);
         }
     }
+    /* Neighbor statistics */
+    mutable nbr_mgr_nbr_stats nbr_stats;
 
 private:
-    hal_vrf_id_t   m_vrf_id = 0;
+    hal_vrf_id_t   m_vrf_id;
     hal_ip_addr_t  m_ip_addr;
     hal_ifindex_t  m_ifindex;
+    hal_ifindex_t  m_parent_if;
     uint8_t        m_status = 0;
     uint32_t       m_owner = 0;
     uint16_t       m_family;
     mutable uint32_t m_flags = 0;
     mutable bool   m_published = false;
+    mutable uint8_t m_last_status_published = 0;
     uint8_t        m_failed_cnt = 0; /* This helps to resolve
                                         the nbr atleast few times
                                         before give up */
@@ -301,6 +335,7 @@ private:
                                         the nbr atleast few times
                                         to learn the MAC in the HW before give up */
     uint8_t m_prev_refresh_for_mac_learn_retry_cnt = 0; /* This helps for the statistics */
+    std::string     m_vrf_name = "default";
 
     //Each neighbor object contains a pointer to its associated mac data object
     std::shared_ptr<mac_data> m_mac_data_ptr;
@@ -313,6 +348,10 @@ using nbr_ip_db_iter = nbr_ip_db_type::iterator;
 using nbr_mac_list = std::unordered_map<std::string, mac_data_ptr, nbr_key_hash<std::string>>;
 using nbr_mac_db_type = std::unordered_map<hal_ifindex_t, nbr_mac_list>;
 using nbr_mac_db_iter = nbr_mac_db_type::iterator;
+// IF based neighbor cache
+using nbr_if_nbr_list = std::unordered_map<hal_ifindex_t, nbr_data_list, nbr_key_hash<int>>;
+// INTF cache
+using nbr_if_list = std::unordered_map<hal_ifindex_t, nbr_mgr_intf_entry_t, nbr_key_hash<int>>;
 
 class nbr_process {
 
@@ -335,12 +374,19 @@ public:
     mac_data_ptr mac_db_get_w_create(hal_ifindex_t, const hal_mac_addr_t&);
     mac_data_ptr mac_db_update(hal_ifindex_t, std::string&, mac_data_ptr&);
     bool mac_db_remove(hal_ifindex_t, const std::string&);
+    void mac_if_db_walk(hal_ifindex_t, std::function <void (mac_data_ptr )> fn);
+    void mac_db_walk(std::function <void (mac_data_ptr )> fn);
 
     //Intf related functions
     bool nbr_proc_intf_msg(nbr_mgr_intf_entry_t& intf);
+    bool nbr_update_intf_info(nbr_mgr_intf_entry_t& intf);
     bool nbr_proc_flush_msg(nbr_mgr_flush_entry_t& flush);
-    bool nbr_list_if_add(hal_ifindex_t, const nbr_data*);
-    bool nbr_list_if_del(hal_ifindex_t, const nbr_data*);
+    bool nbr_list_if_add(hal_vrf_id_t, hal_ifindex_t, const nbr_data*);
+    bool nbr_list_if_del(hal_vrf_id_t, hal_ifindex_t, const nbr_data*);
+    bool nbr_proc_dump_msg(nbr_mgr_dump_entry_t& dump);
+    void nbr_if_list_entry_walk(hal_vrf_id_t vrf_id, hal_ifindex_t,
+                                std::function <void (nbr_mgr_intf_entry_t )> fn);
+    void nbr_if_list_walk(std::function <void (nbr_mgr_intf_entry_t )> fn);
 
     //ARP/ND related functions
     bool nbr_proc_nbr_msg(nbr_mgr_nbr_entry_t&);
@@ -352,7 +398,7 @@ public:
                                 hal_vrf_id_t, std::string&, std::unique_ptr<nbr_data>& );
     bool nbr_db_remove(nbr_ip_db_type&, hal_vrf_id_t, std::string&);
 
-    void nbr_if_db_walk(hal_ifindex_t, std::function <void (nbr_data const *)> fn);
+    void nbr_if_db_walk(hal_vrf_id_t, hal_ifindex_t, std::function <void (nbr_data const *)> fn);
 
     nbr_ip_db_type& neighbor_db(unsigned short) noexcept;
 
@@ -368,9 +414,10 @@ protected:
     //Process thread main function
     friend void nbr_proc_thread_main(void *ctx);
 
-    friend bool nbr_list_if_update(hal_ifindex_t, const nbr_data*, bool);
+    friend bool nbr_list_if_update(hal_vrf_id_t vrfid, hal_ifindex_t router_intf, hal_ifindex_t parent_intf,
+                                   const nbr_data*, bool);
 
-    friend bool nbr_get_if_data(hal_ifindex_t idx, nbr_mgr_intf_entry_t& intf);
+    friend bool nbr_get_if_data(hal_vrf_id_t, hal_ifindex_t idx, nbr_mgr_intf_entry_t& intf);
 
 private:
     // Function running in background to process neigbhor entries
@@ -388,10 +435,10 @@ private:
     std::unordered_map<hal_vrf_id_t, nbr_ip_list> neighbor_db6;
 
     // IF based neighbor cache
-    std::unordered_map<hal_ifindex_t, nbr_data_list, nbr_key_hash<int>> neighbor_if_db;
+    std::unordered_map<hal_vrf_id_t, nbr_if_nbr_list> neighbor_if_nbr_db;
 
     // INTF cache
-    std::unordered_map<hal_ifindex_t, nbr_mgr_intf_entry_t, nbr_key_hash<int>> nbr_if_list;
+    std::unordered_map<hal_vrf_id_t, nbr_if_list> neighbor_if_db;
 };
 
 #endif

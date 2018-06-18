@@ -1,0 +1,8 @@
+#!/bin/bash -e
+
+./hal_rt_dr_unittest
+./nas_rt_offload_cps_unittest
+./nas_route_cps_unittest
+./virtual_routing_ip_cfg_test.py run-test
+./nas_rt_vrf_unittest
+./ip_redirect_cfg_test.py run-test

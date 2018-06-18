@@ -243,7 +243,7 @@ t_fib_mp_obj *hal_rt_fib_create_mp_obj (t_fib_dr *p_dr, ndi_nh_group_t *entry,
 
 
         HAL_RT_LOG_DEBUG ("HAL-RT-NDI",
-                "NH Group: %s New Group ID: %d Old GID=%d. VRF %d. Prefix: "
+                "NH Group: %s New Group ID: %lu Old GID=%d. VRF %d. Prefix: "
                 "%s/%d,Unit: %d, Err: %d", is_with_id ? "Updated":"Created",
                         nh_group_handle, sai_ecmp_gid, p_dr->vrf_id,
                 FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
@@ -307,7 +307,7 @@ t_std_error hal_rt_fib_remove_members_from_mp_obj (t_fib_dr *p_dr, t_fib_mp_obj 
 
     if (rc != STD_ERR_OK) {
         HAL_RT_LOG_ERR ("HAL-RT-NDI",
-                "NH Group member remove failed nhop_count:%d. MP GID:%d VRF %d. Prefix: "
+                "NH Group member remove failed nhop_count:%d. MP GID:%lu VRF %d. Prefix: "
                 "%s/%d, Unit: %d, Err: %d",
                 removed_nh_group_entry->nhop_count, sai_ecmp_gid, p_dr->vrf_id,
                 FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
@@ -333,7 +333,7 @@ t_std_error hal_rt_fib_remove_members_from_mp_obj (t_fib_dr *p_dr, t_fib_mp_obj 
 
     if (STD_IS_ERR(rc))
     {
-        HAL_RT_LOG_ERR ("HAL_RT-MPATH", "Remove members from MP Object:%d "
+        HAL_RT_LOG_ERR ("HAL_RT-MPATH", "Remove members from MP Object:%lu "
                         "Failed to insert p_mp_obj in Tree.\n", sai_ecmp_gid);
 
 //@@TODO - check for failure hanlding and how p_mp_obj state will be
@@ -423,7 +423,7 @@ t_std_error hal_rt_fib_check_and_delete_old_groupid(t_fib_dr *p_dr, npu_id_t  un
         rc = ndi_route_next_hop_group_delete (unit,  p_dr->onh_handle);
         if (rc != STD_ERR_OK) {
             HAL_RT_LOG_ERR ("HAL-RT-NDI",
-                              "NH Group: Old Group ID delete failed. gid %d VRF %d. Prefix: "
+                            "NH Group: Old Group ID delete failed. gid %lu VRF %d. Prefix: "
                               "%s/%d, Unit: %d, Err: %d",
                               p_dr->onh_handle,  p_dr->vrf_id,
                               FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
@@ -431,7 +431,7 @@ t_std_error hal_rt_fib_check_and_delete_old_groupid(t_fib_dr *p_dr, npu_id_t  un
             return (STD_ERR(ROUTE, FAIL, 0));
         } else {
             HAL_RT_LOG_DEBUG ("HAL-RT-NDI",
-                              "NH Group: Old Group ID delete SUCCESS. gid %d VRF %d. Prefix: "
+                              "NH Group: Old Group ID delete SUCCESS. gid %lu VRF %d. Prefix: "
                               "%s/%d, Unit: %d, Err: %d",
                               p_dr->onh_handle,  p_dr->vrf_id,
                               FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),

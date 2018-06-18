@@ -37,6 +37,7 @@
 #include "dell-base-if-linux.h"
 #include "std_mac_utils.h"
 #include "std_utils.h"
+#include "nas_vrf_utils.h"
 
 #include "event_log.h"
 #include "cps_api_object_category.h"
@@ -46,6 +47,7 @@
 #include "cps_api_object_key.h"
 #include "dell-base-ip.h"
 #include "os-routing-events.h"
+#include "ietf-network-instance.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -57,6 +59,7 @@
 static std_thread_create_param_t hal_rt_dr_thr;
 static std_thread_create_param_t hal_rt_nh_thr;
 static std_thread_create_param_t hal_rt_msg_thr;
+static std_thread_create_param_t hal_rt_offload_msg_thr;
 
 static t_fib_config      g_fib_config;
 static t_fib_gbl_info    g_fib_gbl_info;
@@ -143,147 +146,146 @@ std_rt_table * hal_rt_access_fib_vrf_nht_tree(uint32_t vrf_id, uint8_t af_index)
 }
 
 
-int hal_rt_vrf_init (void)
+int hal_rt_vrf_init (hal_vrf_id_t vrf_id, const char *vrf_name)
 {
     t_fib_vrf      *p_vrf = NULL;
     t_fib_vrf_info *p_vrf_info = NULL;
-    hal_vrf_id_t    vrf_id = 0;
     uint8_t         af_index = 0;
-    ndi_vr_entry_t  vr_entry;
-    hal_mac_addr_t  ndi_mac;
     ndi_vrf_id_t    ndi_vr_id = 0;
     t_std_error     rc = STD_ERR_OK;
 
-   /* Create a virtual router entry and get vr_id (maps to fib vrf id) */
-    memset (&vr_entry, 0, sizeof (ndi_vr_entry_t));
-    vr_entry.npu_id = 0;
-
-    memset(&ndi_mac, 0, sizeof (hal_mac_addr_t));
-    /* Wait for the system MAC to become ready - will also provide trace logs to indicate issues if there are any*/
-    nas_switch_wait_for_sys_base_mac(&ndi_mac);
-
-    if(hal_rt_is_mac_address_zero((const hal_mac_addr_t *)&ndi_mac)) {
-        HAL_RT_LOG_ERR("HAL-RT", "The system MAC is zero, NAS Route VR init failed!");
+    p_vrf = hal_rt_access_fib_vrf(vrf_id);
+    if (p_vrf != NULL) {
+        HAL_RT_LOG_ERR("HAL-RT", "VRF %d(%s) already exists!", vrf_id, vrf_name);
         return STD_ERR(ROUTE, FAIL, rc);
     }
-    /*
-     * Set system MAC address for the VRs
-     */
-    memcpy(vr_entry.src_mac, &ndi_mac, HAL_MAC_ADDR_LEN);
-    vr_entry.flags |= NDI_VR_ATTR_SRC_MAC_ADDRESS;
-
-    for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id ++) {
-        if (vrf_id != FIB_MGMT_VRF) {
-            /* Create default VRF and other vrfs as per FIB_MAX_VRF */
-            if ((rc = ndi_route_vr_create(&vr_entry, &ndi_vr_id))!= STD_ERR_OK) {
-                HAL_RT_LOG_ERR( "HAL-RT", "%s ():VR creation failed",
-                                __FUNCTION__);
-                return STD_ERR(ROUTE, FAIL, rc);
-            }
+    t_fib_gbl_info *gbl_info =  hal_rt_access_fib_gbl_info();
+    if (vrf_id != FIB_MGMT_VRF) {
+        if (vrf_id == FIB_DEFAULT_VRF) {
+            /* Get the BASE MAC only for default VRF initialisation, for all other VRFs, use the local cache. */
+            /* Wait for the system MAC to become ready - will also provide trace logs to indicate issues if there are any*/
+            nas_switch_wait_for_sys_base_mac(&gbl_info->base_mac_addr);
         }
-        if ((p_vrf = FIB_VRF_MEM_MALLOC ()) == NULL) {
-            HAL_RT_LOG_DEBUG("HAL-RT", "Memory alloc failed.Vrf_id: %d", vrf_id);
-            continue;
+        if(hal_rt_is_mac_address_zero((const hal_mac_addr_t *)&gbl_info->base_mac_addr)) {
+            HAL_RT_LOG_ERR("HAL-RT", "The system MAC is zero, NAS Route VR init failed!");
+            return STD_ERR(ROUTE, FAIL, rc);
         }
 
-        memset (p_vrf, 0, sizeof (t_fib_vrf));
-        p_vrf->vrf_id = vrf_id;
-        p_vrf->vrf_obj_id = ndi_vr_id;
-        /* @@TODO Same MAC is being used for all the VRFs,
-         * if there needs to be unique MAC for each VRF,
-         * this should be revisited */
-        memcpy(&p_vrf->router_mac, &ndi_mac, HAL_MAC_ADDR_LEN);
-        ga_fib_vrf[vrf_id] = p_vrf;
-
-        for (af_index = FIB_MIN_AFINDEX; af_index < FIB_MAX_AFINDEX; af_index++) {
-            p_vrf_info = hal_rt_access_fib_vrf_info(vrf_id, af_index);
-
-            p_vrf_info->vrf_id = vrf_id;
-            hal_rt_get_vrf_name(vrf_id, (char*)p_vrf_info->vrf_name);
-            HAL_RT_LOG_INFO("HAL-RT-VRF", "Vrf_id: %d name:%s", vrf_id, p_vrf_info->vrf_name);
-            p_vrf_info->af_index = af_index;
-
-            /* Create the DR Tree */
-            fib_create_dr_tree (p_vrf_info);
-
-            /* Create the NH Tree */
-            fib_create_nh_tree (p_vrf_info);
-
-            /*
-             *  Create the Multi-path MP MD5 Tree
-             */
-            fib_create_mp_md5_tree (p_vrf_info);
-
-            /* Create the NHT Tree */
-            fib_create_nht_tree (p_vrf_info);
-
-            if (vrf_id == FIB_DEFAULT_VRF) {
-                p_vrf_info->is_vrf_created = true;
-            }
-            p_vrf_info->is_catch_all_disabled = false;
+        if (nas_get_vrf_obj_id_from_vrf_name(vrf_name, &ndi_vr_id) != STD_ERR_OK) {
+            HAL_RT_LOG_ERR("HAL-RT", "VRF oid get failed for default VRF!");
+            return STD_ERR(ROUTE, FAIL, rc);
         }
+    }
+    HAL_RT_LOG_INFO("VRF-INIT","VRF:%s obj-id:0x%lx info get!", vrf_name, ndi_vr_id);
+    if ((p_vrf = FIB_VRF_MEM_MALLOC ()) == NULL) {
+        HAL_RT_LOG_ERR("HAL-RT", "Memory alloc failed.Vrf_id: %d", vrf_id);
+        return STD_ERR(ROUTE, FAIL, rc);
+    }
+
+    memset (p_vrf, 0, sizeof (t_fib_vrf));
+    p_vrf->vrf_id = vrf_id;
+    p_vrf->vrf_obj_id = ndi_vr_id;
+
+    memcpy(&p_vrf->router_mac, &gbl_info->base_mac_addr, HAL_MAC_ADDR_LEN);
+    ga_fib_vrf[vrf_id] = p_vrf;
+
+    for (af_index = FIB_MIN_AFINDEX; af_index < FIB_MAX_AFINDEX; af_index++) {
+        p_vrf_info = hal_rt_access_fib_vrf_info(vrf_id, af_index);
+
+        p_vrf_info->vrf_id = vrf_id;
+
+        safestrncpy((char*)p_vrf_info->vrf_name, vrf_name, sizeof(p_vrf_info->vrf_name));
+        p_vrf_info->af_index = af_index;
+
+        /* Create the DR Tree */
+        fib_create_dr_tree (p_vrf_info);
+
+        HAL_RT_LOG_INFO("VRF-INIT", "DR tree for VRF:%d(%s) AF:%d init done", vrf_id, vrf_name, af_index);
+        /* Create the NH Tree */
+        fib_create_nh_tree (p_vrf_info);
+        HAL_RT_LOG_INFO("VRF-INIT", "NH tree for VRF:%d(%s) AF:%d init done", vrf_id, vrf_name, af_index);
+
+        /*
+         *  Create the Multi-path MP MD5 Tree
+         */
+        fib_create_mp_md5_tree (p_vrf_info);
+
+        /* Create the NHT Tree */
+        fib_create_nht_tree (p_vrf_info);
+        HAL_RT_LOG_INFO("VRF-INIT", "NHT tree for VRF:%d(%s) AF:%d init done", vrf_id, vrf_name, af_index);
+
+        p_vrf_info->is_vrf_created = true;
+        p_vrf_info->is_catch_all_disabled = false;
+        memset (&p_vrf_info->dr_radical_marker, 0, sizeof (std_radical_ref_t));
+        std_radical_walkconstructor (p_vrf_info->dr_tree,
+                                     &p_vrf_info->dr_radical_marker);
+
+        memset (&p_vrf_info->nh_radical_marker, 0, sizeof (std_radical_ref_t));
+        std_radical_walkconstructor (p_vrf_info->nh_tree,
+                                     &p_vrf_info->nh_radical_marker);
+    }
+    HAL_RT_LOG_INFO("VRF-INIT", "VRF:%d(%s) init done successfully!", vrf_id, vrf_name);
+    if (vrf_id != FIB_MGMT_VRF) {
+        fib_handle_default_link_local_route(vrf_id, true);
     }
     return STD_ERR_OK;
 }
 
-int hal_rt_vrf_de_init (void)
+int hal_rt_vrf_de_init (hal_vrf_id_t vrf_id)
 {
     t_fib_vrf      *p_vrf = NULL;
     t_fib_vrf_info *p_vrf_info = NULL;
-    uint32_t        vrf_id = 0;
-    uint32_t        ndi_vr_id = 0;
     uint8_t         af_index = 0;
-    npu_id_t        npu_id = 0;
     t_std_error     rc = STD_ERR_OK;
 
     HAL_RT_LOG_DEBUG("HAL-RT", "Vrf de-initialize");
 
-    for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id ++) {
-
-        p_vrf = hal_rt_access_fib_vrf(vrf_id);
-        if (p_vrf == NULL) {
-            HAL_RT_LOG_DEBUG("HAL-RT", "Vrf node NULL. Vrf_id: %d", vrf_id);
-            continue;
-        }
-
-        for (af_index = FIB_MIN_AFINDEX; af_index < FIB_MAX_AFINDEX; af_index++) {
-            p_vrf_info = hal_rt_access_fib_vrf_info(vrf_id, af_index);
-
-            /* Destruct the DR radical walk */
-            std_radical_walkdestructor(p_vrf_info->dr_tree, &p_vrf_info->dr_radical_marker);
-
-            /* Destroy the DR Tree */
-            fib_destroy_dr_tree (p_vrf_info);
-
-            /* Destruct the NH radical walk */
-            std_radical_walkdestructor(p_vrf_info->nh_tree, &p_vrf_info->nh_radical_marker);
-
-            /* Destroy the NH Tree */
-            fib_destroy_nh_tree (p_vrf_info);
-
-            /* Destroy the MP MD5 Tree */
-            fib_destroy_mp_md5_tree (p_vrf_info);
-
-            /* Destroy the NHT Tree */
-            fib_destroy_nht_tree (p_vrf_info);
-
-        }
-        ndi_vr_id = p_vrf->vrf_obj_id;
-        nas_route_delete_vrf_peer_mac_config(vrf_id);
-
-        memset (p_vrf, 0, sizeof (t_fib_vrf));
-        FIB_VRF_MEM_FREE (p_vrf);
-        p_vrf = NULL;
-        /* Destroy default VRF and other vrfs as per FIB_MAX_VRF */
-        if ((rc = ndi_route_vr_delete(npu_id, ndi_vr_id))!= STD_ERR_OK) {
-            HAL_RT_LOG_ERR( "HAL-RT", "VR %d Delete failed", vrf_id);
-            return STD_ERR(ROUTE, FAIL, rc);
-        }
+    p_vrf = hal_rt_access_fib_vrf(vrf_id);
+    if (p_vrf == NULL) {
+        HAL_RT_LOG_DEBUG("HAL-RT", "Vrf node NULL. Vrf_id: %d", vrf_id);
+        return STD_ERR(ROUTE, FAIL, rc);
     }
+
+    if (vrf_id != FIB_MGMT_VRF) {
+        fib_handle_default_link_local_route(vrf_id, false);
+    }
+    HAL_RT_LOG_INFO("VRF-DEINIT", "Default LLA deleted for VRF-id:%d", vrf_id);
+    for (af_index = FIB_MIN_AFINDEX; af_index < FIB_MAX_AFINDEX; af_index++) {
+        p_vrf_info = hal_rt_access_fib_vrf_info(vrf_id, af_index);
+
+        /* Destruct the DR radical walk */
+        std_radical_walkdestructor(p_vrf_info->dr_tree, &p_vrf_info->dr_radical_marker);
+
+        /* Destroy the DR Tree */
+        fib_destroy_dr_tree (p_vrf_info);
+        HAL_RT_LOG_INFO("VRF-DEINIT", "DR tree for VRF:%d AF:%d de-init done", vrf_id, af_index);
+
+        /* Destruct the NH radical walk */
+        std_radical_walkdestructor(p_vrf_info->nh_tree, &p_vrf_info->nh_radical_marker);
+        HAL_RT_LOG_INFO("VRF-DEINIT", "NH tree for VRF:%d AF:%d de-init done NH tree root:%p",
+                        vrf_id, af_index, p_vrf_info->nh_tree->rtt_root);
+
+        /* Destroy the NH Tree */
+        fib_destroy_nh_tree (p_vrf_info);
+        HAL_RT_LOG_INFO("VRF-DEINIT", "NH tree for VRF:%d AF:%d destroyed", vrf_id, af_index);
+
+        /* Destroy the MP MD5 Tree */
+        fib_destroy_mp_md5_tree (p_vrf_info);
+
+        /* Destroy the NHT Tree */
+        fib_destroy_nht_tree (p_vrf_info);
+    }
+    nas_route_delete_vrf_peer_mac_config(vrf_id);
+    nas_route_delete_vrf_virtual_routing_ip_config(vrf_id);
+
+    memset (p_vrf, 0, sizeof (t_fib_vrf));
+    FIB_VRF_MEM_FREE (p_vrf);
+    ga_fib_vrf[vrf_id] = NULL;
+    HAL_RT_LOG_INFO("VRF-DEINIT", "VRF-id:%d info. deleted successfully!", vrf_id);
     return STD_ERR_OK;
 }
 
-int hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac_config_t*p_status, bool status) {
+t_std_error hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac_config_t*p_status, bool status) {
 
     t_fib_vrf      *p_vrf = NULL;
     ndi_vr_entry_t  vr_entry;
@@ -348,10 +350,10 @@ int hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac_config_
             if ((dn_hal_get_interface_info(&intf_ctrl)) != STD_ERR_OK) {
                 HAL_RT_LOG_ERR("HAL-RT",
                                "Invalid interface %s interface get failed ", p_status->if_name);
-                return 0;
+                return STD_ERR_OK;
             }
 
-            HAL_RT_LOG_DEBUG("HAL-RT", "RIF entry creation for intf:%s of type:%d",
+            HAL_RT_LOG_DEBUG("HAL-RT", "RIF entry creation for intf:%s(%d) of type:%d",
                              intf_ctrl.if_name, intf_ctrl.if_index, intf_ctrl.int_type);
             if(intf_ctrl.int_type == nas_int_type_PORT) {
                 rif_entry.rif_type = NDI_RIF_TYPE_PORT;
@@ -361,22 +363,22 @@ int hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac_config_
                 rif_entry.rif_type = NDI_RIF_TYPE_VLAN;
                 rif_entry.attachment.vlan_id = intf_ctrl.vlan_id;
             } else {
-                HAL_RT_LOG_ERR("HAL-RT", "Invalid RIF entry creation ignored for rif-id:0x%llx intf:%s(%d) type:%d",
+                HAL_RT_LOG_ERR("HAL-RT", "Invalid RIF entry creation ignored for rif-id:0x%lx intf:%s(%d) type:%d",
                                rif_id, intf_ctrl.if_name, intf_ctrl.if_index, intf_ctrl.int_type);
-                return 0;
+                return STD_ERR_OK;
             }
 
             rif_entry.flags = NDI_RIF_ATTR_SRC_MAC_ADDRESS;
             memcpy(&rif_entry.src_mac, &(p_status->mac), sizeof(hal_mac_addr_t));
-            if (ndi_rif_create(&rif_entry, &rif_id)!= STD_ERR_OK) {
+            if ((rc = ndi_rif_create(&rif_entry, &rif_id)) != STD_ERR_OK) {
                 HAL_RT_LOG_ERR("HAL-RT", "Vrf:%d if_name:%s peer-mac:%s creation failed!",
                                vrf_id, p_status->if_name,
                                hal_rt_mac_to_str(&p_status->mac, p_buf, HAL_RT_MAX_BUFSZ));
-                return (0);
+                return (STD_ERR(ROUTE, FAIL, rc));
             } else {
                 p_status->rif_obj_id = rif_id;
 
-                HAL_RT_LOG_INFO ("HAL-RT-RIF", "Peer-routing RIF entry created successfully: 0x%llx for if_index %d",
+                HAL_RT_LOG_INFO ("HAL-RT-RIF", "Peer-routing RIF entry created successfully: 0x%lx for if_index %d",
                                  rif_id, intf_ctrl.if_index);
             }
         }
@@ -391,7 +393,7 @@ int hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac_config_
                            hal_rt_mac_to_str(&p_status->mac, p_buf, HAL_RT_MAX_BUFSZ));
             return STD_ERR_OK;
         }
-        HAL_RT_LOG_INFO("HAL-RT", "Vrf:%d if_name:%s peer-mac:%s vrf-obj-id:0x%x rif-obj-id:0x%x info",
+        HAL_RT_LOG_INFO("HAL-RT", "Vrf:%d if_name:%s peer-mac:%s vrf-obj-id:0x%lx rif-obj-id:0x%lx info",
                         vrf_id, cur_mac_info.if_name, hal_rt_mac_to_str(&cur_mac_info.mac, p_buf, HAL_RT_MAX_BUFSZ),
                         cur_mac_info.vrf_obj_id, cur_mac_info.rif_obj_id);
         if (cur_mac_info.vrf_obj_id) {
@@ -408,7 +410,7 @@ int hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac_config_
                                hal_rt_mac_to_str(&p_status->mac, p_buf, HAL_RT_MAX_BUFSZ));
                 return (STD_ERR(ROUTE, PARAM, 0));
             } else {
-                HAL_RT_LOG_INFO ("HAL-RT-RIF", "Peer-routing RIF entry deleted successfully: 0x%llx for if_name %s",
+                HAL_RT_LOG_INFO ("HAL-RT-RIF", "Peer-routing RIF entry deleted successfully: 0x%lx for if_name %s",
                                  cur_mac_info.rif_obj_id, p_status->if_name);
             }
         }
@@ -444,6 +446,152 @@ cps_api_object_t nas_route_peer_routing_config_to_cps_object(uint32_t vrf_id,
     return obj;
 }
 
+/* configure virtual routing ip for the given interface.
+ */
+t_std_error hal_rt_process_virtual_routing_ip_config (nas_rt_virtual_routing_ip_config_t *p_cfg, bool status) {
+    t_fib_vrf      *p_vrf = NULL;
+    t_std_error     rc = STD_ERR_OK;
+    uint32_t        vrf_id = 0;
+
+    if (p_cfg == NULL) {
+        HAL_RT_LOG_ERR("HAL-RT", "Invalid Virtual routing IP cfg");
+        return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
+    }
+
+    /* retrieve vrf-id for given vrf_name */
+    if (!hal_rt_get_vrf_id(p_cfg->vrf_name, &vrf_id)) {
+        HAL_RT_LOG_ERR("HAL-RT","Virtual routing IP cfg VRF(%s) not present.", p_cfg->vrf_name);
+        return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
+    }
+    p_cfg->vrf_id = vrf_id;
+
+    p_vrf = hal_rt_access_fib_vrf(vrf_id);
+    if (p_vrf == NULL) {
+        HAL_RT_LOG_ERR("HAL-RT", "Virtual routing IP cfg Vrf node NULL. Vrf_id: %d", vrf_id);
+        return STD_ERR(ROUTE, FAIL, rc);
+    }
+
+    HAL_RT_LOG_DEBUG ("HAL-RT", "Virtual routing IP cfg Vrf:%d if-name:%s IP:%s status:%d",
+                      vrf_id, p_cfg->if_name, FIB_IP_ADDR_TO_STR(&p_cfg->ip_addr), status);
+
+    interface_ctrl_t intf_ctrl;
+    memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
+    intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF_NAME;
+    safestrncpy(intf_ctrl.if_name, (const char *)p_cfg->if_name, sizeof(intf_ctrl.if_name)-1);
+
+    if ((dn_hal_get_interface_info(&intf_ctrl)) != STD_ERR_OK) {
+        HAL_RT_LOG_DEBUG ("HAL-RT",
+                          "Virtual routing IP cfg, interface %s not found",
+                          p_cfg->if_name);
+    }
+
+    if (status) {
+        if (nas_rt_virtual_routing_ip_get(p_cfg, NULL)) {
+                /* If we are trying to create an entry which alreadt exist, return */
+                HAL_RT_LOG_ERR("HAL-RT", "Vrf:%d if-name:%s IP:%s already exists",
+                                             vrf_id, p_cfg->if_name,
+                                             FIB_IP_ADDR_TO_STR(&p_cfg->ip_addr));
+                return STD_ERR_OK;
+        }
+
+        /* Only one route/ip can exists across all interface in a given vrf.
+         * On virtual routing ip add on an interface, create the entry in NDI
+         * only for first interace create.
+         */
+        if (nas_rt_virtual_routing_ip_list_size (p_cfg) == 0) {
+            /* create route entry in NDI for given IP only for first entry creation */
+            rc = _hal_rt_virtual_routing_ip_cfg (p_cfg, status);
+        }
+        if (rc != STD_ERR_OK) {
+                HAL_RT_LOG_ERR ("HAL-RT", "Virtual routing IP cfg create failed. Vrf:%d if-name:%s IP:%s ",
+                                                p_cfg->vrf_id, p_cfg->if_name,
+                                                FIB_IP_ADDR_TO_STR(&p_cfg->ip_addr));
+        } else {
+            nas_rt_virtual_routing_ip_db_add(p_cfg);
+
+            HAL_RT_LOG_DEBUG ("HAL-RT-NDI", "Virtual routing IP config success. Route created successfully "
+                                            "Vrf:%d if-name:%s IP:%s",
+                                            vrf_id, p_cfg->if_name, FIB_IP_ADDR_TO_STR(&p_cfg->ip_addr));
+
+        }
+    } else {
+        if (!nas_rt_virtual_routing_ip_get(p_cfg, NULL)) {
+            /* If we are trying to delete an entry which does not exist, return */
+            HAL_RT_LOG_ERR("HAL-RT", "Vrf:%d if-name:%s IP:%s does not exists",
+                           vrf_id, p_cfg->if_name, FIB_IP_ADDR_TO_STR(&p_cfg->ip_addr));
+            return STD_ERR(ROUTE, FAIL, rc);
+        }
+
+        /* Only one route/ip can exists across all interface in a given vrf.
+         * On virtual routing ip del on an interface, delete the entry in NDI
+         * only for last interace delete.
+         */
+        if (nas_rt_virtual_routing_ip_list_size (p_cfg) == 1) {
+            /* delete route entry in NDI for given IP only for last entry removal */
+            rc = _hal_rt_virtual_routing_ip_cfg (p_cfg, status);
+        }
+
+        if (rc != STD_ERR_OK) {
+            HAL_RT_LOG_ERR ("HAL-RT", "Virtual routing IP cfg del failed. Vrf:%d if-name:%s IP:%s ",
+                            p_cfg->vrf_id, p_cfg->if_name,
+                            FIB_IP_ADDR_TO_STR(&p_cfg->ip_addr));
+        } else {
+            nas_rt_virtual_routing_ip_db_del(p_cfg);
+
+            HAL_RT_LOG_DEBUG ("HAL-RT-NDI", "Virtual routing IP config success. Route deleted successfully "
+                              "Vrf:%d if-name:%s IP:%s",
+                             vrf_id, p_cfg->if_name, FIB_IP_ADDR_TO_STR(&p_cfg->ip_addr));
+
+        }
+    }
+
+    return rc;
+}
+
+cps_api_object_t nas_route_virtual_routing_ip_config_to_cps_object(uint32_t vrf_id,
+                                              nas_rt_virtual_routing_ip_config_t *p_status){
+    if(p_status == NULL){
+        HAL_RT_LOG_ERR("HAL-RT","Null Virtual routing Status pointer passed to convert it to cps object");
+        return NULL;
+    }
+
+    cps_api_object_t obj = cps_api_object_create();
+    if(obj == NULL){
+        HAL_RT_LOG_ERR("HAL-RT","Failed to allocate memory to cps object");
+        return NULL;
+    }
+
+    cps_api_key_t key;
+    cps_api_key_from_attr_with_qual(&key, BASE_ROUTE_VIRTUAL_ROUTING_CONFIG_VIRTUAL_ROUTING_IP_CONFIG,
+                                    cps_api_qualifier_TARGET);
+    cps_api_object_set_key(obj,&key);
+
+    cps_api_set_key_data (obj, BASE_ROUTE_VIRTUAL_ROUTING_CONFIG_VIRTUAL_ROUTING_IP_CONFIG_VRF_NAME,
+                          cps_api_object_ATTR_T_BIN, p_status->vrf_name,
+                          (strlen(p_status->vrf_name)+1));
+    cps_api_set_key_data (obj, BASE_ROUTE_VIRTUAL_ROUTING_CONFIG_VIRTUAL_ROUTING_IP_CONFIG_AF,
+                          cps_api_object_ATTR_T_U32, &(p_status->ip_addr.af_index),
+                          sizeof(p_status->ip_addr.af_index));
+    cps_api_set_key_data (obj, BASE_ROUTE_VIRTUAL_ROUTING_CONFIG_VIRTUAL_ROUTING_IP_CONFIG_IFNAME,
+                          cps_api_object_ATTR_T_BIN, p_status->if_name,
+                          (strlen(p_status->if_name)+1));
+
+    if(p_status->ip_addr.af_index == HAL_INET4_FAMILY){
+        int addr_len = HAL_INET4_LEN;
+        cps_api_set_key_data (obj, BASE_ROUTE_VIRTUAL_ROUTING_CONFIG_VIRTUAL_ROUTING_IP_CONFIG_IP,
+                              cps_api_object_ATTR_T_BIN,
+                              &(p_status->ip_addr.u.v4_addr), addr_len);
+    } else {
+        int addr_len = HAL_INET6_LEN;
+        cps_api_set_key_data (obj, BASE_ROUTE_VIRTUAL_ROUTING_CONFIG_VIRTUAL_ROUTING_IP_CONFIG_IP,
+                              cps_api_object_ATTR_T_BIN,
+                              &(p_status->ip_addr.u.v6_addr), addr_len);
+    }
+
+    return obj;
+}
+
+
 t_std_error hal_rt_task_init (void)
 {
     t_std_error rc = STD_ERR_OK;
@@ -456,12 +604,13 @@ t_std_error hal_rt_task_init (void)
 
     fib_create_intf_tree ();
 
-    if ((rc = hal_rt_vrf_init ()) != STD_ERR_OK) {
+    if ((rc = hal_rt_vrf_init (FIB_DEFAULT_VRF, FIB_DEFAULT_VRF_NAME)) != STD_ERR_OK) {
         HAL_RT_LOG_ERR( "HAL-RT", "VRF Init failed");
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
-    if ((rc = hal_rt_default_link_local_route_init ()) != STD_ERR_OK) {
-        HAL_RT_LOG_ERR( "HAL-RT", "Default link local route Init failed");
+
+    if ((rc = hal_rt_vrf_init (FIB_MGMT_VRF, FIB_MGMT_VRF_NAME)) != STD_ERR_OK) {
+        HAL_RT_LOG_ERR( "HAL-RT", "VRF mgmt Init failed");
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
 
@@ -470,32 +619,18 @@ t_std_error hal_rt_task_init (void)
 
 void hal_rt_task_exit (void)
 {
+    hal_vrf_id_t vrf_id = 0;
     HAL_RT_LOG_DEBUG("HAL-RT", "Exiting HAL-Routing..");
 
-    hal_rt_vrf_de_init ();
+    for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id ++) {
+        hal_rt_vrf_de_init (vrf_id);
+    }
     fib_destroy_intf_tree ();
     memset (&g_fib_config, 0, sizeof (g_fib_config));
     memset(&g_fib_gbl_info, 0, sizeof(g_fib_gbl_info));
     exit(0);
 
     return;
-}
-
-int hal_rt_default_link_local_route_init (void)
-{
-    uint32_t    vrf_id;
-
-    HAL_RT_LOG_DEBUG("HAL-RT", "Init Default Link Local Route");
-
-    for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id ++) {
-        /* Dont create default LLA for mgmt. VRF */
-        if (vrf_id == FIB_MGMT_VRF) {
-            continue;
-        }
-        fib_add_default_link_local_route (vrf_id);
-    }
-
-    return STD_ERR_OK;
 }
 
 static bool hal_rt_process_msg(cps_api_object_t obj, void *param)
@@ -534,6 +669,7 @@ static bool hal_rt_process_msg(cps_api_object_t obj, void *param)
                 nas_rt_process_msg(p_msg);
             }
             break;
+
         default:
             g_fib_gbl_info.num_unk_msg++;
             HAL_RT_LOG_DEBUG("HAL-RT", "msg sub_class unknown category:%d sub-cat:%d",
@@ -616,7 +752,6 @@ t_std_error hal_rt_nht_cps_thread(void)
     return STD_ERR_OK;
 }
 
-
 t_std_error hal_rt_init(void)
 {
     t_std_error     rc = STD_ERR_OK;
@@ -658,6 +793,14 @@ t_std_error hal_rt_init(void)
     hal_rt_msg_thr.thread_function = (std_thread_function_t)fib_msg_main;
     if (std_thread_create(&hal_rt_msg_thr)!=STD_ERR_OK) {
         HAL_RT_LOG_ERR( "HAL-RT-THREAD", "Error creating msg thread");
+        return STD_ERR(ROUTE,FAIL,0);
+    }
+
+    std_thread_init_struct(&hal_rt_offload_msg_thr);
+    hal_rt_offload_msg_thr.name = "hal-rt-off-msg";
+    hal_rt_offload_msg_thr.thread_function = (std_thread_function_t)fib_offload_msg_main;
+    if (std_thread_create(&hal_rt_offload_msg_thr)!=STD_ERR_OK) {
+        HAL_RT_LOG_ERR( "HAL-RT-THREAD", "Error creating offload msg thread");
         return STD_ERR(ROUTE,FAIL,0);
     }
 

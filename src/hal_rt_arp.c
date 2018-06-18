@@ -41,6 +41,7 @@
 #include "hal_if_mapping.h"
 #include "dell-base-neighbor.h"
 #include "dell-interface.h"
+#include "vrf-mgmt.h"
 
 #include "event_log.h"
 #include "std_ip_utils.h"
@@ -91,6 +92,10 @@ void hal_rt_cps_obj_to_neigh(cps_api_object_t obj,t_fib_neighbour_entry *p_nbr_m
             case BASE_ROUTE_OBJ_NBR_VRF_ID:
                 p_nbr_msg->vrfid = cps_api_object_attr_data_uint(it.attr);
                 break;
+            case BASE_ROUTE_OBJ_VRF_NAME:
+                safestrncpy((char*)p_nbr_msg->vrf_name, (const char *)cps_api_object_attr_data_bin(it.attr),
+                            sizeof(p_nbr_msg->vrf_name));
+                break;
             case BASE_ROUTE_OBJ_NBR_AF:
                 p_nbr_msg->family = cps_api_object_attr_data_uint(it.attr);
                 p_nbr_msg->nbr_addr.af_index = p_nbr_msg->family;
@@ -129,35 +134,37 @@ t_std_error fib_proc_nbr_download (t_fib_neighbour_entry *p_arp_info_msg)
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
 
-    HAL_RT_LOG_INFO("HAL-RT-ARP_OStoNAS", "cmd:%s(%d) vrf_id:%d, family:%d state:0x%x ip_addr:%s, "
-                    "mac_addr:%s, out_if_index:%d mbr:%d expire:%d status:0x%x",
+    HAL_RT_LOG_INFO("HAL-RT-ARP_OStoNAS", "cmd:%s(%d) vrf:%s(%lu), family:%d state:0x%lx ip_addr:%s, "
+                    "mac_addr:%s, out_if_index:%d mbr:%d expire:%lu status:0x%lx",
                     ((p_arp_info_msg->msg_type == FIB_RT_MSG_ADD) ? "Nbr-Add" :
                      ((p_arp_info_msg->msg_type == FIB_RT_MSG_DEL) ?
                       "Nbr-Del" : "Unknown")),
-                    p_arp_info_msg->msg_type, p_arp_info_msg->vrfid,
+                    p_arp_info_msg->msg_type, p_arp_info_msg->vrf_name, p_arp_info_msg->vrfid,
                     p_arp_info_msg->family, p_arp_info_msg->status,
                     FIB_IP_ADDR_TO_STR (&p_arp_info_msg->nbr_addr),
                   hal_rt_mac_to_str (&p_arp_info_msg->nbr_hwaddr, p_buf, HAL_RT_MAX_BUFSZ),
                   p_arp_info_msg->if_index,
                   p_arp_info_msg->mbr_if_index, p_arp_info_msg->expire, p_arp_info_msg->status);
 
+    vrf_id = p_arp_info_msg->vrfid;
+    if (!(FIB_IS_VRF_ID_VALID (vrf_id))) {
+        HAL_RT_LOG_ERR("HAL-RT-ARP", "%s (): Invalid vrf_id. vrf_id: %d",
+                       __FUNCTION__, vrf_id);
+        return STD_ERR_OK;
+    }
 
+    if (hal_rt_is_vrf_valid(vrf_id) == false) {
+        return STD_ERR_OK;
+    }
     bool is_mgmt_intf = false;
     if(hal_rt_validate_intf(p_arp_info_msg->vrfid, p_arp_info_msg->if_index, &is_mgmt_intf) != STD_ERR_OK) {
         return STD_ERR_OK;
     }
 
     sub_cmd  = p_arp_info_msg->msg_type;
-    vrf_id   = p_arp_info_msg->vrfid;
     af_index = HAL_RT_ADDR_FAM_TO_AFINDEX(p_arp_info_msg->family);
 
-    if (!(FIB_IS_VRF_ID_VALID (vrf_id))) {
-        HAL_RT_LOG_ERR("HAL-RT-ARP", "%s (): Invalid vrf_id. vrf_id: %d",
-                    __FUNCTION__, vrf_id);
-        return STD_ERR_OK;
-    }
-
-    p_arp_info_msg->nbr_addr.af_index = af_index;
+     p_arp_info_msg->nbr_addr.af_index = af_index;
     if (hal_rt_is_reserved_ipv4(&p_arp_info_msg->nbr_addr)) {
         HAL_RT_LOG_DEBUG("HAL-RT-DR", "Skipping rsvd ipv4 addr %s on if_indx %d",
                      FIB_IP_ADDR_TO_STR(&p_arp_info_msg->nbr_addr), p_arp_info_msg->if_index);
@@ -233,29 +240,10 @@ t_std_error fib_proc_arp_add (uint8_t af_index, void *p_arp_info, bool is_mgmt_i
 
     fib_form_arp_msg_info (af_index, p_arp_info, &fib_arp_msg_info, false);
 
-    nas_l3_lock();
-
     /* Check if there is an exact matching connected route for this neighbor,
      * if yes, ignore the programming of neighbor. */
-    uint8_t pref_len = (af_index == HAL_RT_V4_AFINDEX)
-        ? HAL_RT_V4_PREFIX_LEN : HAL_RT_V6_PREFIX_LEN;
-    t_fib_dr *p_dr = fib_get_dr (fib_arp_msg_info.vrf_id, &fib_arp_msg_info.ip_addr,
-                       pref_len);
-    if (p_dr) {
-        t_fib_nh_holder nh_holder;
-        t_fib_nh *p_fh = FIB_GET_FIRST_NH_FROM_DR(p_dr, nh_holder);
-        /* Mark the connected route flag true only if the NH is zero. */
-        if (p_fh && (FIB_IS_NH_ZERO(p_fh))) {
-            HAL_RT_LOG_ERR("NEIGH-ERR", "Local IP conflict - vrf_id: %d, ip_addr: %s, "
-                           "if_index: %d, mac_addr: %s, status:%d ignoring the neighbor programming!",
-                           fib_arp_msg_info.vrf_id,
-                           FIB_IP_ADDR_TO_STR (&fib_arp_msg_info.ip_addr),
-                           fib_arp_msg_info.if_index,
-                           hal_rt_mac_to_str (&fib_arp_msg_info.mac_addr, p_buf, HAL_RT_MAX_BUFSZ),
-                           fib_arp_msg_info.status);
-            nas_l3_unlock();
-            return STD_ERR_OK;
-        }
+    if (hal_rt_is_local_ip_conflict (fib_arp_msg_info.vrf_id, &fib_arp_msg_info.ip_addr)) {
+        return STD_ERR_OK;
     }
     p_nh = fib_get_nh (fib_arp_msg_info.vrf_id, &fib_arp_msg_info.ip_addr,
                        fib_arp_msg_info.if_index);
@@ -274,7 +262,6 @@ t_std_error fib_proc_arp_add (uint8_t af_index, void *p_arp_info, bool is_mgmt_i
                 bool npu_prg_done = nas_rt_is_nh_npu_prg_done(p_nh);
                 if ((p_nh->p_arp_info->mbr_if_index == fib_arp_msg_info.out_if_index) &&
                     npu_prg_done) {
-                    nas_l3_unlock();
                     return STD_ERR_OK;
                 }
                 p_nh->p_arp_info->mbr_if_index = fib_arp_msg_info.out_if_index;
@@ -293,12 +280,10 @@ t_std_error fib_proc_arp_add (uint8_t af_index, void *p_arp_info, bool is_mgmt_i
                                    fib_arp_msg_info.if_index,
                                    hal_rt_mac_to_str (&fib_arp_msg_info.mac_addr, p_buf, HAL_RT_MAX_BUFSZ),
                                    fib_arp_msg_info.out_if_index, fib_arp_msg_info.status, p_nh->a_is_written [0]);
-                    nas_l3_unlock();
                     return STD_ERR_OK;
                 }
                 /* NPU is already programmed with ARP/Nbr, return */
                 if (npu_prg_done) {
-                    nas_l3_unlock();
                     return STD_ERR_OK;
                 }
 
@@ -325,7 +310,6 @@ t_std_error fib_proc_arp_add (uint8_t af_index, void *p_arp_info, bool is_mgmt_i
                 }
             }
 
-            nas_l3_unlock();
             return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
         }
     }
@@ -345,7 +329,6 @@ t_std_error fib_proc_arp_add (uint8_t af_index, void *p_arp_info, bool is_mgmt_i
                     fib_arp_msg_info.vrf_id, FIB_IP_ADDR_TO_STR (&fib_arp_msg_info.ip_addr),
                     fib_arp_msg_info.if_index);
 
-        nas_l3_unlock();
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
 
@@ -355,7 +338,6 @@ t_std_error fib_proc_arp_add (uint8_t af_index, void *p_arp_info, bool is_mgmt_i
                 fib_arp_msg_info.vrf_id, FIB_IP_ADDR_TO_STR (&fib_arp_msg_info.ip_addr),
                 fib_arp_msg_info.if_index);
 
-        nas_l3_unlock();
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
 
@@ -374,7 +356,6 @@ t_std_error fib_proc_arp_add (uint8_t af_index, void *p_arp_info, bool is_mgmt_i
     }
     p_nh->p_arp_info->is_l2_fh = fib_arp_msg_info.is_l2_fh;
 
-    nas_l3_unlock();
     return STD_ERR_OK;
 }
 
@@ -406,8 +387,6 @@ t_std_error fib_proc_arp_del (uint8_t af_index, void *p_arp_info)
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
 
-    nas_l3_lock();
-
     p_nh = fib_get_nh (fib_arp_msg_info.vrf_id,
                        &fib_arp_msg_info.ip_addr, fib_arp_msg_info.if_index);
     if (p_nh == NULL) {
@@ -421,7 +400,6 @@ t_std_error fib_proc_arp_del (uint8_t af_index, void *p_arp_info)
                          fib_arp_msg_info.vrf_id, FIB_IP_ADDR_TO_STR (&fib_arp_msg_info.ip_addr),
                          fib_arp_msg_info.if_index);
 
-        nas_l3_unlock();
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
 
@@ -431,13 +409,10 @@ t_std_error fib_proc_arp_del (uint8_t af_index, void *p_arp_info)
                    fib_arp_msg_info.vrf_id, FIB_IP_ADDR_TO_STR (&fib_arp_msg_info.ip_addr),
                    fib_arp_msg_info.if_index);
 
-        nas_l3_unlock();
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
 
     fib_proc_nh_delete (p_nh, FIB_NH_OWNER_TYPE_ARP, 0);
-
-    nas_l3_unlock();
 
     return STD_ERR_OK;
 }
@@ -481,7 +456,7 @@ t_std_error fib_form_arp_msg_info (uint8_t af_index, void *p_arp_info,
         if (is_clear_msg == false)
         {
             p_ndpm_info = (t_fib_neighbour_entry *)p_arp_info;
-            p_fib_arp_msg_info->vrf_id = FIB_DEFAULT_VRF;
+            p_fib_arp_msg_info->vrf_id = p_ndpm_info->vrfid;
 
             memcpy(&p_fib_arp_msg_info->ip_addr,
                     &p_ndpm_info->nbr_addr,sizeof(p_fib_arp_msg_info->ip_addr));
@@ -604,18 +579,25 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf) {
         return false;
     }
     hal_ifindex_t index = cps_api_object_attr_data_u32(ifix_attr);
-    p_intf->vrf_id = FIB_DEFAULT_VRF;
+    cps_api_object_attr_t _vrf_attr = cps_api_object_attr_get(obj, VRF_MGMT_NI_IF_INTERFACES_INTERFACE_VRF_ID);
+    if (_vrf_attr) {
+        p_intf->vrf_id = cps_api_object_attr_data_u32(_vrf_attr);
+        HAL_RT_LOG_INFO ("HAL-RT-INTF", "VRF:%lu Intf:%d", p_intf->vrf_id, index);
+    }
     cps_api_object_attr_t vrf_name_attr = cps_api_object_attr_get(obj,NI_IF_INTERFACES_INTERFACE_BIND_NI_NAME);
-    cps_api_object_attr_t if_name_attr = cps_api_object_attr_get(obj,IF_INTERFACES_INTERFACE_NAME);
-    if (vrf_name_attr && if_name_attr) {
+    if (vrf_name_attr) {
         char vrf_name [MAX_LEN_VRF_NAME + 1];
         memset(vrf_name, '\0', sizeof(vrf_name));
         safestrncpy(vrf_name, (const char *)cps_api_object_attr_data_bin(vrf_name_attr),
                     sizeof(vrf_name));
-        if (hal_rt_get_vrf_id(vrf_name, (hal_vrf_id_t*)&p_intf->vrf_id) == false) {
-            HAL_RT_LOG_ERR("HAL-RT-INTF","Invalid VRF name:%s", vrf_name);
+        /* Get the VRF-id from VRF-name if not present in the object */
+        if ((_vrf_attr == NULL) && (hal_rt_get_vrf_id (vrf_name, (hal_vrf_id_t *)&(p_intf->vrf_id)) == false)) {
+            HAL_RT_LOG_ERR ("HAL-RT-INTF", "VRF:%s to id mapping is not present for Intf:%d", vrf_name, index);
+            return false;
         }
-
+    }
+    cps_api_object_attr_t if_name_attr = cps_api_object_attr_get(obj,IF_INTERFACES_INTERFACE_NAME);
+    if (if_name_attr) {
         safestrncpy(p_intf->if_name, (const char *)cps_api_object_attr_data_bin(if_name_attr),
                     sizeof(p_intf->if_name));
 
@@ -680,7 +662,7 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf) {
                         index, admin_status, is_op_del, type);
         /* Allow only the L2 (bridge) and L3 ports for L3 operations */
         if ((type != BASE_CMN_INTERFACE_TYPE_L2_PORT) && (type != BASE_CMN_INTERFACE_TYPE_L3_PORT) &&
-            (type != BASE_CMN_INTERFACE_TYPE_LAG)) {
+            (type != BASE_CMN_INTERFACE_TYPE_LAG) && (type != BASE_CMN_INTERFACE_TYPE_MACVLAN)) {
             return false;
         }
         cps_api_object_attr_t intf_member_port =
@@ -696,7 +678,7 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf) {
     p_intf->is_op_del = is_op_del;
 
     char p_buf[HAL_RT_MAX_BUFSZ];
-    HAL_RT_LOG_INFO("HAL-RT-INTF", "VRF-id:%d Intf:%s(%d) admin_status:%d is_del:%d mac:%s",
+    HAL_RT_LOG_INFO("HAL-RT-INTF", "VRF-id:%lu Intf:%s(%d) admin_status:%d is_del:%d mac:%s",
                     p_intf->vrf_id, p_intf->if_name, index, admin_status, is_op_del,
                     hal_rt_mac_to_str (&(p_intf->mac_addr), p_buf, HAL_RT_MAX_BUFSZ));
     return true;
@@ -704,9 +686,7 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf) {
 
 bool fib_proc_ip_unreach_config_msg(t_fib_intf_ip_unreach_config *p_ip_unreach_cfg) {
     bool os_gbl_cfg_req = false, os_gbl_cfg_enable = false, os_intf_cfg_enable = true;
-    nas_l3_lock();
     bool rc = hal_rt_handle_ip_unreachable_config(p_ip_unreach_cfg, &os_gbl_cfg_req);
-    nas_l3_unlock();
     if (rc == false)
         return false;
 
@@ -744,51 +724,145 @@ bool fib_proc_ip_unreach_config_msg(t_fib_intf_ip_unreach_config *p_ip_unreach_c
     return rc;
 }
 
+
+t_std_error fib_proc_ip_redirects_config_msg(t_fib_intf_ip_redirects_config *p_ip_redirects_cfg) {
+    bool           is_intf_present = false;
+    hal_vrf_id_t   vrf_id = 0;
+    t_fib_intf    *p_intf = NULL;
+
+    HAL_RT_LOG_DEBUG("HAL-RT","IP ICMP Redirects config event "
+                     "vrf:%s, intf:%s(%d), is_op_del:%d",
+                     p_ip_redirects_cfg->vrf_name, p_ip_redirects_cfg->if_name,
+                     p_ip_redirects_cfg->if_index, p_ip_redirects_cfg->is_op_del);
+
+    nas_l3_lock();
+
+    if (!hal_rt_get_vrf_id (p_ip_redirects_cfg->vrf_name, &vrf_id)) {
+        HAL_RT_LOG_ERR ("HAL-RT","IP ICMP Redirects config failed "
+                    "Invalid VRF:%s", p_ip_redirects_cfg->vrf_name);
+        nas_l3_unlock();
+        return STD_ERR(ROUTE,FAIL,0);
+    }
+
+    /* For now this IP redirect config status has to be updated in
+     * in interface cache both address family, as RIF create can happen
+     * at first for any address family.
+     */
+    p_intf = fib_get_or_create_intf(p_ip_redirects_cfg->if_index, vrf_id,
+                                    HAL_RT_V4_AFINDEX, &is_intf_present);
+
+    if (!p_intf) {
+        HAL_RT_LOG_ERR ("HAL-RT","IP ICMP Redirects config update failed "
+                  "vrf:%s, if_name:%s(%d), af:%d, is_op_del:%d",
+                  p_ip_redirects_cfg->vrf_name, p_ip_redirects_cfg->if_name,
+                  p_ip_redirects_cfg->if_index, HAL_RT_V4_AFINDEX, p_ip_redirects_cfg->is_op_del);
+
+        nas_l3_unlock();
+        return STD_ERR(ROUTE,FAIL,0);
+    }
+
+    bool rif_update = false;
+    bool ip_redirects_set = (p_ip_redirects_cfg->is_op_del) ? false : true;
+
+    if (p_intf->is_ip_redirects_set != ip_redirects_set) {
+        rif_update = true;
+    }
+
+    p_intf->is_ip_redirects_set = ip_redirects_set;
+
+    p_intf = fib_get_or_create_intf(p_ip_redirects_cfg->if_index, vrf_id,
+                                    HAL_RT_V6_AFINDEX, &is_intf_present);
+
+    if (!p_intf) {
+        HAL_RT_LOG_ERR ("HAL-RT","IP ICMP Redirects config update failed "
+                  "vrf:%s, if_name:%s(%d), af:%d, is_op_del:%d",
+                  p_ip_redirects_cfg->vrf_name, p_ip_redirects_cfg->if_name,
+                  p_ip_redirects_cfg->if_index, HAL_RT_V6_AFINDEX, p_ip_redirects_cfg->is_op_del);
+
+        nas_l3_unlock();
+        return STD_ERR(ROUTE,FAIL,0);
+    }
+
+    p_intf->is_ip_redirects_set = ip_redirects_set;
+
+    if (rif_update) {
+        ndi_rif_id_t rif_id = hal_rif_id_get(0, vrf_id, p_ip_redirects_cfg->if_index);
+
+        /*
+         * Configure RIF IP Redirect
+         */
+        if (rif_id != 0) {
+            ndi_rif_entry_t     rif_entry;
+            memset (&rif_entry, 0, sizeof (ndi_rif_entry_t));
+
+            rif_entry.npu_id = 0;
+            rif_entry.rif_id = rif_id;
+            rif_entry.flags = NDI_RIF_ATTR_IP_REDIRECT;
+            rif_entry.ip_redirect_state = p_intf->is_ip_redirects_set;
+
+            HAL_RT_LOG_DEBUG("HAL-RT-RIF", "RIF attribute set for IP redirect config:%d, rif-id:0x%lx, if_index:%d",
+                             p_intf->is_ip_redirects_set, rif_id, p_ip_redirects_cfg->if_index);
+
+            if (ndi_rif_set_attribute(&rif_entry) != STD_ERR_OK) {
+                HAL_RT_LOG_ERR ("NAS-RT-RIF",
+                                "Failed! RIF attribute set for IP redirect config:%d, rif-id:0x%lx, if_index:%d",
+                                p_intf->is_ip_redirects_set, rif_id, p_ip_redirects_cfg->if_index);
+            }
+        } else {
+            HAL_RT_LOG_DEBUG ("HAL-RT", "RIF does not exist! IP ICMP Redirect will be enabled on RIF create. "
+                              "vrf:%s, if_name:%s(%d)",
+                              p_ip_redirects_cfg->vrf_name, p_ip_redirects_cfg->if_name,
+                              p_ip_redirects_cfg->if_index);
+        }
+    }
+
+    nas_l3_unlock();
+    return STD_ERR_OK;
+}
+
+
 bool hal_rt_process_intf_state_msg(t_fib_msg_type type, t_fib_intf_entry *p_intf) {
 
     HAL_RT_LOG_INFO("HAL-RT","Interface status change notification type:%d "
-                    "intf:%d admin:%d is_del:%d",
-                    type, p_intf->if_index, p_intf->admin_status, p_intf->is_op_del);
+                    "VRF:%lu intf:%d is_admin_up:%d(val:%d) is_del:%d",
+                    type, p_intf->vrf_id, p_intf->if_index,
+                    (p_intf->admin_status == RT_INTF_ADMIN_STATUS_UP), p_intf->admin_status,
+                    p_intf->is_op_del);
 
+    if (!(FIB_IS_VRF_ID_VALID (p_intf->vrf_id))) {
+        HAL_RT_LOG_INFO("HAL-RT","Invalid VRF - Interface status change notification type:%d "
+                       "VRF:%lu intf:%d is_admin_up:%d(val:%d) is_del:%d",
+                       type, p_intf->vrf_id, p_intf->if_index,
+                       (p_intf->admin_status == RT_INTF_ADMIN_STATUS_UP), p_intf->admin_status,
+                       p_intf->is_op_del);
+        return true;
+    }
     if (type == FIB_MSG_TYPE_NBR_MGR_INTF) {
         /* If the interface down is from neighbor manager, delete the Nbrs (owner - ARP) */
         if ((p_intf->admin_status == RT_INTF_ADMIN_STATUS_DOWN) || (p_intf->is_op_del)) {
-            nas_l3_lock();
-            fib_nbr_del_on_intf_down(p_intf->if_index, 0, HAL_RT_V4_AFINDEX);
+            fib_nbr_del_on_intf_down(p_intf->if_index, p_intf->vrf_id, HAL_RT_V4_AFINDEX);
             fib_resume_nh_walker_thread(HAL_RT_V4_AFINDEX);
-            fib_nbr_del_on_intf_down(p_intf->if_index, 0, HAL_RT_V6_AFINDEX);
+            fib_nbr_del_on_intf_down(p_intf->if_index, p_intf->vrf_id, HAL_RT_V6_AFINDEX);
             fib_resume_nh_walker_thread(HAL_RT_V6_AFINDEX);
-            nas_l3_unlock();
         }
         return true;
     }
 
-    if (p_intf->is_op_del != true) {
-        interface_ctrl_t intf_ctrl;
-        memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
-        intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF;
-        intf_ctrl.if_index = p_intf->if_index;
-
-        if ((dn_hal_get_interface_info(&intf_ctrl)) == STD_ERR_OK) {
-            if(intf_ctrl.int_type == nas_int_type_LPBK) {
-                /* Ignore the loopback interface status change notifications
-                 * 1. If we do the admin down and up on front panel ports, kernel notifies the connected route information,
-                 * whereas on loopback interface, kernel does not notify the route configuration again, so, ignoring
-                 * the route flush on interface admin down for loopback interface */
-                HAL_RT_LOG_DEBUG("HAL-RT","Intf:%d admin status handling ignored for loopback intf!", index);
-                return false;
-            }
-        }
+    if ((p_intf->is_op_del != true) && (hal_rt_is_intf_lpbk(p_intf->vrf_id, p_intf->if_index))) {
+        /* Ignore the loopback interface status change notifications
+         * 1. If we do the admin down and up on front panel ports, kernel notifies the connected route information,
+         * whereas on loopback interface, kernel does not notify the route configuration again, so, ignoring
+         * the route flush on interface admin down for loopback interface */
+        HAL_RT_LOG_DEBUG("HAL-RT","Intf:%d admin status handling ignored for loopback intf!", p_intf->if_index);
+        return false;
     }
 
-    nas_l3_lock();
     /* Handle interface admin status changes for IPv4 and IPv6 routes */
     fib_handle_intf_admin_status_change(p_intf->vrf_id, HAL_RT_V4_AFINDEX, p_intf);
     /* Now, the kernel behaviour is to notify all the route deletes
      * on interface down for IPv6, but we delete the IPv6 routes below
      * to have the consistent behavior across IPv4 and IPv6 address family */
     fib_handle_intf_admin_status_change(p_intf->vrf_id, HAL_RT_V6_AFINDEX, p_intf);
-    nas_l3_unlock();
     return true;
 }
 

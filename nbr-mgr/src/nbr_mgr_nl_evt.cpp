@@ -34,6 +34,7 @@
 #include "dell-base-routing.h"
 #include "os-routing-events.h"
 #include "dell-base-if-vlan.h"
+#include "vrf-mgmt.h"
 
 char *nbr_mgr_nl_neigh_state_to_str (int state) {
     static char str[18];
@@ -75,6 +76,11 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
     }
     hal_ifindex_t index = cps_api_object_attr_data_u32(ifix_attr);
 
+    cps_api_object_attr_t vrfid_attr = cps_api_object_attr_get(obj, VRF_MGMT_NI_IF_INTERFACES_INTERFACE_VRF_ID);
+    if (vrfid_attr) {
+        p_intf->vrfid = cps_api_object_attr_data_u32(vrfid_attr);
+    }
+
     /* If the interface VLAN/LAG deleted, flush all the neighbors and routes associated with it */
     if (cps_api_object_type_operation(cps_api_object_key(obj)) != cps_api_oper_DELETE) {
         cps_api_object_attr_t admin_attr = cps_api_object_attr_get(obj,IF_INTERFACES_INTERFACE_ENABLED);
@@ -100,7 +106,8 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
                          index, is_op_del, p_intf->flags, (is_admin_up ? "Up" : "Down"), type);
         /* Allow only the L2 (bridge) and L3 ports for L3 operations */
         if ((type != BASE_CMN_INTERFACE_TYPE_L2_PORT) && (type != BASE_CMN_INTERFACE_TYPE_L3_PORT) &&
-            (type != BASE_CMN_INTERFACE_TYPE_LAG) && (type != BASE_CMN_INTERFACE_TYPE_VLAN)) {
+            (type != BASE_CMN_INTERFACE_TYPE_LAG) && (type != BASE_CMN_INTERFACE_TYPE_VLAN) &&
+            (type != BASE_CMN_INTERFACE_TYPE_MACVLAN)) {
             return false;
         }
         /* Incase of LAG/VLAN member delete, ignore it,
@@ -141,9 +148,10 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
     p_intf->vlan_id = vlan_id;
     p_intf->is_op_del = is_op_del;
 
-    NBR_MGR_LOG_INFO("CPS-INTF","Intf:%d flags:0x%x status:%s type:%d bridge:%d is_op_del:%d vlan-id:%d",
-                     index, p_intf->flags, (is_admin_up ? "Up" : "Down"), type, is_bridge, is_op_del,
-                     vlan_id);
+    NBR_MGR_LOG_INFO("CPS-INTF","VRF-id:%lu Intf:%d flags:0x%x status:%s type:%d "
+                     "bridge:%d is_op_del:%d vlan-id:%d",
+                     p_intf->vrfid, index, p_intf->flags, (is_admin_up ? "Up" : "Down"),
+                     type, is_bridge, is_op_del, vlan_id);
     return true;
 }
 
@@ -177,6 +185,9 @@ bool nbr_mgr_cps_obj_to_neigh(cps_api_object_t obj, nbr_mgr_nbr_entry_t *n) {
                 safestrncpy((char*)n->vrf_name, (const char*)cps_api_object_attr_data_bin(it.attr),
                             sizeof(n->vrf_name));
                 break;
+            case OS_RE_BASE_ROUTE_OBJ_NBR_VRF_ID:
+                n->vrfid = cps_api_object_attr_data_uint(it.attr);
+                break;
             case BASE_ROUTE_OBJ_NBR_FLAGS:
                 n->flags = cps_api_object_attr_data_uint(it.attr);
                 break;
@@ -195,6 +206,9 @@ bool nbr_mgr_cps_obj_to_neigh(cps_api_object_t obj, nbr_mgr_nbr_entry_t *n) {
             case BASE_ROUTE_OBJ_NBR_IFINDEX:
                 n->if_index = cps_api_object_attr_data_uint(it.attr);
                 break;
+            case OS_RE_BASE_ROUTE_OBJ_NBR_LOWER_LAYER_IF:
+                n->parent_if = cps_api_object_attr_data_uint(it.attr);
+                break;
             case OS_RE_BASE_ROUTE_OBJ_NBR_MBR_IFINDEX:
                 n->mbr_if_index= cps_api_object_attr_data_uint(it.attr);
                 break;
@@ -211,6 +225,7 @@ bool nbr_mgr_cps_obj_to_neigh(cps_api_object_t obj, nbr_mgr_nbr_entry_t *n) {
     return true;
 }
 
+/* Note: Dont return false from CPS event handler */
 bool nbr_mgr_process_nl_msg(cps_api_object_t obj, void *param)
 {
     nbr_mgr_msg_t *p_msg = nullptr;
@@ -239,7 +254,9 @@ bool nbr_mgr_process_nl_msg(cps_api_object_t obj, void *param)
             p_msg_uptr = nbr_mgr_alloc_unique_msg(&p_msg);
             if (p_msg) {
                 if (nbr_mgr_cps_obj_to_neigh(obj, &(p_msg->nbr))) {
-                    NBR_MGR_LOG_DEBUG("NETLINK-EVT", "type:%d family:%d ip:%s mac:%s if-index:%d/phy:%d state:%s(0x%x) processing",
+                    std::string q_stats = nbr_mgr_netlink_q_stats();
+                    NBR_MGR_LOG_DEBUG("NETLINK-EVT", "Q:%s type:%d family:%d ip:%s mac:%s if-index:%d/phy:%d "
+                                      "state:%s(0x%lx) processing", q_stats.c_str(),
                                       p_msg->nbr.msg_type, p_msg->nbr.family,
                                       std_ip_to_string(&(p_msg->nbr.nbr_addr), buff, HAL_INET6_TEXT_LEN),
                                       std_mac_to_string (&(p_msg->nbr.nbr_hwaddr), str, NBR_MGR_MAC_STR_LEN),
@@ -260,6 +277,15 @@ bool nbr_mgr_process_nl_msg(cps_api_object_t obj, void *param)
                     }
                     p_msg->nbr.flags = 0;
                     nbr_mgr_enqueue_netlink_nas_msg(std::move(p_msg_uptr));
+                }
+            }
+            break;
+        case cps_api_obj_CAT_VRF_MGMT:
+            if (cps_api_object_type_operation(cps_api_object_key(obj)) == cps_api_oper_DELETE) {
+                cps_api_object_attr_t vrfid_attr =
+                    cps_api_object_attr_get(obj, VRF_MGMT_NI_NETWORK_INSTANCES_NETWORK_INSTANCE_VRF_ID);
+                if (vrfid_attr) {
+                    nbr_mgr_enqueue_flush_msg(0, cps_api_object_attr_data_u32(vrfid_attr));
                 }
             }
             break;

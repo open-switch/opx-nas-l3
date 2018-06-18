@@ -97,7 +97,7 @@ bool nas_rt_peer_mac_db_add (nas_rt_peer_mac_config_t* mac_info)
     nas_rt_mac_uptr_t mac_uptr (new nas_rt_peer_mac_config_t (*mac_info));
     nas_rt_db_add_peer_mac_list (mac_uptr);
 
-    HAL_RT_LOG_INFO("HAL-RT", "Vrf:%d if-name:%s peer-mac:%s vrf obj:0x%x rif obj:0x%x "
+    HAL_RT_LOG_INFO("HAL-RT", "Vrf:%d if-name:%s peer-mac:%s vrf obj:0x%lx rif obj:0x%lx "
                     "added successfully", mac_info->vrf_id, mac_info->if_name,
                     hal_rt_mac_to_str(&mac_info->mac, p_buf, MAC_STR_LEN),
                     mac_info->vrf_obj_id, mac_info->rif_obj_id);
@@ -167,7 +167,6 @@ t_std_error nas_route_get_all_peer_routing_config(cps_api_object_list_t list){
     for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id ++) {
         p_vrf = hal_rt_access_fib_vrf(vrf_id);
         if (p_vrf == NULL) {
-            HAL_RT_LOG_ERR("HAL-RT", "Vrf node NULL. Vrf_id: %d", vrf_id);
             continue;
         }
 
@@ -204,14 +203,14 @@ t_std_error nas_route_delete_vrf_peer_mac_config(uint32_t vrf_id) {
     char p_buf[MAC_STR_LEN];
     for(auto& x: mac_list){
         nas_rt_peer_mac_config_t *ptr = x.second.get();
-        HAL_RT_LOG_DEBUG("HAL-RT", "Vrf:%d if_name:%s peer-mac:%s vrf:0x%x rif:0x%x info",
+        HAL_RT_LOG_DEBUG("HAL-RT", "Vrf:%d if_name:%s peer-mac:%s vrf:0x%lx rif:0x%lx info",
                          vrf_id, ptr->if_name,
                          hal_rt_mac_to_str(&ptr->mac, p_buf, MAC_STR_LEN),
                          ptr->vrf_obj_id, ptr->rif_obj_id);
         if (ptr->vrf_obj_id) {
             /* Remove peer VLT MAC information */
             if ((rc = ndi_route_vr_delete(0, ptr->vrf_obj_id))!= STD_ERR_OK) {
-                HAL_RT_LOG_ERR("HAL-RT", "Vrf:%d if_name:%s peer-mac:%s obj-id:0x%x deletion failed!",
+                HAL_RT_LOG_ERR("HAL-RT", "Vrf:%d if_name:%s peer-mac:%s obj-id:0x%lx deletion failed!",
                                vrf_id, ptr->if_name,
                                hal_rt_mac_to_str(&ptr->mac, p_buf, MAC_STR_LEN),
                                ptr->vrf_obj_id);
@@ -219,7 +218,7 @@ t_std_error nas_route_delete_vrf_peer_mac_config(uint32_t vrf_id) {
             }
         } else if (ptr->rif_obj_id) {
             if (ndi_rif_delete(0, ptr->rif_obj_id) != STD_ERR_OK) {
-                HAL_RT_LOG_ERR("HAL-RT", "Vrf:%d if_name:%s peer-mac:%s obj-id:0x%x deletion failed!",
+                HAL_RT_LOG_ERR("HAL-RT", "Vrf:%d if_name:%s peer-mac:%s obj-id:0x%lx deletion failed!",
                                vrf_id, ptr->if_name,
                                hal_rt_mac_to_str(&ptr->mac, p_buf, MAC_STR_LEN),
                                ptr->rif_obj_id);
