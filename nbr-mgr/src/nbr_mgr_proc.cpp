@@ -1092,32 +1092,40 @@ bool nbr_data::process_nbr_data(nbr_mgr_nbr_entry_t& entry) {
                  * if fails, remove the nbr entry in the NPU to lift
                  * the packets for ARP resolution */
                 nbr_stats.failed_trig_resolve_cnt++;
-                if (m_failed_cnt == NBR_MGR_MAX_NBR_RETRY_CNT) {
+                if (m_failed_cnt > NBR_MGR_MAX_NBR_RETRY_CNT) {
                     NBR_MGR_LOG_INFO("PROC", " Not resolved even after multiple re-tries vrf:%d(%s),"
                                      " family:%d,Nbr:%s, intf:%d, phy_idx:%d, status:%d,"
                                      "flags %d entry type:%d status:%lu flags:%lu m_refresh_cnt:%d",
                                      m_vrf_id, m_vrf_name.c_str(), m_family, ip.c_str(), m_ifindex, entry.mbr_if_index,
                                      m_status, m_flags, entry.msg_type, entry.status, entry.flags,
                                      m_refresh_cnt);
+                    m_flags &= ~NBR_MGR_NBR_REFRESH;
+                    if (m_flags & NBR_MGR_NBR_RESOLVE)
+                        trigger_delay_resolve();
+
+                    rc = publish_entry(NBR_MGR_OP_CREATE, entry);
+                } else {
                     /* If refresh count is > 0, refresh the nbr again, this could be because
                      * while the refresh in progress, we could have received more flushes,
                      * refresh again */
-                    if (m_refresh_cnt) {
-                        reset_refresh_cnt();
-                        trigger_resolve();
-                    } else {
-                        m_flags &= ~NBR_MGR_NBR_REFRESH;
-                        if (m_flags & NBR_MGR_NBR_RESOLVE)
-                            trigger_resolve();
-
-                        rc = publish_entry(NBR_MGR_OP_CREATE, entry);
-                    }
-                } else {
                     /* Reset the refresh count during trigger resolve on failure case */
-                    reset_refresh_cnt();
-                    m_failed_cnt++;
-                    rc = trigger_resolve();
+                    if (m_failed_cnt <= NBR_MGR_MIN_NBR_RETRY_CNT) {
+                        rc = trigger_resolve();
+                    } else {
+                        rc = trigger_delay_resolve();
+                    }
+                    if (m_refresh_cnt) {
+                        /* If there are topology change related flushes, dont increment the failed_cnt */
+                        reset_refresh_cnt();
+                    } else {
+                        m_failed_cnt++;
+                    }
                 }
+            } else if (m_status & NBR_MGR_NUD_DELAY) {
+                /* If nbr state has moved to failed during delay refresh, make sure refresh few more times. */
+                nbr_stats.delay_trig_refresh++;
+                m_flags |= NBR_MGR_NBR_REFRESH;
+                trigger_resolve();
             } else if (m_flags & NBR_MGR_NBR_RESOLVE) {
                 trigger_resolve();
                 rc = publish_entry(NBR_MGR_OP_CREATE, entry);
@@ -1226,10 +1234,19 @@ bool nbr_data::handle_fdb_change(nbr_mgr_evt_type_t evt, unsigned long status) c
         }
         /* @@TODO need to take some action on MAC delete for the static Nbr entry? */
         return true;
-    } else if ((evt == NBR_MGR_NBR_ADD) && (m_status & NBR_MGR_NUD_FAILED)) {
+    } else if ((evt == NBR_MGR_NBR_ADD) && (m_flags & NBR_MGR_MAC_NOT_PRESENT) &&
+               (!(m_status & NBR_MGR_NUD_PERMANENT)) &&
+               (!(m_status & NBR_MGR_NUD_REACHABLE)) &&
+               (!(m_flags & NBR_MGR_NBR_REFRESH))) {
         /* If the MAC learnt when the nbr is in failed state, refresh the nbr. */
         m_flags |= NBR_MGR_NBR_REFRESH;
-        trigger_resolve();
+        if (m_status & NBR_MGR_NUD_FAILED) {
+            nbr_stats.mac_add_trig_resolve++;
+            trigger_resolve();
+        } else {
+            nbr_stats.mac_add_trig_refresh++;
+            trigger_refresh();
+        }
     }
 
     nbr_mgr_nbr_entry_t nbr;
@@ -1252,10 +1269,7 @@ bool nbr_data::handle_fdb_change(nbr_mgr_evt_type_t evt, unsigned long status) c
     } else {
          if ((!(m_status & NBR_MGR_NUD_PERMANENT)) &&
             (m_retry_cnt > 0)) {
-            /* Refresh has been attempted because Nbr learnt before MAC learning,
-             * refresh cnt is incremented, reset the count and REFRESH flag */
             m_retry_cnt = 0;
-            m_flags &= ~NBR_MGR_NBR_REFRESH;
         }
         /* Program the Nbr dependent MAC into the NPU */
         //if(m_mac_data_ptr && (m_mac_data_ptr->get_fdb_type() != FDB_TYPE::FDB_IGNORE))
@@ -1388,6 +1402,36 @@ bool nbr_data::trigger_delay_refresh() const {
     nbr_stats.delay_refresh_cnt++;
     /* Refresh the neighbor */
     return nbr_mgr_nbr_resolve(NBR_MGR_NL_DELAY_REFRESH_MSG, &nbr);
+}
+
+bool nbr_data::trigger_delay_resolve() const {
+    nbr_mgr_nbr_entry_t nbr;
+
+    /* Dont refresh for static ARP entry */
+    if (m_status & NBR_MGR_NUD_PERMANENT)
+        return false;
+
+    std::string ip = nbr_ip_addr_string (m_ip_addr);
+    if (m_mac_data_ptr == NULL) {
+        NBR_MGR_LOG_INFO("PROC", "MAC is NULL, refresh failed for Nbr %s",
+                        ip.c_str());
+        return false;
+    }
+    NBR_MGR_LOG_DEBUG("PROC-NL-MSG", "Delay resolve the neighbor %s MAC:%s if-index:%d",
+                     ip.c_str(), m_mac_data_ptr->get_mac_addr().c_str(), m_ifindex);
+    memset(&nbr, 0, sizeof(nbr));
+    populate_nbr_entry(nbr);
+
+    //Skip refresh if the interface is admin down/not exist
+    if(!nbr_check_intf_up(nbr.vrfid, nbr.if_index))
+        return false;
+
+    if (!(m_flags & NBR_MGR_MAC_NOT_PRESENT))
+        m_flags |= NBR_MGR_NBR_REFRESH;
+
+    nbr_stats.delay_resolve_cnt++;
+    /* Refresh the neighbor */
+    return nbr_mgr_nbr_resolve(NBR_MGR_NL_DELAY_RESOLVE_MSG, &nbr);
 }
 
 bool nbr_data::trigger_refresh_for_mac_learn() const {

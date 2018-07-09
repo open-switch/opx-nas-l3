@@ -1,5 +1,6 @@
 #!/bin/bash -e
 
+./nas_rt_rif_test.py run-test
 ./hal_rt_dr_unittest
 ./nas_rt_offload_cps_unittest
 ./nas_route_cps_unittest

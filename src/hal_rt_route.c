@@ -316,9 +316,16 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
             rif_update = false;
             if_index = 0;
         } else if (p_fh == NULL) {
-            p_nh = FIB_GET_FIRST_NH_FROM_DR(p_dr, nh_holder);
-            if (!p_nh) {
-                // @Todo, Need to handle this case
+            bool is_nh_found = false;
+            /* Find the next valid NH, if all NHs are in dead state, return from here */
+            FIB_FOR_EACH_NH_FROM_DR (p_dr, p_nh, nh_holder)
+            {
+                if (!(p_nh->status_flag & FIB_NH_STATUS_DEAD)) {
+                    is_nh_found = true;
+                    break;
+                }
+            }
+            if (is_nh_found == false) {
                 HAL_RT_LOG_DEBUG("HAL-RT-NDI", "Null NH!");
                 return DN_HAL_ROUTE_E_FAIL;
             }

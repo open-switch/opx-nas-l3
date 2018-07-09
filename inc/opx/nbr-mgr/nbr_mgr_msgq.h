@@ -48,7 +48,8 @@ typedef enum {
     NBR_MGR_NL_REFRESH_MSG,
     NBR_MGR_NAS_FLUSH_MSG,
     NBR_MGR_NL_DELAY_REFRESH_MSG,
-    NBR_MGR_DUMP_MSG
+    NBR_MGR_DUMP_MSG,
+    NBR_MGR_NL_DELAY_RESOLVE_MSG
 } nbr_mgr_msg_type_t;
 
 typedef enum {

@@ -139,7 +139,7 @@ int nas_rt_publish_nht(t_fib_nht *p_nht, t_fib_dr *p_dr, t_fib_nh *p_nh, bool is
 t_fib_nht *fib_get_nht (uint32_t vrf_id, t_fib_ip_addr *p_dest_addr);
 t_fib_nht *fib_get_first_nht (uint32_t vrf_id, uint8_t af_index);
 t_fib_nht *fib_get_next_nht (uint32_t vrf_id, t_fib_ip_addr *p_dest_addr);
-t_std_error nas_route_get_all_nht_info(cps_api_object_list_t list, unsigned int vrf_id,
+t_std_error nas_route_get_all_nht_info(cps_api_object_list_t list, bool is_specific_vrf_get, unsigned int vrf_id,
                                        unsigned int af, t_fib_ip_addr *p_dest_addr);
 t_std_error nas_route_get_all_route_info(cps_api_object_list_t list, uint32_t vrf_id, uint32_t af,
                                          hal_ip_addr_t *p_prefix, uint32_t pref_len, bool is_specific_prefix_get,

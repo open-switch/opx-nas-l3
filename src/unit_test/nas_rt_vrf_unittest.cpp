@@ -1137,6 +1137,77 @@ TEST(nas_rt_vrf_test, nas_rt_vrf_neg_test) {
     ASSERT_TRUE(rc == cps_api_ret_code_OK);
 }
 
+TEST(nas_rt_vrf_test, nas_rt_vrf_vlan_del_test) {
+    int ret = system("os10-show-version | grep \"OS_NAME.*Enterprise\"");
+    if (ret != 0) {
+        return;
+    }
+    FILE *fp;
+    char cmd [512];
+
+    fp = fopen("/tmp/test_pre_req","w");
+    fprintf(fp, "configure terminal\n");
+    fprintf(fp, "ip vrf blue\n");
+    fprintf(fp, "exit\n");
+    fprintf(fp, "interface vlan 100\n");
+    fprintf(fp, "no shutdown\n");
+    fprintf(fp, "ip vrf forwarding blue\n");
+    fprintf(fp, "ip address 100.10.10.1/24\n");
+    fprintf(fp, "exit\n");
+    fprintf(fp, "interface ethernet %s\n", DoD_b2b_intf1);
+    fprintf(fp, "switchport mode trunk\n");
+    fprintf(fp, "switchport trunk allowed vlan 100\n");
+    fprintf(fp, "exit\n");
+    fprintf(fp, "mac address-table static 00:11:22:33:44:55 vlan 100 interface ethernet %s\n",
+            DoD_b2b_intf1);
+    fprintf(fp, "end\n");
+    fflush(fp);
+    system("sudo -u admin clish --b /tmp/test_pre_req");
+    fclose(fp);
+
+    memset(cmd, '\0', sizeof(cmd));
+    snprintf(cmd, 511, "ip -n blue neigh add 100.10.10.2 lladdr 00:11:22:33:44:55 dev v-br100");
+    system(cmd);
+
+    system("sudo -u admin clish -c 'show ip arp vrf-name blue' | grep 100.10.10.2 > /tmp/check");
+    sleep(3);
+    FILE *result = fopen("/tmp/check", "r");
+    char val1[50], val2[50];
+    memset(val1, '\0', sizeof(val1));
+    memset(val2, '\0', sizeof(val2));
+    fscanf(result, "%s %s", val1, val2);
+    fclose(result);
+    printf("\r\n val1:%s val2:%s\r\n", val1, val2);
+    ASSERT_TRUE((strncmp(val2, "100.10.10.2", 50) == 0));
+
+    fp = fopen("/tmp/test_pre_req","w");
+    fprintf(fp, "configure terminal\n");
+    fprintf(fp, "no mac address-table static 00:11:22:33:44:55 vlan 100\n");
+    fprintf(fp, "no interface vlan 100\n");
+    fprintf(fp, "end\n");
+    fflush(fp);
+    system("sudo -u admin clish --b /tmp/test_pre_req");
+    fclose(fp);
+
+    sleep(3);
+    system("sudo -u admin clish -c 'show ip arp vrf-name blue' | grep 100.10.10.2 > /tmp/check");
+    result = fopen("/tmp/check", "r");
+    memset(val1, '\0', sizeof(val1));
+    memset(val2, '\0', sizeof(val2));
+    fscanf(result, "%s %s", val1, val2);
+    fclose(result);
+    printf("\r\n val1:%s val2:%s\r\n", val1, val2);
+    ASSERT_TRUE((strncmp(val2, "100.10.10.2", 50) != 0));
+
+    fp = fopen("/tmp/test_pre_req","w");
+    fprintf(fp, "configure terminal\n");
+    fprintf(fp, "no ip vrf blue\n");
+    fprintf(fp, "end\n");
+    fflush(fp);
+    system("sudo -u admin clish --b /tmp/test_pre_req");
+    fclose(fp);
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
 

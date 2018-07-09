@@ -481,6 +481,19 @@ static t_std_error hal_rt_intf_check_lla_dep_nh(t_fib_nh *p_nh) {
     return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
 }
 
+static t_std_error hal_rt_pub_nbr_evt(t_fib_nh *p_fh, cps_api_operation_types_t op) {
+    cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_fh, op);
+    if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
+        HAL_RT_LOG_ERR ("HAL-RT-NH-PUB",
+                        "Failed to publish - op:%d vrf_id: %d, ip_addr: %s, if_index: 0x%x, "
+                        "owner_flag: 0x%x, status_flag: 0x%x", op,
+                        p_fh->vrf_id, FIB_IP_ADDR_TO_STR (&p_fh->key.ip_addr),
+                        p_fh->key.if_index, p_fh->owner_flag, p_fh->status_flag);
+        return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
+    }
+    return STD_ERR_OK;
+}
+
 int fib_process_nh_del_on_intf_event (t_fib_intf *p_intf, t_fib_intf_event_type intf_event) {
 
     t_fib_nh       *p_fh = NULL, *p_fh_del = NULL;
@@ -496,6 +509,8 @@ int fib_process_nh_del_on_intf_event (t_fib_intf *p_intf, t_fib_intf_event_type 
                 if (hal_rt_intf_check_lla_dep_nh(p_fh_del) == STD_ERR_OK) {
                     continue;
                 }
+
+                hal_rt_pub_nbr_evt(p_fh_del, cps_api_oper_DELETE);
                 fib_nh_del_nh(p_fh_del, true);
             }
             p_fh_del = p_fh;
@@ -514,10 +529,7 @@ int fib_process_nh_del_on_intf_event (t_fib_intf *p_intf, t_fib_intf_event_type 
              * NH will be deleted only via explicit triggers from ARP delete.
              */
             fib_proc_nh_dead (p_fh);
-            cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_fh, cps_api_oper_DELETE);
-            if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
-                HAL_RT_LOG_ERR("HAL-RT-DR","Failed to publish neighbor delete");
-            }
+            hal_rt_pub_nbr_evt(p_fh, cps_api_oper_DELETE);
         }
     }
 
@@ -526,6 +538,7 @@ int fib_process_nh_del_on_intf_event (t_fib_intf *p_intf, t_fib_intf_event_type 
          * if we delete this NH now, it will lead to radix assert when the dependent NH is deleted
          * and route reaches the lla count reaches zero. */
         if (hal_rt_intf_check_lla_dep_nh(p_fh_del) != STD_ERR_OK) {
+            hal_rt_pub_nbr_evt(p_fh_del, cps_api_oper_DELETE);
             fib_nh_del_nh(p_fh_del, true);
         }
     }
@@ -751,6 +764,11 @@ t_std_error fib_process_intf_mode_change (int vrf_id, int af_index, uint32_t if_
              */
             fib_process_link_local_address_del_on_intf_event (p_intf, (vrf_id ? FIB_INTF_FORCE_DEL : FIB_INTF_MODE_CHANGE_EVENT));
 
+            /* It is possible that the routes that are associated with this interface would have moved to different NH
+             * and in the change list for pending resolution to program into the HW, process all the pending routes now
+             * so that in the fib_process_nh_del_on_intf_event function,
+             * next-hop delete will be successful if we remove the HW binding for those routes. */
+            fib_process_pending_resolve_dr(vrf_id, af_index);
             fib_process_nh_del_on_intf_event (p_intf, (vrf_id ? FIB_INTF_FORCE_DEL : FIB_INTF_MODE_CHANGE_EVENT));
             if (vrf_id) {
                 fib_del_all_intf_ip(p_intf);

@@ -36,7 +36,8 @@
 #define NBR_MGR_NUD_NONE          0x00
 
 #define NBR_MGR_BURST_RESOLVE_CNT 300
-#define NBR_MGR_MAX_NBR_RETRY_CNT 10
+#define NBR_MGR_MIN_NBR_RETRY_CNT 10
+#define NBR_MGR_MAX_NBR_RETRY_CNT 25
 #define NBR_MGR_MAX_NBR_REFRESH_MAC_LEARN_RETRY_CNT 100
 #define NBR_MGR_BURST_RESOLVE_DELAY 1 /* Every 1 sec NBR_MGR_BURST_RESOLVE_CNT ARP
                                          messages will be sent from kernel */
