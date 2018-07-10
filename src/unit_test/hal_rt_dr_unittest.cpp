@@ -214,6 +214,18 @@ TEST(hal_rt_dr_test, hal_rt_dr_check_loopback_addr_in_hw) {
     ASSERT_TRUE(rc != cps_api_ret_code_OK);
 }
 
+TEST(hal_rt_dr_test, hal_rt_dr_check_lla) {
+    system("ip -6 addr add fe80::1/128 dev br100");
+    sleep(5);
+    cps_api_return_code_t rc = nas_ut_validate_rt_cfg ("default", AF_INET6, "fe80::1", 128, "default", NULL, NULL, true);
+    ASSERT_TRUE(rc == cps_api_ret_code_OK);
+    system("ip link del br100");
+    sleep(5);
+    rc = nas_ut_validate_rt_cfg ("default", AF_INET6, "fe80::1", 128, "default", NULL, NULL, true);
+    ASSERT_TRUE(rc != cps_api_ret_code_OK);
+}
+
+
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
 

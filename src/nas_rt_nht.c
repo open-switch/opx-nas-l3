@@ -123,7 +123,7 @@ t_fib_nht *fib_add_nht (t_fib_nht *p_nht) {
     }
 
     af_index = p_nht->key.dest_addr.af_index;
-
+    p_nht_new->vrf_id = p_nht->vrf_id;
     memcpy (&p_nht_new->key.dest_addr, &p_nht->key.dest_addr, sizeof (p_nht->key.dest_addr));
     p_nht_new->rt_head.rth_addr = (uint8_t *) (&(p_nht_new->key));
     p_radix_head = std_radix_insert (hal_rt_access_fib_vrf_nht_tree(p_nht->vrf_id, af_index),
@@ -473,6 +473,7 @@ static int nas_rt_check_nht_and_flush_acls(t_fib_ip_addr *dest_addr, t_fib_ip_ad
     t_fib_nht *p_fib_nht = NULL;
     hal_vrf_id_t vrf_id = 0;
     uint8_t af_index = 0;
+    t_fib_nh *p_tmp_nh = NULL;
 
     next_hop_id_t next_hop_id = 0;
     if (p_nh) {
@@ -516,6 +517,16 @@ static int nas_rt_check_nht_and_flush_acls(t_fib_ip_addr *dest_addr, t_fib_ip_ad
                 p_fib_nht = fib_get_next_nht(vrf_id, &p_fib_nht->key.dest_addr);
                 continue;
             }
+            /*
+             * Current NH handle reference to ACL has to be cleaned only when
+             * this NH handle is not used by other NHT.
+             */
+            p_tmp_nh = fib_get_next_nh(p_fib_nht->vrf_id, &p_fib_nht->key.dest_addr, 0);
+            if (p_tmp_nh && (memcmp(&p_tmp_nh->key.ip_addr, &p_fib_nht->key.dest_addr,
+                            sizeof(t_fib_ip_addr)) == 0) && (p_tmp_nh->next_hop_id == next_hop_id)) {
+                return true;
+            }
+
             p_temp_dr = fib_get_dr (vrf_id, &p_fib_nht->fib_match_dest_addr,
                                     p_fib_nht->prefix_len);
             HAL_RT_LOG_INFO("HAL-RT-NHT", "NHT:%s NH/Route Match addr:%s/%d "

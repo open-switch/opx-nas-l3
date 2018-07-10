@@ -41,35 +41,40 @@ void nbr_process::nbr_mgr_dump_process_stats() {
 }
 
 static void _nbr_mgr_dump_nbr_data_stats(nbr_data const * ptr) {
-    NBR_MGR_LOG_ERR("DUMP", "Neighbor STATS vrf-id:%d Nbr:%s refresh:%d delay refresh:%d resolve:%d "
-                    "retry:%d mac_np:%d fail_trig:%d stale_ref:%d hw_mac_lrn_refresh:%d mac_trig_ref:%d "
-                    "FLUSH skip:%d fail_resolve:%d refresh:%d",
+    NBR_MGR_LOG_ERR("DUMP", "Neighbor STATS vrf-id:%d Nbr:%s refresh:%d delay refresh:%d delay resolve:%d resolve:%d "
+                    "retry:%d mac_np:%d fail_trig_resolve:%d stale_ref:%d hw_mac_lrn_refresh:%d mac_trig_ref:%d "
+                    "FLUSH skip:%d fail_resolve:%d refresh:%d mac add resolve:%d refresh:%d delay-state-failed-resolve:%d",
                     ptr->get_vrf_id(), ptr->get_ip_addr().c_str(),
-                    ptr->nbr_stats.refresh_cnt, ptr->nbr_stats.delay_refresh_cnt, ptr->nbr_stats.resolve_cnt,
+                    ptr->nbr_stats.refresh_cnt, ptr->nbr_stats.delay_refresh_cnt,
+                    ptr->nbr_stats.delay_resolve_cnt, ptr->nbr_stats.resolve_cnt,
                     ptr->nbr_stats.retry_cnt, ptr->nbr_stats.mac_not_present_cnt,
                     ptr->nbr_stats.failed_trig_resolve_cnt, ptr->nbr_stats.stale_trig_refresh_cnt,
                     ptr->nbr_stats.hw_mac_learn_refresh_cnt, ptr->nbr_stats.mac_trig_refresh,
                     ptr->nbr_stats.flush_skip_refresh, ptr->nbr_stats.flush_failed_resolve,
-                    ptr->nbr_stats.flush_refresh);
+                    ptr->nbr_stats.flush_refresh, ptr->nbr_stats.mac_add_trig_resolve,
+                    ptr->nbr_stats.mac_add_trig_refresh, ptr->nbr_stats.delay_trig_refresh);
 }
 
 static void _nbr_mgr_dump_nbr_data_ref_stats(nbr_data_ptr &ptr) {
-    NBR_MGR_LOG_ERR("DUMP", "Neighbor STATS vrf-id:%d Nbr:%s refresh:%d delay refresh:%d resolve:%d "
-                    "retry:%d mac_np:%d fail_trig:%d stale_ref:%d hw_mac_lrn_refresh:%d mac_trig_ref:%d "
-                    "FLUSH skip:%d fail_resolve:%d refresh:%d",
+    NBR_MGR_LOG_ERR("DUMP", "Neighbor STATS vrf-id:%d Nbr:%s refresh:%d delay refresh:%d delay resolve:%d resolve:%d "
+                    "retry:%d mac_np:%d fail_trig_resolve:%d stale_ref:%d hw_mac_lrn_refresh:%d mac_trig_ref:%d "
+                    "FLUSH skip:%d fail_resolve:%d refresh:%d mac add resolve:%d refresh:%d delay-state-failed-resolve:%d",
                     ptr->get_vrf_id(), ptr->get_ip_addr().c_str(),
-                    ptr->nbr_stats.refresh_cnt, ptr->nbr_stats.delay_refresh_cnt, ptr->nbr_stats.resolve_cnt,
+                    ptr->nbr_stats.refresh_cnt, ptr->nbr_stats.delay_refresh_cnt,
+                    ptr->nbr_stats.delay_resolve_cnt, ptr->nbr_stats.resolve_cnt,
                     ptr->nbr_stats.retry_cnt, ptr->nbr_stats.mac_not_present_cnt,
                     ptr->nbr_stats.failed_trig_resolve_cnt, ptr->nbr_stats.stale_trig_refresh_cnt,
                     ptr->nbr_stats.hw_mac_learn_refresh_cnt, ptr->nbr_stats.mac_trig_refresh,
                     ptr->nbr_stats.flush_skip_refresh, ptr->nbr_stats.flush_failed_resolve,
-                    ptr->nbr_stats.flush_refresh);
+                    ptr->nbr_stats.flush_refresh, ptr->nbr_stats.mac_add_trig_resolve,
+                    ptr->nbr_stats.mac_add_trig_refresh, ptr->nbr_stats.delay_trig_refresh);
 }
 
 static nbr_mgr_nbr_stats gbl_nbr_stats;
 static void nbr_mgr_dump_all_nbr_data_stats(nbr_data const * ptr) {
     gbl_nbr_stats.refresh_cnt += ptr->nbr_stats.refresh_cnt;
     gbl_nbr_stats.delay_refresh_cnt += ptr->nbr_stats.delay_refresh_cnt;
+    gbl_nbr_stats.delay_resolve_cnt += ptr->nbr_stats.delay_resolve_cnt;
     gbl_nbr_stats.resolve_cnt += ptr->nbr_stats.resolve_cnt;
     gbl_nbr_stats.retry_cnt += ptr->nbr_stats.retry_cnt;
     gbl_nbr_stats.mac_not_present_cnt += ptr->nbr_stats.mac_not_present_cnt;
@@ -80,21 +85,23 @@ static void nbr_mgr_dump_all_nbr_data_stats(nbr_data const * ptr) {
     gbl_nbr_stats.flush_skip_refresh += ptr->nbr_stats.flush_skip_refresh;
     gbl_nbr_stats.flush_failed_resolve += ptr->nbr_stats.flush_failed_resolve;
     gbl_nbr_stats.flush_refresh += ptr->nbr_stats.flush_refresh;
+    gbl_nbr_stats.delay_trig_refresh += ptr->nbr_stats.delay_trig_refresh;
 
 }
 
 void _nbr_mgr_dump_all_nbr_stats() {
     memset(&gbl_nbr_stats, 0, sizeof(gbl_nbr_stats));
     p_nbr_process_hdl->nbr_db_walk(nbr_mgr_dump_all_nbr_data_stats);
-    NBR_MGR_LOG_ERR("DUMP", "All neighbor STATS refresh:%d delay refresh:%d resolve:%d "
+    NBR_MGR_LOG_ERR("DUMP", "All neighbor STATS refresh:%d delay refresh:%d delay resolve:%d resolve:%d "
                     "retry:%d mac_np:%d fail_trig:%d stale_ref:%d mac_lrn_ref:%d mac_trig_ref:%d "
-                    "FLUSH skip:%d fail_resolve:%d refresh:%d",
-                    gbl_nbr_stats.refresh_cnt, gbl_nbr_stats.delay_refresh_cnt, gbl_nbr_stats.resolve_cnt,
+                    "FLUSH skip:%d fail_resolve:%d refresh:%d delay-state-failed-resolve:%d",
+                    gbl_nbr_stats.refresh_cnt, gbl_nbr_stats.delay_refresh_cnt,
+                    gbl_nbr_stats.delay_resolve_cnt, gbl_nbr_stats.resolve_cnt,
                     gbl_nbr_stats.retry_cnt, gbl_nbr_stats.mac_not_present_cnt,
                     gbl_nbr_stats.failed_trig_resolve_cnt, gbl_nbr_stats.stale_trig_refresh_cnt,
                     gbl_nbr_stats.hw_mac_learn_refresh_cnt, gbl_nbr_stats.mac_trig_refresh,
                     gbl_nbr_stats.flush_skip_refresh, gbl_nbr_stats.flush_failed_resolve,
-                    gbl_nbr_stats.flush_refresh);
+                    gbl_nbr_stats.flush_refresh, gbl_nbr_stats.delay_trig_refresh);
 }
 
 void _nbr_mgr_dump_all_nbr_stats_clear(nbr_data const * ptr) {
@@ -217,7 +224,12 @@ static void _nbr_mgr_dump_nbr_ref(nbr_data_ptr &ptr) {
         if (ptr->get_if_index() != ptr->get_parent_if_index()) {
             p_nbr_process_hdl->nbr_if_list_entry_walk(NBR_MGR_DEFAULT_VRF_ID, ptr->get_parent_if_index(), nbr_mgr_dump_intf_data);
         }
-        p_nbr_process_hdl->mac_if_db_walk(ptr->get_parent_if_index(), nbr_mgr_dump_mac_data);
+        try {
+            std::string mac = ptr->get_mac_ptr()->get_mac_addr().c_str();
+            nbr_mgr_dump_mac_data(p_nbr_process_hdl->mac_db_get(ptr->get_parent_if_index(), mac));
+        } catch(std::invalid_argument& e) {
+            NBR_MGR_LOG_ERR("DUMP", "MAC is not present");
+        }
     }
 }
 

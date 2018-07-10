@@ -340,28 +340,31 @@ static cps_api_return_code_t nas_route_cps_nht_get_func (void * ctx,
                                 cps_api_get_params_t * param, size_t ix) {
 
     cps_api_object_t filt = cps_api_object_list_get(param->filters,ix);
-    cps_api_object_attr_t vrf_id_attr;
     cps_api_object_attr_t af_attr;
     cps_api_object_attr_t dest_attr;
     t_fib_ip_addr  dest_addr;
     unsigned int vrf_id =0;
     unsigned int af = HAL_INET4_FAMILY;
+    bool is_specific_vrf_get = false;
 
     if (filt == NULL) {
         HAL_RT_LOG_ERR("NAS-RT-CPS","NHT object is not present");
         return cps_api_ret_code_ERR;
     }
-    vrf_id_attr = cps_api_get_key_data(filt,BASE_ROUTE_NH_TRACK_VRF_ID);
+    const char *vrf_name = cps_api_object_get_data(filt, BASE_ROUTE_NH_TRACK_VRF_NAME);
+    if (vrf_name) {
+        if (hal_rt_get_vrf_id(vrf_name, &vrf_id) == false) {
+            HAL_RT_LOG_INFO("NAS-RT-CPS-NHT","VRF-id get error - Invalid VRF name:%s", vrf_name);
+            return cps_api_ret_code_ERR;
+        }
+        is_specific_vrf_get = true;
+    }
+
     af_attr = cps_api_get_key_data(filt,BASE_ROUTE_NH_TRACK_AF);
     dest_attr = cps_api_get_key_data(filt,BASE_ROUTE_NH_TRACK_DEST_ADDR);
 
     HAL_RT_LOG_DEBUG("NAS-RT-CPS", "NHT Get function");
 
-
-    if(vrf_id_attr != NULL) {
-        vrf_id =  cps_api_object_attr_data_u32(vrf_id_attr);
-        HAL_RT_LOG_DEBUG("NAS-RT-CPS","Get NHT entries: vrf_id %d", vrf_id);
-    }
 
     if (af_attr) {
         af = cps_api_object_attr_data_u32(af_attr);
@@ -391,14 +394,14 @@ static cps_api_return_code_t nas_route_cps_nht_get_func (void * ctx,
     do {
         /* if address family is not given, get all family nhts */
         if ((af_attr == NULL) || (af == HAL_INET4_FAMILY)) {
-            if (nas_route_get_all_nht_info(param->list, vrf_id, HAL_INET4_FAMILY,
+            if (nas_route_get_all_nht_info(param->list, is_specific_vrf_get, vrf_id, HAL_INET4_FAMILY,
                                                 ((dest_attr != NULL) ? (&dest_addr): NULL)) != STD_ERR_OK){
                 rc = cps_api_ret_code_ERR;
                 break;
             }
         }
         if ((af_attr == NULL) || (af == HAL_INET6_FAMILY)) {
-            if (nas_route_get_all_nht_info(param->list, vrf_id, HAL_INET6_FAMILY,
+            if (nas_route_get_all_nht_info(param->list, is_specific_vrf_get, vrf_id, HAL_INET6_FAMILY,
                                                 ((dest_attr != NULL) ? (&dest_addr): NULL)) != STD_ERR_OK){
                 rc = cps_api_ret_code_ERR;
                 break;
@@ -2007,7 +2010,6 @@ t_std_error nas_route_process_cps_nht(cps_api_transaction_params_t * param, size
 
     cps_api_object_t obj = cps_api_object_list_get(param->change_list,ix);
     cps_api_return_code_t rc = cps_api_ret_code_OK;
-    cps_api_object_attr_t vrf_id_attr;
     cps_api_object_attr_t af_attr;
     cps_api_object_attr_t dest_attr;
     t_fib_nht fib_nht;
@@ -2018,11 +2020,11 @@ t_std_error nas_route_process_cps_nht(cps_api_transaction_params_t * param, size
         return cps_api_ret_code_ERR;
     }
 
+    memset(&fib_nht, 0, sizeof(t_fib_nht));
     cps_api_operation_types_t op = cps_api_object_type_operation(cps_api_object_key(obj));
     /*
      * Check mandatory NHT attributes
      */
-    vrf_id_attr = cps_api_get_key_data(obj,BASE_ROUTE_NH_TRACK_VRF_ID);
     af_attr = cps_api_get_key_data(obj,BASE_ROUTE_NH_TRACK_AF);
     dest_attr = cps_api_get_key_data(obj,BASE_ROUTE_NH_TRACK_DEST_ADDR);
 
@@ -2046,6 +2048,13 @@ t_std_error nas_route_process_cps_nht(cps_api_transaction_params_t * param, size
             break;
     }
 
+    const char *vrf_name = cps_api_object_get_data(obj, BASE_ROUTE_NH_TRACK_VRF_NAME);
+    if (vrf_name) {
+        if (hal_rt_get_vrf_id(vrf_name, &fib_nht.vrf_id) == false) {
+            HAL_RT_LOG_INFO("NAS-RT-CPS-NHT","VRF-id get error - Invalid VRF name:%s", vrf_name);
+            return cps_api_ret_code_ERR;
+        }
+    }
     if(cps_api_object_attr_data_u32(af_attr) == AF_INET) {
         struct in_addr *inp = (struct in_addr *) cps_api_object_attr_data_bin(dest_attr);
         std_ip_from_inet(&fib_nht.key.dest_addr,inp);
@@ -2053,8 +2062,6 @@ t_std_error nas_route_process_cps_nht(cps_api_transaction_params_t * param, size
         struct in6_addr *inp6 = (struct in6_addr *) cps_api_object_attr_data_bin(dest_attr);
         std_ip_from_inet6(&fib_nht.key.dest_addr,inp6);
     }
-
-    fib_nht.vrf_id =  cps_api_object_attr_data_u32(vrf_id_attr);
 
     HAL_RT_LOG_DEBUG("NAS-RT-CPS-NHT", "VRF:%d NHT Addr:%s isAdd:%d",
                  fib_nht.vrf_id, FIB_IP_ADDR_TO_STR(&fib_nht.key.dest_addr), isAdd);

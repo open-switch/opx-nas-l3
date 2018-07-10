@@ -50,6 +50,7 @@ extern "C" {
 #include "dell-base-switch-element.h"
 #include "std_utils.h"
 #include "nas_vrf_utils.h"
+#include "std_mac_utils.h"
 
 #include "cps_api_object_category.h"
 #include "cps_api_route.h"
@@ -536,6 +537,7 @@ t_std_error hal_rif_index_get_or_create (npu_id_t npu_id, hal_vrf_id_t vrf_id,
     interface_ctrl_t    intf_ctrl;
     char                buf[HAL_RT_MAX_BUFSZ];
     hal_ifindex_t       rt_if_index = if_index;
+    hal_mac_addr_t      mac_addr;
 
     if (rif_id == NULL)
         return STD_ERR(ROUTE,FAIL,0);
@@ -566,7 +568,9 @@ t_std_error hal_rif_index_get_or_create (npu_id_t npu_id, hal_vrf_id_t vrf_id,
                         "Invalid interface %d. RIF ID get failed ", if_index);
         return STD_ERR(ROUTE,FAIL,0);
     }
+    memset(&mac_addr, 0, sizeof(mac_addr));
     if(intf_ctrl.int_type == nas_int_type_MACVLAN) {
+        std_string_to_mac(&(mac_addr), intf_ctrl.mac_addr, sizeof(intf_ctrl.mac_addr));
         hal_vrf_id_t parent_vrf_id = intf_ctrl.l3_intf_info.vrf_id;
         hal_ifindex_t parent_if_index = intf_ctrl.l3_intf_info.if_index;
 
@@ -627,20 +631,27 @@ t_std_error hal_rif_index_get_or_create (npu_id_t npu_id, hal_vrf_id_t vrf_id,
          */
         p_intf = fib_get_next_intf (rt_if_index, vrf_id, 0);
 
-        /* @@TODO Revisit this, check whether interface could be NULL for non-default VRF,
-         * if not, remove the "else" code below.*/
+        rif_entry.flags = NDI_RIF_ATTR_SRC_MAC_ADDRESS;
         if (p_intf && (p_intf->key.vrf_id == vrf_id) && (p_intf->key.if_index == rt_if_index)) {
-            rif_entry.flags = NDI_RIF_ATTR_SRC_MAC_ADDRESS;
-            memcpy(&rif_entry.src_mac, &p_intf->mac_addr, sizeof(hal_mac_addr_t));
+            if (!hal_rt_is_mac_address_zero(&p_intf->mac_addr)) {
+                memcpy(&rif_entry.src_mac, &p_intf->mac_addr, sizeof(hal_mac_addr_t));
+            } else if (!hal_rt_is_mac_address_zero(&mac_addr)) {
+                HAL_RT_LOG_INFO("RT-RIF-ADD", "VRF-id:%d MAC is zero in local intf:%d(%s) cache, using cmn intf. DB MAC",
+                               vrf_id, rt_if_index, intf_ctrl.if_name);
+                memcpy(&rif_entry.src_mac, &mac_addr, sizeof(hal_mac_addr_t));
+            } else {
+                HAL_RT_LOG_ERR("RT-RIF-ADD", "VRF-id:%d MAC is zero in intf:%d(%s)", vrf_id, rt_if_index,
+                               intf_ctrl.if_name);
+                return STD_ERR(ROUTE,FAIL,0);
+            }
         } else {
+            HAL_RT_LOG_ERR("RT-RIF-ADD", "VRF-id:%d intf:%d Mac is zero, using base MAC!", vrf_id, rt_if_index);
             t_fib_gbl_info *gbl_info = hal_rt_access_fib_gbl_info();
-            rif_entry.flags = NDI_RIF_ATTR_SRC_MAC_ADDRESS;
             memcpy(&rif_entry.src_mac, &gbl_info->base_mac_addr, sizeof(hal_mac_addr_t));
         }
         HAL_RT_LOG_INFO("RT-RIF-ADD", "VRF-id:%d RIF Mac is %s", vrf_id,
                         hal_rt_mac_to_str (&rif_entry.src_mac, buf, HAL_RT_MAX_BUFSZ));
     } else {
-        hal_mac_addr_t mac_addr;
         /* fib_intf is stored on a per af basis, so retrieve
          * the interface for first available family and use its mac.
          */
@@ -656,30 +667,6 @@ t_std_error hal_rif_index_get_or_create (npu_id_t npu_id, hal_vrf_id_t vrf_id,
          */
         if((p_intf && (!hal_rt_is_mac_address_zero(&p_intf->mac_addr))) ||
            (dn_hal_get_interface_mac(if_index, mac_addr) == STD_ERR_OK)) {
-            t_fib_vrf *p_vrf = NULL;
-            if ((intf_ctrl.int_type == nas_int_type_VLAN) &&
-                ((p_vrf = hal_rt_access_fib_vrf(vrf_id)) != NULL) &&
-                (memcmp(&p_vrf->router_mac, &mac_addr, sizeof(hal_mac_addr_t)))) {
-                ndi_vr_entry_t  vr_entry;
-                memset (&vr_entry, 0, sizeof (ndi_vr_entry_t));
-                vr_entry.npu_id = 0;
-
-                memcpy(vr_entry.src_mac, &mac_addr, HAL_MAC_ADDR_LEN);
-                memcpy(&p_vrf->router_mac, &mac_addr, HAL_MAC_ADDR_LEN);
-                vr_entry.flags = NDI_VR_ATTR_SRC_MAC_ADDRESS;
-                vr_entry.vrf_id = p_vrf->vrf_obj_id;
-
-                t_std_error     rc = STD_ERR_OK;
-                /* Create default VRF and other vrfs as per FIB_MAX_VRF */
-                if ((rc = ndi_route_vr_set_attribute(&vr_entry))!= STD_ERR_OK) {
-                    HAL_RT_LOG_ERR("RT-RIF-ADD", "VR set for VRF-id:%d router MAC:%s change failed rc:%d",
-                                   vrf_id, hal_rt_mac_to_str (&mac_addr, buf, HAL_RT_MAX_BUFSZ),
-                                   rc);
-                } else {
-                    HAL_RT_LOG_INFO("RT-RIF-ADD", "VRF:%d RIF Mac is %s set as Router MAC",
-                                    vrf_id, hal_rt_mac_to_str (&mac_addr, buf, HAL_RT_MAX_BUFSZ));
-                }
-            }
             rif_entry.flags = NDI_RIF_ATTR_SRC_MAC_ADDRESS;
             memcpy(&rif_entry.src_mac, &mac_addr, sizeof(hal_mac_addr_t));
             HAL_RT_LOG_DEBUG("RT-RIF-ADD", "RIF Mac is %s",
@@ -1088,6 +1075,46 @@ bool hal_rt_flush_vrf_info(hal_vrf_id_t vrf_id) {
     HAL_RT_LOG_INFO("HAL-VRF-FLUSH", "VRF:%d flush completed successfully", vrf_id);
     return true;
 }
+
+/* This function handles all the pending routes to be resolved. */
+t_std_error fib_process_pending_resolve_dr(int vrf_id, int af_index) {
+    t_fib_vrf_info         *p_vrf_info = NULL;
+    std_radix_version_t  max_walker_version = 0;
+    int                  rc = STD_ERR_OK;
+
+    if (hal_rt_access_fib_vrf(vrf_id) == NULL) {
+        return STD_ERR_OK;
+    }
+
+    p_vrf_info = FIB_GET_VRF_INFO (vrf_id, af_index);
+    if (p_vrf_info == NULL){
+        HAL_RT_LOG_DEBUG("HAL-RT-DR", "Vrf info NULL. "
+                         "vrf_id: %d, af_index: %d", vrf_id, af_index);
+        return STD_ERR_OK;
+    }
+
+    p_vrf_info->num_dr_processed_by_walker = 0;
+
+    if (p_vrf_info->dr_clear_on == true) {
+        max_walker_version = p_vrf_info->dr_clear_max_radix_ver;
+    }
+    else if (p_vrf_info->dr_ha_on == true) {
+        max_walker_version = p_vrf_info->dr_ha_max_radix_ver;
+    }
+    else {
+        max_walker_version = std_radix_getversion (p_vrf_info->dr_tree);
+    }
+
+    std_radical_walkchangelist (p_vrf_info->dr_tree,
+                                &p_vrf_info->dr_radical_marker,
+                                fib_dr_walker_call_back,
+                                0, 0,
+                                max_walker_version,
+                                &rc);
+
+    return STD_ERR_OK;
+}
+
 
 #ifdef __cplusplus
 }

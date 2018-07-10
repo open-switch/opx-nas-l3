@@ -118,6 +118,10 @@ typedef struct {
     uint32_t flush_refresh;
     uint32_t mac_trig_refresh;
     uint32_t npu_prg_msg_cnt;
+    uint32_t mac_add_trig_refresh;
+    uint32_t mac_add_trig_resolve;
+    uint32_t delay_trig_refresh;
+    uint32_t delay_resolve_cnt;
 }nbr_mgr_nbr_stats;
 
 typedef struct {
@@ -279,6 +283,7 @@ public:
     bool trigger_resolve() const;
     bool trigger_refresh() const;
     bool trigger_delay_refresh() const;
+    bool trigger_delay_resolve() const;
     bool trigger_refresh_for_mac_learn() const;
     bool publish_entry(nbr_mgr_op_t op, const nbr_mgr_nbr_entry_t&) const;
     void populate_nbr_entry(nbr_mgr_nbr_entry_t& entry) const;
