@@ -33,6 +33,7 @@ nbr_mgr_msgq_handle_t p_msgq_delay_rslv_hdl; /* This Q handles the Nbr to be res
                                                       some time (say. 20 secs) to control the DoS attack
                                                       after N (say. 5, each try 5x2 = 10 secs, after ~50 secs of retries)
                                                       of ARP resolution attempts */
+nbr_mgr_msgq_handle_t p_msgq_instant_rslv_hdl; /* This Q handles the Nbr to be resolved/refreshed instantly. */
 
 bool nbr_mgr_msgq_create ()
 {
@@ -57,6 +58,16 @@ bool nbr_mgr_msgq_create ()
         delete p_msgq_nl_nas_msg_hdl;
         return false;
     }
+    /* This Q handles the Nbr to be resolved/refreshed
+     * in a burst every x(say. 1) second to avoid the tap intf. tx buffer overflow */
+    p_msgq_instant_rslv_hdl = new (std::nothrow) nbr_mgr_msgq_t;
+    if (!p_msgq_instant_rslv_hdl) {
+        delete p_msgq_delay_rslv_hdl;
+        delete p_msgq_burst_rslv_hdl;
+        delete p_msgq_nl_nas_msg_hdl;
+        return false;
+    }
+
     return true;
 }
 
@@ -123,6 +134,11 @@ bool nbr_mgr_enqueue_delay_resolve_msg(nbr_mgr_msg_uptr_t msg)
     return (p_msgq_delay_rslv_hdl->enqueue(std::move(msg)));
 }
 
+bool nbr_mgr_enqueue_instant_resolve_msg(nbr_mgr_msg_uptr_t msg)
+{
+    return (p_msgq_instant_rslv_hdl->enqueue(std::move(msg)));
+}
+
 bool nbr_mgr_process_burst_resolve_msg(burst_resolvefunc callbk_func) {
     static uint32_t resolve_cnt = 0;
     return (nbr_mgr_dequeue_and_handle_burst_resolve_msg(p_msgq_burst_rslv_hdl, callbk_func,
@@ -134,6 +150,13 @@ bool nbr_mgr_process_delay_resolve_msg(burst_resolvefunc callbk_func) {
     return (nbr_mgr_dequeue_and_handle_burst_resolve_msg(p_msgq_delay_rslv_hdl, callbk_func,
                                                          NBR_MGR_DELAY_BURST_RESOLVE_DELAY, &delay_resolve_cnt));
 }
+
+bool nbr_mgr_process_instant_resolve_msg(burst_resolvefunc callbk_func) {
+    static uint32_t resolve_cnt = 0;
+    return (nbr_mgr_dequeue_and_handle_burst_resolve_msg(p_msgq_instant_rslv_hdl, callbk_func,
+                                                         NBR_MGR_INSTANT_RESOLVE_DELAY, &resolve_cnt));
+}
+
 
 bool nbr_mgr_dequeue_and_handle_burst_resolve_msg(nbr_mgr_msgq_t *hdl, burst_resolvefunc callbk_func,
                                                   uint32_t burst_delay, uint32_t *resolve_cnt)
@@ -164,7 +187,9 @@ bool nbr_mgr_dequeue_and_handle_burst_resolve_msg(nbr_mgr_msgq_t *hdl, burst_res
          * 400 ARP requests per second, we will get more than 400 ARP replies
          * from the peer but only 400 ARP replies will be lifted to CPU,
          * so, we will end up re-transmitting the ARP requests for the missed ARP replies */
-        sleep(burst_delay);
+        if (burst_delay) {
+            sleep(burst_delay);
+        }
         *resolve_cnt = 0;
     }
     return true;

@@ -1137,6 +1137,243 @@ TEST(nas_rt_vrf_test, nas_rt_vrf_neg_test) {
     ASSERT_TRUE(rc == cps_api_ret_code_OK);
 }
 
+TEST(nas_rt_vrf_test, nas_rt_vrf_vlan_del_test) {
+    int ret = system("os10-show-version | grep \"OS_NAME.*Enterprise\"");
+    if (ret != 0) {
+        return;
+    }
+    FILE *fp;
+    char cmd [512];
+
+    fp = fopen("/tmp/test_pre_req","w");
+    fprintf(fp, "configure terminal\n");
+    fprintf(fp, "ip vrf blue\n");
+    fprintf(fp, "exit\n");
+    fprintf(fp, "interface vlan 100\n");
+    fprintf(fp, "no shutdown\n");
+    fprintf(fp, "ip vrf forwarding blue\n");
+    fprintf(fp, "ip address 100.10.10.1/24\n");
+    fprintf(fp, "exit\n");
+    fprintf(fp, "interface ethernet %s\n", DoD_b2b_intf1);
+    fprintf(fp, "switchport mode trunk\n");
+    fprintf(fp, "switchport trunk allowed vlan 100\n");
+    fprintf(fp, "exit\n");
+    fprintf(fp, "mac address-table static 00:11:22:33:44:55 vlan 100 interface ethernet %s\n",
+            DoD_b2b_intf1);
+    fprintf(fp, "end\n");
+    fflush(fp);
+    system("sudo -u admin clish --b /tmp/test_pre_req");
+    fclose(fp);
+
+    memset(cmd, '\0', sizeof(cmd));
+    snprintf(cmd, 511, "ip -n blue neigh add 100.10.10.2 lladdr 00:11:22:33:44:55 dev v-br100");
+    system(cmd);
+
+    system("sudo -u admin clish -c 'show ip arp vrf-name blue' | grep 100.10.10.2 > /tmp/check");
+    sleep(3);
+    FILE *result = fopen("/tmp/check", "r");
+    char val1[50], val2[50];
+    memset(val1, '\0', sizeof(val1));
+    memset(val2, '\0', sizeof(val2));
+    fscanf(result, "%s %s", val1, val2);
+    fclose(result);
+    printf("\r\n val1:%s val2:%s\r\n", val1, val2);
+    ASSERT_TRUE((strncmp(val2, "100.10.10.2", 50) == 0));
+
+    fp = fopen("/tmp/test_pre_req","w");
+    fprintf(fp, "configure terminal\n");
+    fprintf(fp, "no mac address-table static 00:11:22:33:44:55 vlan 100\n");
+    fprintf(fp, "no interface vlan 100\n");
+    fprintf(fp, "end\n");
+    fflush(fp);
+    system("sudo -u admin clish --b /tmp/test_pre_req");
+    fclose(fp);
+
+    sleep(3);
+    system("sudo -u admin clish -c 'show ip arp vrf-name blue' | grep 100.10.10.2 > /tmp/check");
+    result = fopen("/tmp/check", "r");
+    memset(val1, '\0', sizeof(val1));
+    memset(val2, '\0', sizeof(val2));
+    fscanf(result, "%s %s", val1, val2);
+    fclose(result);
+    printf("\r\n val1:%s val2:%s\r\n", val1, val2);
+    ASSERT_TRUE((strncmp(val2, "100.10.10.2", 50) != 0));
+
+    fp = fopen("/tmp/test_pre_req","w");
+    fprintf(fp, "configure terminal\n");
+    fprintf(fp, "no ip vrf blue\n");
+    fprintf(fp, "end\n");
+    fflush(fp);
+    system("sudo -u admin clish --b /tmp/test_pre_req");
+    fclose(fp);
+}
+
+static void nas_rt_ecmp_config(bool is_add) {
+    cps_api_return_code_t rc;
+    int ret = system("os10-show-version | grep \"OS_NAME.*Enterprise\"");
+    if (ret != 0) {
+        return;
+    }
+    FILE *fp;
+    char cmd [512];
+
+
+    if (is_add == false) {
+        fp = fopen("/tmp/test_pre_req","w");
+        fprintf(fp, "configure terminal\n");
+        fprintf(fp, "no mac address-table static 00:11:22:33:44:55 vlan 100\n");
+        fprintf(fp, "no mac address-table static 00:11:22:33:44:66 vlan 101\n");
+        fprintf(fp, "no interface vlan 100\n");
+        fprintf(fp, "no interface vlan 101\n");
+        fprintf(fp, "no ip vrf blue\n");
+        fprintf(fp, "end\n");
+        fflush(fp);
+        system("sudo -u admin clish --b /tmp/test_pre_req");
+        fclose(fp);
+
+        sleep(3);
+        rc = nas_ut_validate_neigh_cfg("blue", AF_INET, "100.10.10.2", 128, true);
+        ASSERT_TRUE(rc != cps_api_ret_code_OK);
+        rc = nas_ut_validate_neigh_cfg("blue", AF_INET, "101.10.10.2", 128, true);
+        ASSERT_TRUE(rc != cps_api_ret_code_OK);
+        rc = nas_ut_validate_neigh_cfg("blue", AF_INET6, "100::2", 128, true);
+        ASSERT_TRUE(rc != cps_api_ret_code_OK);
+        rc = nas_ut_validate_neigh_cfg("blue", AF_INET6, "101::2", 128, true);
+        ASSERT_TRUE(rc != cps_api_ret_code_OK);
+        return;
+    }
+    fp = fopen("/tmp/test_pre_req","w");
+    fprintf(fp, "configure terminal\n");
+    fprintf(fp, "ip vrf blue\n");
+    fprintf(fp, "exit\n");
+
+    fprintf(fp, "interface vlan 100\n");
+    fprintf(fp, "no shutdown\n");
+    fprintf(fp, "ip vrf forwarding blue\n");
+    fprintf(fp, "ip address 100.10.10.1/24\n");
+    fprintf(fp, "ipv6 address 100::1/64\n");
+    fprintf(fp, "exit\n");
+    fprintf(fp, "interface ethernet %s\n", DoD_b2b_intf1);
+    fprintf(fp, "switchport mode trunk\n");
+    fprintf(fp, "switchport trunk allowed vlan 100\n");
+    fprintf(fp, "exit\n");
+    fprintf(fp, "mac address-table static 00:11:22:33:44:55 vlan 100 interface ethernet %s\n",
+            DoD_b2b_intf1);
+
+    fprintf(fp, "interface vlan 101\n");
+    fprintf(fp, "no shutdown\n");
+    fprintf(fp, "ip vrf forwarding blue\n");
+    fprintf(fp, "ip address 101.10.10.1/24\n");
+    fprintf(fp, "ipv6 address 101::1/64\n");
+    fprintf(fp, "exit\n");
+    fprintf(fp, "interface ethernet %s\n", DoD_b2b_intf1);
+    fprintf(fp, "switchport mode trunk\n");
+    fprintf(fp, "switchport trunk allowed vlan 101\n");
+    fprintf(fp, "exit\n");
+    fprintf(fp, "mac address-table static 00:11:22:33:44:66 vlan 101 interface ethernet %s\n",
+            DoD_b2b_intf1);
+    fprintf(fp, "end\n");
+    fflush(fp);
+    system("sudo -u admin clish --b /tmp/test_pre_req");
+    fclose(fp);
+
+    sleep(5);
+    memset(cmd, '\0', sizeof(cmd));
+    snprintf(cmd, 511, "ip -n blue neigh add 100.10.10.2 lladdr 00:11:22:33:44:55 dev v-br100");
+    system(cmd);
+    memset(cmd, '\0', sizeof(cmd));
+    snprintf(cmd, 511, "ip -n blue neigh add 101.10.10.2 lladdr 00:11:22:33:44:66 dev v-br101");
+    system(cmd);
+
+    memset(cmd, '\0', sizeof(cmd));
+    snprintf(cmd, 511, "ip -n blue neigh add 100::2 lladdr 00:11:22:33:44:55 dev v-br100");
+    system(cmd);
+    memset(cmd, '\0', sizeof(cmd));
+    snprintf(cmd, 511, "ip -n blue neigh add 101::2 lladdr 00:11:22:33:44:66 dev v-br101");
+    system(cmd);
+
+    sleep(5);
+    rc = nas_ut_validate_neigh_cfg("blue", AF_INET, "100.10.10.2", 128, true);
+    ASSERT_TRUE(rc == cps_api_ret_code_OK);
+    rc = nas_ut_validate_neigh_cfg("blue", AF_INET, "101.10.10.2", 128, true);
+    ASSERT_TRUE(rc == cps_api_ret_code_OK);
+    rc = nas_ut_validate_neigh_cfg("blue", AF_INET6, "100::2", 128, true);
+    ASSERT_TRUE(rc == cps_api_ret_code_OK);
+    rc = nas_ut_validate_neigh_cfg("blue", AF_INET6, "101::2", 128, true);
+    ASSERT_TRUE(rc == cps_api_ret_code_OK);
+}
+
+TEST(nas_rt_vrf_test, nas_rt_vrf_ecmp_test) {
+    cps_api_return_code_t rc;
+    nas_rt_ecmp_config(true);
+    FILE *fp = fopen("/tmp/test_pre_req","w");
+    fprintf(fp, "configure terminal\n");
+    fprintf(fp, "ip route vrf blue 30.0.0.0/16 100.10.10.2\n");
+    fprintf(fp, "ip route vrf blue 30.0.0.0/16 101.10.10.2\n");
+    fprintf(fp, "ipv6 route vrf blue 30::/64 100::2\n");
+    fprintf(fp, "ipv6 route vrf blue 30::/64 101::2\n");
+    fprintf(fp, "end\n");
+    fflush(fp);
+    system("sudo -u admin clish --b /tmp/test_pre_req");
+    fclose(fp);
+
+    std::cout<<"Sleeping to download the routes from RTM"<<std::endl;
+    sleep(20);
+
+    rc = nas_ut_validate_rt_ecmp_cfg ("blue", AF_INET, "30.0.0.0", 16, "blue", NULL, NULL, true, 2);
+    ASSERT_TRUE(rc == cps_api_ret_code_OK);
+    rc = nas_ut_validate_rt_ecmp_cfg ("blue", AF_INET6,"30::", 64, "blue", NULL, NULL, true, 2);
+    ASSERT_TRUE(rc == cps_api_ret_code_OK);
+
+    std::cout<<"Delete the routes"<<std::endl;
+    fp = fopen("/tmp/test_pre_req","w");
+    fprintf(fp, "configure terminal\n");
+    fprintf(fp, "no ip route vrf blue 30.0.0.0/16 100.10.10.2\n");
+    fprintf(fp, "no ip route vrf blue 30.0.0.0/16 101.10.10.2\n");
+    fprintf(fp, "no ipv6 route vrf blue 30::/64 100::2\n");
+    fprintf(fp, "no ipv6 route vrf blue 30::/64 101::2\n");
+    fprintf(fp, "end\n");
+    fflush(fp);
+    system("sudo -u admin clish --b /tmp/test_pre_req");
+    fclose(fp);
+
+    sleep(3);
+    rc = nas_ut_validate_rt_ecmp_cfg ("blue", AF_INET, "30.0.0.0", 16, "blue", NULL, NULL, true, 2);
+    ASSERT_TRUE(rc != cps_api_ret_code_OK);
+    rc = nas_ut_validate_rt_ecmp_cfg ("blue", AF_INET6,"30::", 64, "blue", NULL, NULL, true, 2);
+    ASSERT_TRUE(rc != cps_api_ret_code_OK);
+    nas_rt_ecmp_config(false);
+}
+
+TEST(nas_rt_vrf_test, nas_rt_vrf_ecmp_test_2nh) {
+
+    cps_api_return_code_t rc;
+    nas_rt_ecmp_config(true);
+    nas_ut_rt_cfg ("blue",1, "30.0.0.0", 16, AF_INET, "blue", "100.10.10.2", "v-br100");
+    nas_ut_rt_cfg ("blue",1, "30::", 64, AF_INET6, NULL, "100::2", "v-br100");
+    /* Use IPv6 route next-hop update model */
+    nas_ut_rt_ipv6_nh_cfg ("blue", true, "30.0.0.0", 16, AF_INET6, NULL, "101.10.10.2", "v-br101", NULL, NULL);
+    nas_ut_rt_ipv6_nh_cfg ("blue", true, "30::", 64, AF_INET6, "blue", "101::2", "v-br101", NULL, NULL);
+    sleep(5);
+
+    rc = nas_ut_validate_rt_ecmp_cfg ("blue", AF_INET, "30.0.0.0", 16, "blue", NULL, NULL, true, 2);
+    ASSERT_TRUE(rc == cps_api_ret_code_OK);
+    rc = nas_ut_validate_rt_ecmp_cfg ("blue", AF_INET6,"30::", 64, "blue", NULL, NULL, true, 2);
+    ASSERT_TRUE(rc == cps_api_ret_code_OK);
+
+    std::cout<<"Delete the routes"<<std::endl;
+    nas_ut_rt_ipv6_nh_cfg ("blue", false, "30.0.0.0", 16, AF_INET6, NULL, "101.10.10.2", "v-br101", NULL, NULL);
+    nas_ut_rt_cfg ("blue",0, "30.0.0.0", 16, AF_INET, "blue", "100.10.10.2", "v-br100");
+    nas_ut_rt_ipv6_nh_cfg ("blue", false, "30::", 64, AF_INET6, NULL, "101::2", "v-br101", NULL, NULL);
+    nas_ut_rt_cfg ("blue",0, "30::", 64, AF_INET6, "blue", "100::2", "v-br100");
+    sleep(3);
+    rc = nas_ut_validate_rt_ecmp_cfg ("blue", AF_INET, "30.0.0.0", 16, "blue", NULL, NULL, true, 2);
+    ASSERT_TRUE(rc != cps_api_ret_code_OK);
+    rc = nas_ut_validate_rt_ecmp_cfg ("blue", AF_INET6,"30::", 64, "blue", NULL, NULL, true, 2);
+    ASSERT_TRUE(rc != cps_api_ret_code_OK);
+    nas_rt_ecmp_config(false);
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
 

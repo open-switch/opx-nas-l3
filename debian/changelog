@@ -1,3 +1,23 @@
+opx-nas-l3 (3.6.0+vxlan1) unstable; urgency=medium
+
+  * Feature: VxLAN Support
+  * Update: Debug dump routines to include multipath object dump
+  * Update: Modify error log on next hop delete failure to be more informative
+  * Update: NHT get all for all VRFs supported
+  * Update: Add support for virtual rif attribute as part of VRRP peer routing MAC configuration
+  * Update: NHT support for non-default VRF
+  * Update: Add validations to ensure that on destination change (route/nh/nht), the next-hop id that the NHT 
+            currently uses will trigger ACL clean-up only if this next-hop id is not 
+            being used by any other NHT via connected neighbor.
+  * Update: Process all the routes from change list before deleting the next-hop in the mode change scenario
+  * Update: LLA programming should be done when one of the LLA satisfies the L3 mode and admin up condition
+  * Update: Refresh/Resolve the unresolved neighbors during MAC add processing
+  * Update: Publish the neighbor events during interface mode change when an interface part of non-default VRF is getting deleted
+  * Update: Handle the RIF creation when the local interface DB is not populated
+  * Update: Change to accomodate event type change for 1d bridge feature
+
+ -- Dell EMC <ops-dev@lists.openswitch.net>  Wed, 25 Jul 2018 15:00:00 -0800
+
 opx-nas-l3 (3.6.0) unstable; urgency=medium
 
   * Feature: Routing VRF

@@ -46,6 +46,15 @@ int nbr_mgr_delay_resolve_main(void)
     return true;
 }
 
+int nbr_mgr_instant_resolve_main(void)
+{
+    for (;;) {
+        nbr_mgr_process_instant_resolve_msg(nbr_mgr_burst_resolve_handler);
+    }
+    return true;
+}
+
+
 int nbr_mgr_enqueue_flush_msg(uint32_t if_index, hal_vrf_id_t vrf_id) {
     nbr_mgr_msg_t *p_msg = nullptr;
 
@@ -114,12 +123,39 @@ static cps_api_object_t nbr_mgr_nbr_to_cps_obj(nbr_mgr_nbr_entry_t *entry,cps_ap
     return obj;
 }
 
+static char *nbr_mgr_nl_neigh_state_to_str (int type) {
+    static char str[32];
+    switch(type) {
+        case NBR_MGR_NL_RESOLVE_MSG:
+            snprintf (str, sizeof(str), "Resolve");
+            break;
+        case NBR_MGR_NL_DELAY_RESOLVE_MSG:
+            snprintf (str, sizeof(str), "Delay Resolve");
+            break;
+        case NBR_MGR_NL_REFRESH_MSG:
+            snprintf (str, sizeof(str), "Refresh");
+            break;
+        case NBR_MGR_NL_INSTANT_REFRESH_MSG:
+            snprintf (str, sizeof(str), "Instant Refresh");
+            break;
+        case NBR_MGR_NL_DELAY_REFRESH_MSG:
+            snprintf (str, sizeof(str), "Delay Refresh");
+            break;
+        default:
+            snprintf (str, sizeof(str), "Unknown");
+            break;
+
+    }
+    return str;
+}
+
 bool nbr_mgr_burst_resolve_handler(nbr_mgr_msg_t *p_msg) {
     char str[NBR_MGR_MAC_STR_LEN];
     char buff[HAL_INET6_TEXT_LEN + 1];
-    NBR_MGR_LOG_INFO("NETLINK-MSG", "%s the neighbor VRF: %lu(%s) family:%s ip:%s mac:%s"
+
+    NBR_MGR_LOG_INFO("NETLINK-MSG", "%s(%d) the neighbor VRF: %lu(%s) family:%s ip:%s mac:%s"
                      " if-index:%d (llayer:%d) status:%lu processing",
-                     ((p_msg->type == NBR_MGR_NL_RESOLVE_MSG) ? "Resolve" :"Refresh"),
+                     nbr_mgr_nl_neigh_state_to_str(p_msg->type), p_msg->type,
                      p_msg->nbr.vrfid, p_msg->nbr.vrf_name,
                      ((p_msg->nbr.family == HAL_INET4_FAMILY) ? "IPv4" : "IPv6"),
                      std_ip_to_string(&(p_msg->nbr.nbr_addr), buff, HAL_INET6_TEXT_LEN),
@@ -139,9 +175,11 @@ bool nbr_mgr_burst_resolve_handler(nbr_mgr_msg_t *p_msg) {
         return false;
     }
     /* Invoke the NAS-linux APIs for Neighbor resolution and refresh */
-    if (p_msg->type == NBR_MGR_NL_RESOLVE_MSG) {
+    if ((p_msg->type == NBR_MGR_NL_RESOLVE_MSG) ||
+        (p_msg->type == NBR_MGR_NL_DELAY_RESOLVE_MSG)) {
         nas_os_resolve_neighbor(obj);
     } else if ((p_msg->type == NBR_MGR_NL_REFRESH_MSG) ||
+               (p_msg->type == NBR_MGR_NL_INSTANT_REFRESH_MSG) ||
                (p_msg->type == NBR_MGR_NL_DELAY_REFRESH_MSG)) {
         nas_os_refresh_neighbor(obj);
     }
@@ -155,7 +193,10 @@ bool nbr_mgr_nbr_resolve(nbr_mgr_msg_type_t type, nbr_mgr_nbr_entry_t *p_nbr) {
     if (p_msg) {
         p_msg->type = type;
         memcpy(&(p_msg->nbr), p_nbr, sizeof(nbr_mgr_nbr_entry_t));
-        if (type == NBR_MGR_NL_DELAY_REFRESH_MSG) {
+        if (type == NBR_MGR_NL_INSTANT_REFRESH_MSG) {
+            nbr_mgr_enqueue_instant_resolve_msg(std::move(p_msg_uptr));
+        } else if ((type == NBR_MGR_NL_DELAY_REFRESH_MSG) ||
+                   (type == NBR_MGR_NL_DELAY_RESOLVE_MSG)) {
             nbr_mgr_enqueue_delay_resolve_msg(std::move(p_msg_uptr));
         } else {
             nbr_mgr_enqueue_burst_resolve_msg(std::move(p_msg_uptr));

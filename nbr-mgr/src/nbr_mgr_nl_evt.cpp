@@ -60,8 +60,29 @@ char *nbr_mgr_nl_neigh_state_to_str (int state) {
     return str;
 }
 
+char *nbr_mgr_nl_intf_msg_to_str (int type) {
+    static char str[18];
+        if (type == NBR_MGR_INTF_VLAN_MSG)
+            snprintf (str, sizeof(str), "Vlan");
+        else if (type == NBR_MGR_INTF_ADMIN_MSG)
+            snprintf (str, sizeof(str), "Admin");
+        else if (type == NBR_MGR_INTF_OPER_MSG)
+            snprintf (str, sizeof(str), "Oper");
+        else if (type == (NBR_MGR_INTF_VLAN_MSG | NBR_MGR_INTF_ADMIN_MSG))
+            snprintf (str, sizeof(str), "VLAN and Admin");
+        else if (type == (NBR_MGR_INTF_VLAN_MSG | NBR_MGR_INTF_OPER_MSG))
+            snprintf (str, sizeof(str), "VLAN and Oper");
+        else if (type == (NBR_MGR_INTF_ADMIN_MSG | NBR_MGR_INTF_OPER_MSG))
+            snprintf (str, sizeof(str), "Admin and Oper");
+        else
+            snprintf (str, sizeof(str), "Unknown");
+
+    return str;
+}
+
 bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf) {
     bool is_admin_up = false;
+    bool is_oper_up = false;
     bool is_op_del = false;
     bool is_bridge = false;
     uint32_t type = 0, vlan_id = 0;
@@ -84,6 +105,7 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
     /* If the interface VLAN/LAG deleted, flush all the neighbors and routes associated with it */
     if (cps_api_object_type_operation(cps_api_object_key(obj)) != cps_api_oper_DELETE) {
         cps_api_object_attr_t admin_attr = cps_api_object_attr_get(obj,IF_INTERFACES_INTERFACE_ENABLED);
+        cps_api_object_attr_t flags_attr = cps_api_object_attr_get(obj,BASE_IF_LINUX_IF_INTERFACES_INTERFACE_IF_FLAGS);
 
         if(admin_attr != NULL){
             is_admin_up = cps_api_object_attr_data_u32(admin_attr);
@@ -92,6 +114,10 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
                               index, (is_admin_up ? "Up" : "Down"));
         } else {
             NBR_MGR_LOG_DEBUG("CPS-INTF","admin status is not present for intf:%d",index);
+        }
+        if (flags_attr) {
+            is_oper_up = (NBR_MGR_INTF_OPER_UP & cps_api_object_attr_data_u32(flags_attr));
+            p_intf->flags |= NBR_MGR_INTF_OPER_MSG;
         }
     } else {
         is_op_del = true;
@@ -105,8 +131,8 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
         NBR_MGR_LOG_INFO("CPS-INTF","Intf:%d is_del:%d flags:0x%x status:%s type:%d",
                          index, is_op_del, p_intf->flags, (is_admin_up ? "Up" : "Down"), type);
         /* Allow only the L2 (bridge) and L3 ports for L3 operations */
-        if ((type != BASE_CMN_INTERFACE_TYPE_L2_PORT) && (type != BASE_CMN_INTERFACE_TYPE_L3_PORT) &&
-            (type != BASE_CMN_INTERFACE_TYPE_LAG) && (type != BASE_CMN_INTERFACE_TYPE_VLAN) &&
+        if ((type != BASE_CMN_INTERFACE_TYPE_BRIDGE) && (type != BASE_CMN_INTERFACE_TYPE_L3_PORT) &&
+            (type != BASE_CMN_INTERFACE_TYPE_LAG) && (type != BASE_CMN_INTERFACE_TYPE_L2_PORT) &&
             (type != BASE_CMN_INTERFACE_TYPE_MACVLAN)) {
             return false;
         }
@@ -127,9 +153,9 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
                 return false;
             }
         }
-        if (type == BASE_CMN_INTERFACE_TYPE_L2_PORT) {
+        if (type == BASE_CMN_INTERFACE_TYPE_BRIDGE) {
             is_bridge = true;
-        } else if (type == BASE_CMN_INTERFACE_TYPE_VLAN) {
+        } else if (type == BASE_CMN_INTERFACE_TYPE_L2_PORT) {
             cps_api_object_attr_t vlan_id_attr =
                 cps_api_object_attr_get(obj, BASE_IF_VLAN_IF_INTERFACES_INTERFACE_ID);
             if (vlan_id_attr) {
@@ -144,13 +170,15 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
     }
     p_intf->if_index = index;
     p_intf->is_admin_up = is_admin_up;
+    p_intf->is_oper_up = is_oper_up;
     p_intf->is_bridge = is_bridge;
     p_intf->vlan_id = vlan_id;
     p_intf->is_op_del = is_op_del;
 
-    NBR_MGR_LOG_INFO("CPS-INTF","VRF-id:%lu Intf:%d flags:0x%x status:%s type:%d "
-                     "bridge:%d is_op_del:%d vlan-id:%d",
+    NBR_MGR_LOG_INFO("CPS-INTF","msg:%s VRF-id:%lu Intf:%d flags:0x%x status admin:%s oper:%s type:%d "
+                     "bridge:%d is_op_del:%d vlan-id:%d", nbr_mgr_nl_intf_msg_to_str(p_intf->flags),
                      p_intf->vrfid, index, p_intf->flags, (is_admin_up ? "Up" : "Down"),
+                     (is_oper_up ? "Up" : "Down"),
                      type, is_bridge, is_op_del, vlan_id);
     return true;
 }

@@ -287,6 +287,11 @@ int hal_rt_vrf_de_init (hal_vrf_id_t vrf_id)
 
 t_std_error hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac_config_t*p_status, bool status) {
 
+#define STD_IS_VRRP_MAC(mac)                           \
+         ((mac[0] == 0x00) && (mac[1] == 0x00) &&      \
+          (mac[2] == 0x5E) && (mac[3] == 0x00) &&      \
+          ((mac[4] == 0x01) || (mac[4] == 0x02)))
+
     t_fib_vrf      *p_vrf = NULL;
     ndi_vr_entry_t  vr_entry;
     ndi_vrf_id_t    ndi_vr_id = 0;
@@ -369,17 +374,29 @@ t_std_error hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac
             }
 
             rif_entry.flags = NDI_RIF_ATTR_SRC_MAC_ADDRESS;
+            /* Virtual RIF is set only when we need to program ingress router MAC
+               for ingress IP termination.
+               For now virtual RIF attribute flag is set only for VRRP MAC.
+               In future if there are other flows for which the virtual RIF attribute flag
+               is required, then it can be exposed as an attribute as part of peer routing config
+             */
+            if (STD_IS_VRRP_MAC(p_status->mac))
+                rif_entry.flags |= NDI_RIF_ATTR_VIRTUAL;
+
             memcpy(&rif_entry.src_mac, &(p_status->mac), sizeof(hal_mac_addr_t));
             if ((rc = ndi_rif_create(&rif_entry, &rif_id)) != STD_ERR_OK) {
-                HAL_RT_LOG_ERR("HAL-RT", "Vrf:%d if_name:%s peer-mac:%s creation failed!",
+                HAL_RT_LOG_ERR("HAL-RT", "Vrf:%d if_name:%s peer-mac:%s is_virtual_rif:%s creation failed!",
                                vrf_id, p_status->if_name,
-                               hal_rt_mac_to_str(&p_status->mac, p_buf, HAL_RT_MAX_BUFSZ));
+                               hal_rt_mac_to_str(&p_status->mac, p_buf, HAL_RT_MAX_BUFSZ),
+                               ((rif_entry.flags & NDI_RIF_ATTR_VIRTUAL) ? "Yes":"No"));
                 return (STD_ERR(ROUTE, FAIL, rc));
             } else {
                 p_status->rif_obj_id = rif_id;
 
-                HAL_RT_LOG_INFO ("HAL-RT-RIF", "Peer-routing RIF entry created successfully: 0x%lx for if_index %d",
-                                 rif_id, intf_ctrl.if_index);
+                HAL_RT_LOG_INFO ("HAL-RT-RIF", "Peer-routing RIF entry created successfully: "
+                                 "0x%lx for if_index %d, is_virtual_rif:%s",
+                                 rif_id, intf_ctrl.if_index,
+                                 ((rif_entry.flags & NDI_RIF_ATTR_VIRTUAL) ? "Yes":"No"));
             }
         }
 

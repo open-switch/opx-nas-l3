@@ -25,6 +25,7 @@
 #include "hal_rt_api.h"
 #include "hal_rt_debug.h"
 #include "hal_rt_util.h"
+#include "hal_rt_mpath_grp.h"
 #include "nas_rt_api.h"
 #include "hal_shell.h"
 
@@ -67,7 +68,7 @@ void fib_help (void)
     printf ("             uint8_t *p_in_ip_addr, uint32_t if_index)\r\n");
 
     printf ("  fib_dump_nh_per_vrf_per_af (uint32_t vrf_id, \r\n");
-    printf ("                        uint8_t af_index)\r\n");
+    printf ("                        uint8_t af_index, bool dump_dep_dr)\r\n");
 
     printf ("  fib_dump_nh_per_vrf (uint32_t vrf_id)\r\n");
 
@@ -110,6 +111,10 @@ void fib_help (void)
     printf ("  fib_dump_all_rif ()\r\n");
 
     printf ("  fib_dump_intf_rif (uint32_t vrf_id, uint32_t if_index)\r\n");
+
+    printf ("  fib_dump_mp_info_per_vrf_per_af (uint32_t vrf_id, uint32_t af_index)\r\n");
+
+    printf ("  fib_dump_all_mp_info ()\r\n");
 
     printf ("**************************************************\r\n");
 
@@ -458,7 +463,7 @@ void fib_dump_dr_node (t_fib_dr *p_dr)
     return;
 }
 
-void fib_dump_nh_node (t_fib_nh *p_nh)
+void fib_dump_nh_node (t_fib_nh *p_nh, bool dump_dep_dr)
 {
     t_fib_nh_dep_dr   *p_nh_dep_dr = NULL;
     t_fib_nh        *p_fh = NULL;
@@ -526,35 +531,39 @@ void fib_dump_nh_node (t_fib_nh *p_nh)
     printf ("  arp_last_update_time  :  %ld\r\n", p_nh->arp_last_update_time);
     printf ("  p_hal_nh_handle         :  %p\r\n", p_nh->p_hal_nh_handle);
 
-    printf ("**************************************************\r\n");
-    printf ("  Dep_dr List:\r\n");
-    printf ("**************************************************\r\n");
-
-    count = 0;
-
-    p_nh_dep_dr = fib_get_first_nh_dep_dr (p_nh);
-
-    while (p_nh_dep_dr != NULL)
+    if (dump_dep_dr)
     {
-        printf ("  Dep_dr%d:\r\n", count);
+        printf ("**************************************************\r\n");
+        printf ("  Dep_dr List:\r\n");
+        printf ("**************************************************\r\n");
 
-        printf ("-------------------------------------\r\n");
+        count = 0;
 
-        printf ("  vrf_id        :  %d\r\n", p_nh_dep_dr->key.vrf_id);
-        printf ("  vrf_name      :  %s\r\n", FIB_GET_VRF_NAME(p_nh_dep_dr->key.vrf_id,
-                                                              p_nh_dep_dr->key.dr_key.prefix.af_index));
-        printf ("  af_index      :  %d\r\n",
-                p_nh_dep_dr->key.dr_key.prefix.af_index);
-        printf ("  prefix       :  %s\r\n",
-                FIB_IP_ADDR_TO_STR (&p_nh_dep_dr->key.dr_key.prefix));
-        printf ("  prefix_len    :  %d\r\n", p_nh_dep_dr->prefix_len);
-        printf ("  p_dr          :  %p\r\n", p_nh_dep_dr->p_dr);
+        p_nh_dep_dr = fib_get_first_nh_dep_dr (p_nh);
 
-        printf ("-------------------------------------\r\n");
+        while (p_nh_dep_dr != NULL)
+        {
+            printf ("  Dep_dr%d:\r\n", count);
 
-        p_nh_dep_dr = fib_get_next_nh_dep_dr (p_nh, p_nh_dep_dr->key.vrf_id,
-                                      &p_nh_dep_dr->key.dr_key.prefix,
-                                      p_nh_dep_dr->prefix_len);
+            printf ("-------------------------------------\r\n");
+
+            printf ("  vrf_id        :  %d\r\n", p_nh_dep_dr->key.vrf_id);
+            printf ("  vrf_name      :  %s\r\n", FIB_GET_VRF_NAME(p_nh_dep_dr->key.vrf_id,
+                                                                  p_nh_dep_dr->key.dr_key.prefix.af_index));
+            printf ("  af_index      :  %d\r\n",
+                    p_nh_dep_dr->key.dr_key.prefix.af_index);
+            printf ("  prefix       :  %s\r\n",
+                    FIB_IP_ADDR_TO_STR (&p_nh_dep_dr->key.dr_key.prefix));
+            printf ("  prefix_len    :  %d\r\n", p_nh_dep_dr->prefix_len);
+            printf ("  p_dr          :  %p\r\n", p_nh_dep_dr->p_dr);
+
+            printf ("-------------------------------------\r\n");
+
+            p_nh_dep_dr = fib_get_next_nh_dep_dr (p_nh, p_nh_dep_dr->key.vrf_id,
+                                          &p_nh_dep_dr->key.dr_key.prefix,
+                                          p_nh_dep_dr->prefix_len);
+            count++;
+        }
     }
 
     printf ("**************************************************\r\n");
@@ -818,14 +827,14 @@ void fib_dump_nh (uint32_t vrf_id, uint32_t in_af_index, uint8_t *p_in_ip_addr, 
 
     printf ("----------------------------------------\r\n");
 
-    fib_dump_nh_node (p_nh);
+    fib_dump_nh_node (p_nh, true);
 
     printf ("----------------------------------------\r\n");
 
     return;
 }
 
-void fib_dump_nh_per_vrf_per_af (uint32_t vrf_id, uint32_t in_af_index)
+void fib_dump_nh_per_vrf_per_af (uint32_t vrf_id, uint32_t in_af_index, bool dump_dep_dr)
 {
     t_fib_nh      *p_nh = NULL;
     uint32_t   count = 0;
@@ -862,7 +871,7 @@ void fib_dump_nh_per_vrf_per_af (uint32_t vrf_id, uint32_t in_af_index)
         printf ("  NH%d:\r\n", count);
         printf ("----------------------------------------\r\n");
 
-        fib_dump_nh_node (p_nh);
+        fib_dump_nh_node (p_nh, dump_dep_dr);
 
         printf ("----------------------------------------\r\n");
 
@@ -894,7 +903,7 @@ void fib_dump_nh_per_vrf (uint32_t vrf_id)
 
     for (af_index = FIB_MIN_AFINDEX; af_index < FIB_MAX_AFINDEX; af_index++)
     {
-        fib_dump_nh_per_vrf_per_af (vrf_id, af_index);
+        fib_dump_nh_per_vrf_per_af (vrf_id, af_index, true);
     }
 
     return;
@@ -909,7 +918,7 @@ void fib_dump_nh_per_af (uint32_t in_af_index)
 
     for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id++)
     {
-        fib_dump_nh_per_vrf_per_af (vrf_id, af_index);
+        fib_dump_nh_per_vrf_per_af (vrf_id, af_index, true);
     }
 
     return;
@@ -924,7 +933,7 @@ void fib_dump_all_nh (void)
     {
         for (af_index = FIB_MIN_AFINDEX; af_index < FIB_MAX_AFINDEX; af_index++)
         {
-            fib_dump_nh_per_vrf_per_af (vrf_id, af_index);
+            fib_dump_nh_per_vrf_per_af (vrf_id, af_index, true);
         }
     }
 
@@ -1270,7 +1279,7 @@ void fib_dump_route_summary_per_af (uint32_t in_af_index)
 
     for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id++)
     {
-        fib_dump_nh_per_vrf_per_af (vrf_id, af_index);
+        fib_dump_nh_per_vrf_per_af (vrf_id, af_index, true);
     }
 
     return;
@@ -1635,6 +1644,127 @@ void fib_dump_intf_rif (uint32_t vrf_id, uint32_t if_index)
     return;
 }
 
+void fib_dump_mp_obj_node (t_fib_mp_obj *p_mp_obj, int add_indendation)
+{
+    int   index;
+    char *p_indent_str = "";
+    char *p_nh_obj_indent_str = HAL_RT_3_SPACE_INDENT;
+
+    if (add_indendation)
+        p_indent_str= HAL_RT_17_SPACE_INDENT;
+
+    printf ("%sunit        : %d\n", p_indent_str, p_mp_obj->unit);
+    printf ("%secmp_count   : %d\n", p_indent_str, p_mp_obj->ecmp_count);
+    printf ("%shw_mp_index   : %d\n", p_indent_str, (int) p_mp_obj->sai_ecmp_gid);
+    printf ("%sref_count    : %d\n", p_indent_str, p_mp_obj->ref_count);
+    printf ("%sp_mdp_md5_node : %p\n", p_indent_str, p_mp_obj->p_md5_node);
+
+    printf ("%snh_obj_list  : ", p_indent_str);
+
+    for (index = 0; index < p_mp_obj->ecmp_count; index++)
+    {
+        printf ("%s (%d)%s%s",
+                (index == 0) ? "" :
+                (((index % 4) == 0) ? p_nh_obj_indent_str : ""),
+                (int) p_mp_obj->a_nh_obj_id [index],
+                (index == (p_mp_obj->ecmp_count - 1)) ? "" : ", ",
+                ((index % 4) == 3) ? "\n" : "");
+    }
+
+    printf ("\n\n");
+}
+
+void fib_dump_mp_md5_node (t_fib_mp_md5_node *p_md5_node, int dump_mp_obj)
+{
+    uint8_t  *md5_digest;
+    uint32_t  index;
+    t_fib_mp_obj  *p_mp_obj;
+
+    md5_digest = p_md5_node->key.md5_digest;
+
+    printf ("\n");
+    printf ("p_mp_md5_node  : %p\n", p_md5_node);
+    printf ("unit        : %d\n", p_md5_node->key.unit);
+    printf ("md5_digest   : ");
+
+    for (index = 0; index < HAL_RT_MD5_DIGEST_LEN; index++)
+    {
+        printf ("%02x%s%s", md5_digest [index],
+                ((index % 4) == 3) ? " " : "",
+                (index == (HAL_RT_MD5_DIGEST_LEN - 1)) ? "\n" : "");
+    }
+
+    printf ("num_nodes   : %d\n", p_md5_node->num_nodes);
+
+    p_mp_obj = (t_fib_mp_obj *) std_dll_getfirst (&p_md5_node->mp_node_list);
+
+    while (p_mp_obj != NULL)
+    {
+        printf ("p_mp_obj      : %p\n", p_mp_obj);
+
+        if (dump_mp_obj)
+        {
+            fib_dump_mp_obj_node (p_mp_obj, 1);
+        }
+
+        p_mp_obj = (t_fib_mp_obj *)
+            std_dll_getnext (&p_md5_node->mp_node_list, &p_mp_obj->glue);
+    }
+}
+
+void fib_dump_mp_info_per_vrf_per_af (uint32_t vrf_id, uint32_t af_index)
+{
+    t_fib_mp_md5_node_key  key;
+    t_fib_mp_md5_node    *p_mp_md5_node;
+    std_rt_head          *p_rt_head;
+
+    if (!(FIB_IS_VRF_ID_VALID (vrf_id)))
+    {
+        return;
+    }
+
+    if (af_index >= FIB_MAX_AFINDEX)
+    {
+        return;
+    }
+
+    if (hal_rt_access_fib_vrf_mp_md5_tree (vrf_id, af_index) == NULL)
+    {
+        return;
+    }
+
+    memset(&key, 0, sizeof(key));
+
+    p_rt_head = std_radix_getnext (hal_rt_access_fib_vrf_mp_md5_tree(vrf_id,
+                                    af_index), (uint8_t *) &key,
+                                    HAL_RT_MP_MD5_NODE_TREE_KEY_SIZE);
+
+    if (p_rt_head == NULL)
+    {
+        return;
+    }
+
+    p_mp_md5_node = (t_fib_mp_md5_node *) p_rt_head;
+
+    fib_dump_mp_md5_node (p_mp_md5_node, true);
+    return;
+}
+
+void fib_dump_all_mp_info ()
+{
+    uint32_t  vrf_id = 0;
+    uint8_t   af_index = 0;
+
+    for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id++)
+    {
+        for (af_index = FIB_MIN_AFINDEX; af_index < FIB_MAX_AFINDEX; af_index++)
+        {
+            fib_dump_mp_info_per_vrf_per_af (vrf_id, af_index);
+        }
+    }
+
+    return;
+}
 
 static void nas_rt_shell_debug_counters_help(void)
 {
@@ -1788,7 +1918,7 @@ static void nas_rt_shell_debug_nh_help(void)
 {
     printf("::nas-rt-debug nh all\r\n");
     printf("\t- Dumps the nas-rt all nh's\r\n");
-    printf("::nas-rt-debug nh <vrf-id> [af-id] [NH-ipaddr] [NH-ifindex]\r\n");
+    printf("::nas-rt-debug nh <vrf-id> [af-id] [NH-ipaddr] [NH-ifindex] [dump-dep-dr]\r\n");
     printf("\t- Dumps nas-rt NH info for given vrf/af/ip-addr/ifindex\r\n");
     return;
 }
@@ -1812,10 +1942,14 @@ static void nas_rt_shell_debug_nh(std_parsed_string_t handle)
                 token = std_parse_string_next(handle,&ix);
                 if((NULL != token) &&
                    ((token2 = std_parse_string_next(handle,&ix)) != NULL)) {
-                    uint32_t if_index = strtol(token2,NULL,0);
-                    fib_dump_nh (vrf_id, af_index, (uint8_t *) token, if_index);
+                    if(!strcmp(token2,"dump-dep-dr")) {
+                        fib_dump_nh_per_vrf_per_af (vrf_id, af_index, true);
+                    } else {
+                        uint32_t if_index = strtol(token2,NULL,0);
+                        fib_dump_nh (vrf_id, af_index, (uint8_t *) token, if_index);
+                    }
                 } else {
-                    fib_dump_nh_per_vrf_per_af (vrf_id, af_index);
+                    fib_dump_nh_per_vrf_per_af (vrf_id, af_index, false);
                 }
             } else {
                fib_dump_nh_per_vrf (vrf_id);
@@ -1857,6 +1991,41 @@ static void nas_rt_shell_debug_rif (std_parsed_string_t handle)
     return;
 }
 
+static void nas_rt_shell_debug_multipath_help(void)
+{
+    printf("::nas-rt-debug multipath all\r\n");
+    printf("\t- Dumps all nas-rt multipath information\r\n");
+    printf("::nas-rt-debug multipath <vrf-id> <af-id>\r\n");
+    printf("\t- Dumps nas-rt multipath info for given vrf and af\r\n");
+    return;
+}
+
+static void nas_rt_shell_debug_multipath (std_parsed_string_t handle)
+{
+    size_t ix=1;
+    const char *token = NULL;
+    bool print_help = true;
+
+    if((token = std_parse_string_next(handle,&ix))!= NULL) {
+        if(!strcmp(token,"all")) {
+            fib_dump_all_mp_info ();
+            print_help = false;
+        } else if(NULL != token) {
+            uint32_t vrf_id = strtol(token,NULL,0);
+            token = std_parse_string_next(handle,&ix);
+            if(NULL != token) {
+                uint32_t af_index = strtol(token,NULL,0);
+                fib_dump_mp_info_per_vrf_per_af (vrf_id, af_index);
+                print_help = false;
+            }
+        }
+    }
+    if (print_help) {
+        nas_rt_shell_debug_multipath_help();
+    }
+    return;
+}
+
 
 /*Dump nas routing module info*/
 static void nas_rt_shell_debug_help(void)
@@ -1877,6 +2046,8 @@ static void nas_rt_shell_debug_help(void)
     printf("\t- NH module commands\r\n");
     printf("::nas-rt-debug rif\r\n");
     printf("\t- RIF module commands\r\n");
+    printf("::nas-rt-debug multipath\r\n");
+    printf("\t- Multipath module commands\r\n");
 
     return;
 }
@@ -1904,6 +2075,8 @@ void nas_rt_shell_dbg (std_parsed_string_t handle)
             nas_rt_shell_debug_nh(handle);
         } else if(!strcmp(token,"rif")) {
             nas_rt_shell_debug_rif(handle);
+        } else if(!strcmp(token,"multipath")) {
+            nas_rt_shell_debug_multipath(handle);
         } else {
             nas_rt_shell_debug_help();
         }

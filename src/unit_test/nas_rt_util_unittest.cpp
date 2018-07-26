@@ -222,7 +222,8 @@ cps_api_return_code_t nas_ut_rt_cfg (const char *rt_vrf_name, bool is_add, const
     return cps_api_ret_code_OK;
 }
 
-cps_api_return_code_t nas_ut_rt_ipv6_nh_cfg (bool is_add, const char *ip_addr, uint32_t prefix_len, uint8_t af,
+cps_api_return_code_t nas_ut_rt_ipv6_nh_cfg (const char *rt_vrf_name, bool is_add, const char *ip_addr,
+                                             uint32_t prefix_len, uint8_t af, const char *nh_vrf_name,
                                              const char *nh_addr1, const char *if_name1,
                                              const char *nh_addr2, const char *if_name2)
 {
@@ -234,6 +235,16 @@ cps_api_return_code_t nas_ut_rt_ipv6_nh_cfg (bool is_add, const char *ip_addr, u
 
     cps_api_key_from_attr_with_qual(cps_api_object_key(obj),
            BASE_ROUTE_ROUTE_NH_OPERATION_OBJ,cps_api_qualifier_TARGET);
+
+    if (rt_vrf_name) {
+        cps_api_object_attr_add(obj,BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_VRF_NAME, rt_vrf_name,
+                                strlen(rt_vrf_name)+1);
+    }
+    if (nh_vrf_name) {
+        cps_api_object_attr_add(obj,BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_NH_VRF_NAME, nh_vrf_name,
+                                strlen(nh_vrf_name)+1);
+    }
+
 
     /*
      * Check mandatory route attributes
@@ -254,11 +265,19 @@ cps_api_return_code_t nas_ut_rt_ipv6_nh_cfg (bool is_add, const char *ip_addr, u
     ids[0] = BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_NH_LIST;
 
     if (if_name1) {
-        uint32_t gw_idx = if_nametoindex(if_name1);
+        if ((rt_vrf_name == NULL) ||
+            ((strlen(rt_vrf_name) == strlen("default")) &&
+             (strncmp(rt_vrf_name, "default", strlen("default")) == 0))) {
+            uint32_t gw_idx = if_nametoindex(if_name1);
+            ids[1] = 0;
+            ids[2] = BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_NH_LIST_IFINDEX;
+            cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,
+                                 (void *)&gw_idx, sizeof(uint32_t));
+        }
         ids[1] = 0;
-        ids[2] = BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_NH_LIST_IFINDEX;
-        cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,
-                             (void *)&gw_idx, sizeof(uint32_t));
+        ids[2] = BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_NH_LIST_IFNAME;
+        cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_BIN,
+                             (void *)if_name1, sizeof(if_name1)+1);
         nh_count = 1;
     }
     if (nh_addr1) {
@@ -274,11 +293,20 @@ cps_api_return_code_t nas_ut_rt_ipv6_nh_cfg (bool is_add, const char *ip_addr, u
     }
 
     if (if_name2) {
-        uint32_t gw_idx = if_nametoindex(if_name2);
+        if ((rt_vrf_name == NULL) ||
+            ((strlen(rt_vrf_name) == strlen("default")) &&
+             (strncmp(rt_vrf_name, "default", strlen("default")) == 0))) {
+            uint32_t gw_idx = if_nametoindex(if_name2);
+            ids[1] = 1;
+            ids[2] = BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_NH_LIST_IFINDEX;
+            cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,
+                                 (void *)&gw_idx, sizeof(uint32_t));
+        }
+
         ids[1] = 1;
-        ids[2] = BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_NH_LIST_IFINDEX;
-        cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,
-                             (void *)&gw_idx, sizeof(uint32_t));
+        ids[2] = BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_NH_LIST_IFNAME;
+        cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_BIN,
+                             (void *)if_name2, sizeof(if_name2)+1);
         nh_count = 2;
     }
     if (nh_addr2) {
@@ -638,6 +666,80 @@ cps_api_return_code_t nas_ut_validate_rt_cfg (const char *rt_vrf_name, uint32_t 
     cps_api_get_request_close(&gp);
     return rc;
 }
+
+cps_api_return_code_t nas_ut_validate_rt_ecmp_cfg (const char *rt_vrf_name, uint32_t af, const char *ip_addr, uint32_t prefix_len,
+                                              const char *nh_vrf_name, const char *nh_addr, const char *if_name, bool should_exist_in_npu, uint32_t rt_nh_cnt)
+{
+    cps_api_return_code_t rc = cps_api_ret_code_ERR;
+    cps_api_get_params_t gp;
+    cps_api_get_request_init(&gp);
+
+    cps_api_object_t obj = cps_api_object_list_create_obj_and_append(gp.filters);
+    cps_api_key_from_attr_with_qual(cps_api_object_key(obj),BASE_ROUTE_OBJ_ENTRY,
+                                    cps_api_qualifier_TARGET);
+
+    cps_api_set_key_data(obj,BASE_ROUTE_OBJ_VRF_NAME, cps_api_object_ATTR_T_BIN, rt_vrf_name,
+                         strlen(rt_vrf_name)+1);
+    cps_api_set_key_data(obj,BASE_ROUTE_OBJ_ENTRY_AF,cps_api_object_ATTR_T_U32,
+                         &af,sizeof(af));
+
+    if (af == AF_INET) {
+        uint32_t ip;
+        struct in_addr a;
+        inet_aton(ip_addr, &a);
+        ip=a.s_addr;
+
+        cps_api_set_key_data(obj,BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX,cps_api_object_ATTR_T_BIN, &ip,sizeof(ip));
+    } else if (af == AF_INET6) {
+        struct in6_addr a6;
+        inet_pton(AF_INET6, ip_addr, &a6);
+
+        cps_api_set_key_data (obj,BASE_ROUTE_OBJ_ENTRY_ROUTE_PREFIX,cps_api_object_ATTR_T_BIN, &a6,sizeof(struct in6_addr));
+    }
+    cps_api_set_key_data (obj,BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN, cps_api_object_ATTR_T_U32, &prefix_len, sizeof (prefix_len));
+
+    if (cps_api_get(&gp)==cps_api_ret_code_OK) {
+        size_t mx = cps_api_object_list_size(gp.list);
+        if (mx)
+        {
+            rc = cps_api_ret_code_OK;
+            std::cout<<"Route get successful"<<std::endl;
+            cps_api_object_attr_t nh_count = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_ENTRY_NH_COUNT);
+            if (nh_count) {
+                uint32_t nhc = cps_api_object_attr_data_u32(nh_count);
+            std::cout<<"Route get successful"<<nhc<<std::endl;
+                if (nhc != rt_nh_cnt) {
+                    cps_api_get_request_close(&gp);
+                    return (cps_api_ret_code_ERR);
+                }
+            }
+            std::cout<<"IP FIB Entries, Family:"<<af<<std::endl;
+            std::cout<<"================================="<<std::endl;
+            for ( size_t ix = 0 ; ix < mx ; ++ix ) {
+                obj = cps_api_object_list_get(gp.list,ix);
+                cps_api_object_attr_t prg_done = cps_api_object_attr_get(obj,
+                                                                         BASE_ROUTE_OBJ_ENTRY_NPU_PRG_DONE);
+                if (prg_done && (cps_api_object_attr_data_u32(prg_done))) {
+                    std::cout<<"IP route exists in NPU:"<<std::endl;
+                    if (should_exist_in_npu == false) {
+                        rc = cps_api_ret_code_ERR;
+                    }
+                } else {
+                    if (should_exist_in_npu) {
+                        rc = cps_api_ret_code_ERR;
+                    }
+                    std::cout<<"IP route not exist in NPU:"<<std::endl;
+                }
+                nas_route_dump_route_object_content(obj);
+                std::cout<<std::endl;
+            }
+        }
+    }
+
+    cps_api_get_request_close(&gp);
+    return rc;
+}
+
 
 cps_api_return_code_t nas_ut_route_op_spl_nh (bool is_add, const char *vrf_name, const char *ip_addr, uint32_t prefix_len,
                              uint32_t spl_nh_option, uint8_t af)

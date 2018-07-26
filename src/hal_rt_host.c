@@ -136,9 +136,11 @@ dn_hal_route_err hal_fib_next_hop_del(t_fib_nh *p_nh)
         if(p_nh->next_hop_id) {
             rc = ndi_route_next_hop_delete(unit, p_nh->next_hop_id);
             if(rc != STD_ERR_OK) {
-                HAL_RT_LOG_ERR("HAL-RT-NDI", "%s (): Failed to delete NH. "
-                           "Unit: %d. Err: %d nh id %lu",
-                           __FUNCTION__, unit, rc, p_nh->next_hop_id);
+                HAL_RT_LOG_ERR("HAL-RT-NDI", "Failed to delete NH. "
+                           "Unit: %d NH Addr: %s Interface: %d nh_id: %lu RIF-cnt: %d Err: %d",
+                           unit, FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr),
+                           p_nh->key.if_index, p_nh->next_hop_id,
+                           hal_rt_rif_ref_get(p_nh->vrf_id, p_nh->key.if_index), rc);
                 return DN_HAL_ROUTE_E_FAIL;
             }
             if(!hal_rt_rif_ref_dec(p_nh->vrf_id, p_nh->key.if_index))

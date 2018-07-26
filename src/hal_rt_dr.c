@@ -678,11 +678,17 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
          * RIF for this LLA will be created when the interface mode
          * changes from L2 to L3.
          */
+        bool is_lla_prg_required = false;
         if (FIB_IS_INTF_MODE_L3(p_intf->mode) &&
             (p_intf->admin_status == RT_INTF_ADMIN_STATUS_UP)) {
             if (hal_rif_index_get_or_create(0, dr_msg_info.vrf_id, if_index, &rif_id) == STD_ERR_OK) {
                 hal_rt_rif_ref_inc(dr_msg_info.vrf_id, if_index);
                 p_dr->num_ipv6_rif_link_local++;
+                /* Since the LLA programming is not done yet for this LLA,
+                 * program when the mode is L3 and admin status is up for any LLA */
+                if (p_dr->num_ipv6_rif_link_local == 1) {
+                    is_lla_prg_required = true;
+                }
             } else {
                 HAL_RT_LOG_ERR("HAL-RT-LLA", " RIF get failed for Route add vrf_id: %d, prefix: %s/%d,"
                                " proto: %d out-if:%d link-local-cnt:%d route-present:%d RIF-ref-cnt:%d",
@@ -693,7 +699,7 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
             }
         }
 
-        if (is_route_present) {
+        if (is_route_present && (is_lla_prg_required == false)) {
             p_dr->last_update_time = fib_tick_get ();
             return STD_ERR_OK;
         }
@@ -741,7 +747,6 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
         }
 
         fib_delete_all_dr_nh (p_dr);
-        fib_delete_all_dr_fh (p_dr);
     }
 
     if (fib_proc_dr_nh_add (p_dr, p_rtm_fib_cmd, p_nh_info_size) != STD_ERR_OK) {
@@ -2345,7 +2350,11 @@ int fib_del_dr_fh (t_fib_dr *p_dr, t_fib_dr_fh *p_dr_fh)
         {
             p_fh->dr_ref_count--;
 
-            fib_check_and_delete_nh (p_fh, false);
+            /* if FH reference count has become zero,
+             * then mark the NH for resolution to clean-up nexthop.
+             */
+            if (FIB_IS_NH_REF_COUNT_ZERO (p_fh))
+                fib_mark_nh_for_resolution(p_fh);
         }
     }
 
@@ -2896,6 +2905,15 @@ int fib_resolve_dr (t_fib_dr *p_dr)
                    p_nh->vrf_id,
                    FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr), p_nh->key.if_index);
 
+        /* Dont add the NH into FH list, if the NH is marked for dead */
+        if (p_nh->status_flag & FIB_NH_STATUS_DEAD) {
+            HAL_RT_LOG_DEBUG("HAL-RT-DR",
+                             "NH in dead state. "
+                             "NH: vrf_id: %d, ip_addr: %s, if_index: 0x%x",
+                             p_nh->vrf_id,
+                             FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr), p_nh->key.if_index);
+            continue;
+        }
         if (FIB_IS_NH_REQ_RESOLVE (p_nh))
         {
             HAL_RT_LOG_DEBUG("HAL-RT-DR",

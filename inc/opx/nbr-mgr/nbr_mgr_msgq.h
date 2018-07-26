@@ -48,7 +48,9 @@ typedef enum {
     NBR_MGR_NL_REFRESH_MSG,
     NBR_MGR_NAS_FLUSH_MSG,
     NBR_MGR_NL_DELAY_REFRESH_MSG,
-    NBR_MGR_DUMP_MSG
+    NBR_MGR_DUMP_MSG,
+    NBR_MGR_NL_DELAY_RESOLVE_MSG,
+    NBR_MGR_NL_INSTANT_REFRESH_MSG
 } nbr_mgr_msg_type_t;
 
 typedef enum {
@@ -93,6 +95,7 @@ typedef struct  {
 typedef struct {
     hal_ifindex_t if_index;
     bool is_admin_up;
+    bool is_oper_up;
     bool is_op_del;
     bool is_bridge;
     uint32_t vlan_id;
@@ -161,7 +164,9 @@ bool nbr_mgr_msgq_create ();
 bool nbr_mgr_enqueue_netlink_nas_msg(nbr_mgr_msg_uptr_t msg);
 nbr_mgr_msg_uptr_t nbr_mgr_dequeue_netlink_nas_msg ();
 bool nbr_mgr_enqueue_burst_resolve_msg(nbr_mgr_msg_uptr_t msg);
+bool nbr_mgr_enqueue_instant_resolve_msg(nbr_mgr_msg_uptr_t msg);
 bool nbr_mgr_process_burst_resolve_msg(burst_resolvefunc cb);
+bool nbr_mgr_process_instant_resolve_msg(burst_resolvefunc cb);
 bool nbr_mgr_process_delay_resolve_msg(burst_resolvefunc cb);
 bool nbr_mgr_enqueue_delay_resolve_msg(nbr_mgr_msg_uptr_t msg);
 bool nbr_mgr_process_nl_msg(cps_api_object_t obj, void *param);

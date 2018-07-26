@@ -165,5 +165,6 @@ bool hal_rt_form_neigh_flush_msg (t_fib_offload_msg *p_offload_msg, t_fib_dr *p_
 int nas_rt_process_offload_msg(t_fib_offload_msg *p_offload_msg);
 int fib_offload_msg_main(void);
 bool hal_rt_is_vrf_valid(hal_vrf_id_t vrf_id);
+t_std_error fib_process_pending_resolve_dr(int vrf_id, int af_index);
 #endif /* __HAL_RT_UTIL_H__ */
 
