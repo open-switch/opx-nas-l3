@@ -1,13 +1,14 @@
 [Unit]
 Description=OPX Neighbor Manager Service
 After=opx-cps.service
-Wants=opx-cps.service
+Requires=opx-cps.service
 OnFailure=service_onfailure@%n.service
 
 [Service]
 Type=notify
 EnvironmentFile=/etc/opx/opx-environment
 ExecStart=/usr/bin/base_nbr_mgr_svc
+TimeoutStartSec=90
 
 [Install]
 WantedBy=multi-user.target

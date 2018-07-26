@@ -1,3 +1,9 @@
+opx-nas-l3 (3.9.0+opx1) unstable; urgency=medium
+
+  * Bugfix: Service start-up dependencies and timing
+
+ -- Dell EMC <ops-dev@lists.openswitch.net>  Tue, 24 Jul 2018 15:00:00 -0800
+
 opx-nas-l3 (3.9.0) unstable; urgency=medium
 
   * Update: Added UT script for PBR ACL cleanup dependency issue
