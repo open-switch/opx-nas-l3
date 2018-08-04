@@ -42,7 +42,7 @@ void fib_dump_nh_node_key (t_fib_nh *p_nh);
 
 void fib_dump_dr_node (t_fib_dr *p_dr);
 
-void fib_dump_nh_node (t_fib_nh *p_nh);
+void fib_dump_nh_node (t_fib_nh *p_nh, bool dump_dep_dr);
 
 void fib_dump_dr (uint32_t vrf_id, uint32_t af_index, uint8_t *p_in_prefix, uint32_t prefix_len);
 
@@ -56,7 +56,7 @@ void fib_dump_all_dr (void);
 
 void fib_dump_nh (uint32_t vrf_id, uint32_t af_index, uint8_t *p_in_ip_addr, uint32_t if_index);
 
-void fib_dump_nh_per_vrf_per_af (uint32_t vrf_id, uint32_t af_index);
+void fib_dump_nh_per_vrf_per_af (uint32_t vrf_id, uint32_t af_index, bool dump_dep_dr);
 
 void fib_dump_nh_per_vrf (uint32_t vrf_id);
 
@@ -109,6 +109,8 @@ void fib_dbg_clear_all_cntrs (void);
 void fib_dbg_clear_all_cntrs (void);
 
 void fib_dump_peer_mac_db_get_all_with_vrf(hal_vrf_id_t vrf_id);
+
+void fib_dump_all_mp_node (uint32_t vrf_id, uint32_t af_index);
 
 void nas_rt_shell_debug_command_init (void);
 #endif /* __HAL_RT_DEBUG_H__ */

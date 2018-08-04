@@ -1,3 +1,17 @@
+opx-nas-l3 (3.9.0+opx2) unstable; urgency=medium
+
+  * Bugfix: base_nas crashed and vlan1 Configuration failure observed while running some scripts.
+  * Update: flush the neighbors on interface state changing to 'oper down',
+            for faster removal of the hosts from the HW.
+  * Bugfix: base_nas crash (assert) observed when vrf name is deleted in a scale environment.
+  * Update: Enhance debug dump routines to include an option to dump the data
+            without providing the dependent dr info.
+  * Update: Skip the route/host update with MAC-VLAN interface in the default VRF.
+  * Update: Enhance debug dump routines to include multipath object dump.
+  * Update: Modified error log on next hop delete failure to be more informative.
+
+ -- Dell EMC <ops-dev@lists.openswitch.net>  Fri, 10 Aug 2018 15:00:00 -0800
+
 opx-nas-l3 (3.9.0+opx1) unstable; urgency=medium
 
   * Bugfix: Service start-up dependencies and timing

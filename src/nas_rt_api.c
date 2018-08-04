@@ -402,8 +402,9 @@ static cps_api_object_t nas_intf_ip_unreach_info_to_cps_object(t_fib_intf *p_int
                                     cps_api_qualifier_TARGET);
     cps_api_object_set_key(obj,&key);
 
-    cps_api_set_key_data (obj, BASE_ROUTE_IP_UNREACHABLES_CONFIG_AF, cps_api_object_ATTR_T_U32,&(p_intf->key.af_index),
-                          sizeof(p_intf->key.af_index));
+    uint32_t af = p_intf->key.af_index;
+    cps_api_set_key_data (obj, BASE_ROUTE_IP_UNREACHABLES_CONFIG_AF, cps_api_object_ATTR_T_U32, &af,
+                          sizeof(af));
     cps_api_set_key_data (obj, BASE_ROUTE_IP_UNREACHABLES_CONFIG_IFNAME, cps_api_object_ATTR_T_BIN,
                           p_intf->if_name, (strlen(p_intf->if_name)+1));
     return obj;
@@ -464,8 +465,9 @@ static cps_api_object_t nas_route_event_filter_info_to_cps_object(char *vrf_name
 
     cps_api_set_key_data (obj, BASE_ROUTE_EVENT_FILTER_VRF_NAME, cps_api_object_ATTR_T_BIN,
                           vrf_name, (strlen(vrf_name)+1));
+    uint32_t type_val = type;
     cps_api_set_key_data (obj, BASE_ROUTE_EVENT_FILTER_TYPE, cps_api_object_ATTR_T_U32,
-                          &type, sizeof(type));
+                          &type_val, sizeof(type_val));
     cps_api_object_attr_add_u32(obj, BASE_ROUTE_EVENT_FILTER_ENABLE, enable);
     return obj;
 }
@@ -599,8 +601,8 @@ static cps_api_object_t nas_route_info_to_cps_object(cps_api_operation_types_t o
                                                      bool is_pub){
     t_fib_nh       *p_nh = NULL;
     t_fib_nh_holder nh_holder1;
-    int weight = 0, is_npu_prg_done;
-    int addr_len = 0, nh_itr = 0, is_arp_resolved = false;
+    uint32_t weight = 0, is_npu_prg_done;
+    uint32_t addr_len = 0, nh_itr = 0, is_arp_resolved = false;
 
     if(entry == NULL){
         HAL_RT_LOG_ERR("HAL-RT-API","Null DR entry pointer passed to convert it to cps object");
@@ -873,8 +875,8 @@ t_std_error nas_route_get_all_route_info(cps_api_object_list_t list, uint32_t vr
 
 static void nas_route_nht_add_nh_info_to_cps_object (cps_api_object_t obj, t_fib_nh *p_nh, int nh_count) {
     cps_api_attr_id_t parent_list[3];
-    unsigned int       af;
-    int addr_len = 0, is_arp_resolved, is_npu_prg_done;
+    uint32_t af;
+    uint32_t addr_len = 0, is_arp_resolved, is_npu_prg_done;
 
     parent_list[0] = BASE_ROUTE_NH_TRACK_NH_INFO;
     parent_list[1] = nh_count;
@@ -961,8 +963,8 @@ static cps_api_object_t nas_route_nht_info_to_cps_object(t_fib_nht *entry, cps_a
 
     cps_api_set_key_data (obj, BASE_ROUTE_NH_TRACK_VRF_ID, cps_api_object_ATTR_T_U32,&entry->vrf_id,
                           sizeof(entry->vrf_id));
-    cps_api_set_key_data (obj, BASE_ROUTE_NH_TRACK_AF, cps_api_object_ATTR_T_U32,&entry->key.dest_addr.af_index,
-                          sizeof(entry->key.dest_addr.af_index));
+    uint32_t af = entry->key.dest_addr.af_index;
+    cps_api_set_key_data (obj, BASE_ROUTE_NH_TRACK_AF, cps_api_object_ATTR_T_U32,&af, sizeof(af));
     cps_api_object_attr_add(obj,BASE_ROUTE_NH_TRACK_VRF_NAME,
                             FIB_GET_VRF_NAME(entry->vrf_id, entry->key.dest_addr.af_index),
                             strlen((const char*)FIB_GET_VRF_NAME(entry->vrf_id, entry->key.dest_addr.af_index))+1);

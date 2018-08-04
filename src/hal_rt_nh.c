@@ -2373,9 +2373,18 @@ int fib_check_and_delete_nh (t_fib_nh *p_nh, bool is_force_del)
          * NH node.
          */
 
-        if (hal_fib_next_hop_del(p_nh) != DN_HAL_ROUTE_E_NONE)
+        if (hal_fib_next_hop_del(p_nh) != DN_HAL_ROUTE_E_NONE) {
+            HAL_RT_LOG_ERR ("HAL-RT-NH",
+                    "Failed during NH del. NH: vrf_id: %d, ip_addr: %s, if_index: 0x%x, "
+                    "status_flag: 0x%x, owner_flag: 0x%x, "
+                    "rtm_ref_count: %d, dr_ref_count: %d, nh_ref_count: %d",
+                    p_nh->vrf_id,
+                    FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr),
+                    p_nh->key.if_index, p_nh->status_flag, p_nh->owner_flag,
+                    p_nh->rtm_ref_count, p_nh->dr_ref_count, p_nh->nh_ref_count);
+
             fib_mark_nh_for_resolution(p_nh);
-        else {
+        } else {
             fib_destroy_nh_dep_dr_tree (p_nh);
             fib_del_nh (p_nh);
         }
@@ -2883,9 +2892,9 @@ int fib_proc_nh_dead (t_fib_nh *p_nh)
 
     if (!p_nh)
     {
-        HAL_RT_LOG_ERR("HAL-RT-NH",
-                   "%s (): Invalid input param. p_nh: %p",
-                   __FUNCTION__, p_nh);
+        HAL_RT_LOG_ERR("NH-DEAD",
+                   "Invalid input param. p_nh: %p",
+                   p_nh);
 
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
     }
@@ -2907,7 +2916,7 @@ int fib_proc_nh_dead (t_fib_nh *p_nh)
     fib_update_nh_dep_dr_resolution_status(p_nh);
     if (FIB_IS_NH_FH (p_nh))
     {
-        HAL_RT_LOG_DEBUG("HAL-RT-NH",
+        HAL_RT_LOG_DEBUG("NH-DEAD",
                    "NH is a FH. "
                    "vrf_id: %d, ip_addr: %s, if_index: 0x%x",
                     p_nh->vrf_id,
@@ -2928,7 +2937,7 @@ int fib_proc_nh_dead (t_fib_nh *p_nh)
             }
             else
             {
-                HAL_RT_LOG_DEBUG("HAL-RT-NH",
+                HAL_RT_LOG_DEBUG("NH-DEAD",
                            "Error hal_fib_host_del for dead NH. "
                            "vrf_id: %d, ip_addr: %s, if_index: 0x%x, "
                            "hal_err: %d (%s)",
@@ -2945,7 +2954,16 @@ int fib_proc_nh_dead (t_fib_nh *p_nh)
     /* all route reference to this NH is removed already,
      * hence delete the nexthop if its created.
      */
-    hal_fib_next_hop_del(p_nh);
+    if (hal_fib_next_hop_del(p_nh) != DN_HAL_ROUTE_E_NONE) {
+        HAL_RT_LOG_ERR ("NH-DEAD",
+                "Failed during NH del. NH: vrf_id: %d, ip_addr: %s, if_index: 0x%x, "
+                "status_flag: 0x%x, owner_flag: 0x%x, "
+                "rtm_ref_count: %d, dr_ref_count: %d, nh_ref_count: %d",
+                p_nh->vrf_id,
+                FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr),
+                p_nh->key.if_index, p_nh->status_flag, p_nh->owner_flag,
+                p_nh->rtm_ref_count, p_nh->dr_ref_count, p_nh->nh_ref_count);
+    }
     return STD_ERR_OK;
 }
 

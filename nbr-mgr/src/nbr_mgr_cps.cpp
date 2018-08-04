@@ -27,6 +27,9 @@
 #include "cps_api_events.h"
 #include "cps_class_map.h"
 #include "cps_api_db_interface.h"
+#include "cps_api_object_tools.h"
+#include "cps_api_object.h"
+#include "cps_api_operation_tools.h"
 #include "dell-base-routing.h"
 #include "dell-base-neighbor.h"
 #include "dell-base-if.h"
@@ -798,3 +801,30 @@ bool nbr_mgr_process_flush_cps_msg(cps_api_object_t obj, void *param) {
     }
     return true;
 }
+
+bool nbr_mgr_os_neigh_flush(const char *vrf_name, uint32_t family, const char *if_name) {
+
+    cps_api_object_guard obj_g (cps_api_obj_tool_create(cps_api_qualifier_TARGET,
+                                                        BASE_NEIGHBOR_FLUSH_OBJ, false));
+    if (obj_g.get() == nullptr)
+    {
+        NBR_MGR_LOG_ERR("NAS_OS_FLUSH", "CPS object create failed!");
+        return false;
+    }
+
+    cps_api_object_attr_add(obj_g.get(), BASE_NEIGHBOR_FLUSH_INPUT_VRF_NAME, vrf_name,
+                            strlen(vrf_name)+1);
+    cps_api_object_attr_add_u32(obj_g.get(),BASE_NEIGHBOR_FLUSH_INPUT_AF, family);
+
+    cps_api_object_attr_add(obj_g.get(), BASE_NEIGHBOR_FLUSH_INPUT_IFNAME, if_name,
+                            strlen(if_name)+1);
+    if((cps_api_commit_one(cps_api_oper_ACTION, obj_g.get(), 1,0)) != cps_api_ret_code_OK){
+        NBR_MGR_LOG_ERR("NAS_OS_FLUSH", "CPS commit failed for VRF:%s af:%d if-name:%s!",
+                        vrf_name, family, if_name);
+        return false;
+    }
+    NBR_MGR_LOG_INFO("NAS_OS_FLUSH", "IP neigh flush CPS commit success for VRF:%s af:%d if-name:%s!",
+                     vrf_name, family, if_name);
+    return true;
+}
+

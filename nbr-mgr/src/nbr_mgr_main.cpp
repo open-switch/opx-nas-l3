@@ -31,6 +31,7 @@
 
 static std_thread_create_param_t nbr_mgr_resolve_thr;
 static std_thread_create_param_t nbr_mgr_delay_resolve_thr;
+static std_thread_create_param_t nbr_mgr_instant_resolve_thr;
 
 bool nbr_mgr_init() {
     /* Create message queues for nbr mgr threads communication */
@@ -58,6 +59,16 @@ bool nbr_mgr_init() {
     if (std_thread_create(&nbr_mgr_delay_resolve_thr)!=STD_ERR_OK) {
         return false;
     }
+
+    /* Thread to process the messages instantly (instead of rate-limit) from Q to get the response
+     * from kernel quickly with ARP/Nbr failed state in the interface oper. down scenario. */
+    std_thread_init_struct(&nbr_mgr_instant_resolve_thr);
+    nbr_mgr_instant_resolve_thr.name = "nbr_mgr_irslv";
+    nbr_mgr_instant_resolve_thr.thread_function = (std_thread_function_t)nbr_mgr_instant_resolve_main;
+    if (std_thread_create(&nbr_mgr_instant_resolve_thr)!=STD_ERR_OK) {
+        return false;
+    }
+
 
 #if 0 /* Enable this if netlink events get-all is supported in the NAS-linux */
     /* Get all the NHs to be resolved from NAS-L3 */
@@ -96,7 +107,7 @@ int main() {
     }
 
     /* Service is in ready state */
-    sd_notify(0,"READY=1");
+    sd_notify(0, "READY=1");
 
     /* @@TODO threads join to be done */
     while (!shutdwn) {

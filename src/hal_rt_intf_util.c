@@ -324,7 +324,8 @@ int fib_process_route_del_on_intf_event (t_fib_intf *p_intf, t_fib_intf_event_ty
                              p_fh->vrf_id, FIB_IP_ADDR_TO_STR (&p_fh->key.ip_addr),
                              p_fh->key.if_index, p_fh->status_flag);
             /* If all the multipaths are dead for the ECMP route, delete the route, otherwise continue for next route */
-            if (p_nh_dep_dr->p_dr->num_nh > 1) {
+            if ((intf_event != FIB_INTF_FORCE_DEL) &&
+                (p_nh_dep_dr->p_dr->num_nh > 1)) {
                 FIB_FOR_EACH_NH_FROM_DR (p_nh_dep_dr->p_dr, p_nh, nh_holder1)
                 {
                     HAL_RT_LOG_DEBUG("HAL-RT-DR-DEL",

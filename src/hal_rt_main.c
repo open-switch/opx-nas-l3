@@ -586,9 +586,9 @@ cps_api_object_t nas_route_virtual_routing_ip_config_to_cps_object(uint32_t vrf_
     cps_api_set_key_data (obj, BASE_ROUTE_VIRTUAL_ROUTING_CONFIG_VIRTUAL_ROUTING_IP_CONFIG_VRF_NAME,
                           cps_api_object_ATTR_T_BIN, p_status->vrf_name,
                           (strlen(p_status->vrf_name)+1));
+    uint32_t af = p_status->ip_addr.af_index;
     cps_api_set_key_data (obj, BASE_ROUTE_VIRTUAL_ROUTING_CONFIG_VIRTUAL_ROUTING_IP_CONFIG_AF,
-                          cps_api_object_ATTR_T_U32, &(p_status->ip_addr.af_index),
-                          sizeof(p_status->ip_addr.af_index));
+                          cps_api_object_ATTR_T_U32, &af, sizeof(af));
     cps_api_set_key_data (obj, BASE_ROUTE_VIRTUAL_ROUTING_CONFIG_VIRTUAL_ROUTING_IP_CONFIG_IFNAME,
                           cps_api_object_ATTR_T_BIN, p_status->if_name,
                           (strlen(p_status->if_name)+1));

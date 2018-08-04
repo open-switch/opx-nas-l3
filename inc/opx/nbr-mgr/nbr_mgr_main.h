@@ -39,6 +39,7 @@
 #define NBR_MGR_MIN_NBR_RETRY_CNT 10
 #define NBR_MGR_MAX_NBR_RETRY_CNT 25
 #define NBR_MGR_MAX_NBR_REFRESH_MAC_LEARN_RETRY_CNT 100
+#define NBR_MGR_INSTANT_RESOLVE_DELAY 0 /* No delay for resolving the ARP/Nbr entries */
 #define NBR_MGR_BURST_RESOLVE_DELAY 1 /* Every 1 sec NBR_MGR_BURST_RESOLVE_CNT ARP
                                          messages will be sent from kernel */
 #define NBR_MGR_DELAY_BURST_RESOLVE_DELAY 5 /* Every 5 sec NBR_MGR_BURST_RESOLVE_CNT ARP
@@ -47,8 +48,12 @@
 
 #define NBR_MGR_INTF_ADMIN_MSG 0x1
 #define NBR_MGR_INTF_VLAN_MSG  0x2
+#define NBR_MGR_INTF_OPER_MSG  0x4
 #define NBR_MGR_DEFAULT_VRF_ID 0
 
+/* Today, we get the oper. status in the attribute
+ * BASE_IF_LINUX_IF_INTERFACES_INTERFACE_IF_FLAGS, if this is not case in future, change the code. */
+#define NBR_MGR_INTF_OPER_UP (1<<6) /* IFF_RUNNING */
 enum {
     NBR_MGR_AUTO_REFRESH_INIT,
     NBR_MGR_AUTO_REFRESH_ENABLE,
@@ -60,6 +65,7 @@ int nbr_mgr_netlink_main(void);
 bool nbr_mgr_process_main(void);
 int nbr_mgr_resolve_main(void);
 int nbr_mgr_delay_resolve_main(void);
+int nbr_mgr_instant_resolve_main(void);
 bool nbr_mgr_nbr_resolve(nbr_mgr_msg_type_t type, nbr_mgr_nbr_entry_t *p_nbr);
 bool nbr_mgr_burst_resolve_handler(nbr_mgr_msg_t *p_msg);
 bool nbr_mgr_program_npu(nbr_mgr_op_t op, const nbr_mgr_nbr_entry_t& entry);
@@ -70,5 +76,6 @@ int nbr_mgr_enqueue_flush_msg(uint32_t if_index, hal_vrf_id_t vrf_id);
 bool nbr_mgr_get_auto_refresh_status (const char *vrf_name, uint32_t family);
 bool nbr_mgr_is_mac_present_in_hw(hal_mac_addr_t mac, hal_ifindex_t if_index,
                                   bool& is_mac_present_in_hw);
+bool nbr_mgr_os_neigh_flush(const char *vrf_name, uint32_t family, const char *if_name);
 
 #endif

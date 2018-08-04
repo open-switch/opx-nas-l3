@@ -747,7 +747,6 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
         }
 
         fib_delete_all_dr_nh (p_dr);
-        fib_delete_all_dr_fh (p_dr);
     }
 
     if (fib_proc_dr_nh_add (p_dr, p_rtm_fib_cmd, p_nh_info_size) != STD_ERR_OK) {
@@ -2351,7 +2350,11 @@ int fib_del_dr_fh (t_fib_dr *p_dr, t_fib_dr_fh *p_dr_fh)
         {
             p_fh->dr_ref_count--;
 
-            fib_check_and_delete_nh (p_fh, false);
+            /* if FH reference count has become zero,
+             * then mark the NH for resolution to clean-up nexthop.
+             */
+            if (FIB_IS_NH_REF_COUNT_ZERO (p_fh))
+                fib_mark_nh_for_resolution(p_fh);
         }
     }
 

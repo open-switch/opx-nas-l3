@@ -127,6 +127,10 @@ t_std_error hal_rt_validate_intf(hal_vrf_id_t vrf_id, int if_index, bool *is_mgm
         return STD_ERR_OK;
     }
 
+    /* skip events for MAC VLAN interface in default VRF */
+    if ((vrf_id == FIB_DEFAULT_VRF) && (intf_ctrl.int_type == nas_int_type_MACVLAN)) {
+        return (STD_ERR_MK(e_std_err_NPU, e_std_err_code_PARAM, 0));
+    }
     return STD_ERR_OK;
 }
 

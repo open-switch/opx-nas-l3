@@ -28,7 +28,7 @@ extern nbr_process* p_nbr_process_hdl;
 extern char *nbr_mgr_nl_neigh_state_to_str (int state);
 
 void nbr_process::nbr_mgr_dump_process_stats() {
-    NBR_MGR_LOG_ERR("STATS", " NBR_MGR Stats INTF add:%d,del:%d,NBR add:%d,incomplete:%d,reachable:%d,stale:%d,"
+    NBR_MGR_LOG_ERR("DUMP", " NBR_MGR Stats INTF add:%d,del:%d,NBR add:%d,incomplete:%d,reachable:%d,stale:%d,"
                     "delay:%d,probe:%d,failed:%d,permanent:%d,del:%d, RESOLVE add:%d del%d FDB add:%d del:%d"
                     " FLUSH:%d trig_refresh:%d,dup_trig_nbr:%d",
                     stats.intf_add_msg_cnt,  stats.intf_del_msg_cnt, stats.nbr_add_msg_cnt,
@@ -41,38 +41,46 @@ void nbr_process::nbr_mgr_dump_process_stats() {
 }
 
 static void _nbr_mgr_dump_nbr_data_stats(nbr_data const * ptr) {
-    NBR_MGR_LOG_ERR("DUMP", "Neighbor STATS vrf-id:%d Nbr:%s refresh:%d delay refresh:%d delay resolve:%d resolve:%d "
-                    "retry:%d mac_np:%d fail_trig_resolve:%d stale_ref:%d hw_mac_lrn_refresh:%d mac_trig_ref:%d "
-                    "FLUSH skip:%d fail_resolve:%d refresh:%d mac add resolve:%d refresh:%d delay-state-failed-resolve:%d",
+    NBR_MGR_LOG_ERR("DUMP", "Neighbor STATS vrf-id:%d Nbr:%s refresh:%d instant refresh:%d delay refresh:%d "
+                    "delay resolve:%d resolve:%d retry:%d mac_np:%d fail_trig_resolve:%d stale_ref:%d "
+                    "hw_mac_lrn_refresh:%d mac_trig_ref:%d mac_trig_skip_oper:%d mac_inst_trig_on_oper_down:%d "
+                    "FLUSH skip:%d fail_resolve:%d refresh:%d "
+                    "mac add resolve:%d refresh:%d delay-state-failed-resolve:%d refresh_for_more_flushes:%d",
                     ptr->get_vrf_id(), ptr->get_ip_addr().c_str(),
-                    ptr->nbr_stats.refresh_cnt, ptr->nbr_stats.delay_refresh_cnt,
+                    ptr->nbr_stats.refresh_cnt, ptr->nbr_stats.instant_refresh_cnt, ptr->nbr_stats.delay_refresh_cnt,
                     ptr->nbr_stats.delay_resolve_cnt, ptr->nbr_stats.resolve_cnt,
                     ptr->nbr_stats.retry_cnt, ptr->nbr_stats.mac_not_present_cnt,
                     ptr->nbr_stats.failed_trig_resolve_cnt, ptr->nbr_stats.stale_trig_refresh_cnt,
                     ptr->nbr_stats.hw_mac_learn_refresh_cnt, ptr->nbr_stats.mac_trig_refresh,
+                    ptr->nbr_stats.oper_down_mac_trig_instant_refresh, ptr->nbr_stats.failed_handle_skip_oper_down,
                     ptr->nbr_stats.flush_skip_refresh, ptr->nbr_stats.flush_failed_resolve,
                     ptr->nbr_stats.flush_refresh, ptr->nbr_stats.mac_add_trig_resolve,
-                    ptr->nbr_stats.mac_add_trig_refresh, ptr->nbr_stats.delay_trig_refresh);
+                    ptr->nbr_stats.mac_add_trig_refresh, ptr->nbr_stats.delay_trig_refresh,
+                    ptr->nbr_stats.refresh_for_more_flushes);
 }
 
 static void _nbr_mgr_dump_nbr_data_ref_stats(nbr_data_ptr &ptr) {
-    NBR_MGR_LOG_ERR("DUMP", "Neighbor STATS vrf-id:%d Nbr:%s refresh:%d delay refresh:%d delay resolve:%d resolve:%d "
-                    "retry:%d mac_np:%d fail_trig_resolve:%d stale_ref:%d hw_mac_lrn_refresh:%d mac_trig_ref:%d "
-                    "FLUSH skip:%d fail_resolve:%d refresh:%d mac add resolve:%d refresh:%d delay-state-failed-resolve:%d",
+    NBR_MGR_LOG_ERR("DUMP", "Neighbor STATS vrf-id:%d Nbr:%s refresh:%d instant refresh:%d delay refresh:%d "
+                    "delay resolve:%d resolve:%d retry:%d mac_np:%d fail_trig_resolve:%d stale_ref:%d "
+                    "hw_mac_lrn_refresh:%d mac_trig_ref:%d mac_inst_trig_on_oper_down:%d "
+                    "FLUSH skip:%d fail_resolve:%d refresh:%d mac add resolve:%d refresh:%d delay-state-failed-resolve:%d"
+                    " refresh_for_more_flushes:%d",
                     ptr->get_vrf_id(), ptr->get_ip_addr().c_str(),
-                    ptr->nbr_stats.refresh_cnt, ptr->nbr_stats.delay_refresh_cnt,
+                    ptr->nbr_stats.refresh_cnt, ptr->nbr_stats.instant_refresh_cnt, ptr->nbr_stats.delay_refresh_cnt,
                     ptr->nbr_stats.delay_resolve_cnt, ptr->nbr_stats.resolve_cnt,
                     ptr->nbr_stats.retry_cnt, ptr->nbr_stats.mac_not_present_cnt,
                     ptr->nbr_stats.failed_trig_resolve_cnt, ptr->nbr_stats.stale_trig_refresh_cnt,
                     ptr->nbr_stats.hw_mac_learn_refresh_cnt, ptr->nbr_stats.mac_trig_refresh,
+                    ptr->nbr_stats.oper_down_mac_trig_instant_refresh, ptr->nbr_stats.failed_handle_skip_oper_down,
                     ptr->nbr_stats.flush_skip_refresh, ptr->nbr_stats.flush_failed_resolve,
                     ptr->nbr_stats.flush_refresh, ptr->nbr_stats.mac_add_trig_resolve,
-                    ptr->nbr_stats.mac_add_trig_refresh, ptr->nbr_stats.delay_trig_refresh);
+                    ptr->nbr_stats.mac_add_trig_refresh, ptr->nbr_stats.delay_trig_refresh, ptr->nbr_stats.refresh_for_more_flushes);
 }
 
 static nbr_mgr_nbr_stats gbl_nbr_stats;
 static void nbr_mgr_dump_all_nbr_data_stats(nbr_data const * ptr) {
     gbl_nbr_stats.refresh_cnt += ptr->nbr_stats.refresh_cnt;
+    gbl_nbr_stats.instant_refresh_cnt += ptr->nbr_stats.instant_refresh_cnt;
     gbl_nbr_stats.delay_refresh_cnt += ptr->nbr_stats.delay_refresh_cnt;
     gbl_nbr_stats.delay_resolve_cnt += ptr->nbr_stats.delay_resolve_cnt;
     gbl_nbr_stats.resolve_cnt += ptr->nbr_stats.resolve_cnt;
@@ -81,27 +89,33 @@ static void nbr_mgr_dump_all_nbr_data_stats(nbr_data const * ptr) {
     gbl_nbr_stats.failed_trig_resolve_cnt += ptr->nbr_stats.failed_trig_resolve_cnt;
     gbl_nbr_stats.stale_trig_refresh_cnt += ptr->nbr_stats.stale_trig_refresh_cnt;
     gbl_nbr_stats.hw_mac_learn_refresh_cnt += ptr->nbr_stats.hw_mac_learn_refresh_cnt;
+    gbl_nbr_stats.failed_handle_skip_oper_down += ptr->nbr_stats.failed_handle_skip_oper_down;
     gbl_nbr_stats.mac_trig_refresh += ptr->nbr_stats.mac_trig_refresh;
+    gbl_nbr_stats.oper_down_mac_trig_instant_refresh+= ptr->nbr_stats.oper_down_mac_trig_instant_refresh;
     gbl_nbr_stats.flush_skip_refresh += ptr->nbr_stats.flush_skip_refresh;
     gbl_nbr_stats.flush_failed_resolve += ptr->nbr_stats.flush_failed_resolve;
     gbl_nbr_stats.flush_refresh += ptr->nbr_stats.flush_refresh;
     gbl_nbr_stats.delay_trig_refresh += ptr->nbr_stats.delay_trig_refresh;
+    gbl_nbr_stats.refresh_for_more_flushes += ptr->nbr_stats.refresh_for_more_flushes;
 
 }
 
 void _nbr_mgr_dump_all_nbr_stats() {
     memset(&gbl_nbr_stats, 0, sizeof(gbl_nbr_stats));
     p_nbr_process_hdl->nbr_db_walk(nbr_mgr_dump_all_nbr_data_stats);
-    NBR_MGR_LOG_ERR("DUMP", "All neighbor STATS refresh:%d delay refresh:%d delay resolve:%d resolve:%d "
-                    "retry:%d mac_np:%d fail_trig:%d stale_ref:%d mac_lrn_ref:%d mac_trig_ref:%d "
-                    "FLUSH skip:%d fail_resolve:%d refresh:%d delay-state-failed-resolve:%d",
-                    gbl_nbr_stats.refresh_cnt, gbl_nbr_stats.delay_refresh_cnt,
+    NBR_MGR_LOG_ERR("DUMP", "All neighbor STATS refresh:%d instant refresh:%d delay refresh:%d delay resolve:%d resolve:%d "
+                    "retry:%d mac_np:%d fail_trig:%d stale_ref:%d mac_lrn_ref:%d mac_trig_ref:%d mac_trig_ref_oper_skip:%d "
+                    " mac_inst_trig_on_oper_down:%d"
+                    " FLUSH skip:%d fail_resolve:%d refresh:%d delay-state-failed-resolve:%d refresh_for_more_flushes:%d",
+                    gbl_nbr_stats.refresh_cnt, gbl_nbr_stats.instant_refresh_cnt, gbl_nbr_stats.delay_refresh_cnt,
                     gbl_nbr_stats.delay_resolve_cnt, gbl_nbr_stats.resolve_cnt,
                     gbl_nbr_stats.retry_cnt, gbl_nbr_stats.mac_not_present_cnt,
                     gbl_nbr_stats.failed_trig_resolve_cnt, gbl_nbr_stats.stale_trig_refresh_cnt,
                     gbl_nbr_stats.hw_mac_learn_refresh_cnt, gbl_nbr_stats.mac_trig_refresh,
+                    gbl_nbr_stats.failed_handle_skip_oper_down,
+                    gbl_nbr_stats.oper_down_mac_trig_instant_refresh,
                     gbl_nbr_stats.flush_skip_refresh, gbl_nbr_stats.flush_failed_resolve,
-                    gbl_nbr_stats.flush_refresh, gbl_nbr_stats.delay_trig_refresh);
+                    gbl_nbr_stats.flush_refresh, gbl_nbr_stats.delay_trig_refresh, gbl_nbr_stats.refresh_for_more_flushes);
 }
 
 void _nbr_mgr_dump_all_nbr_stats_clear(nbr_data const * ptr) {
@@ -126,8 +140,9 @@ void _nbr_mgr_dump_macs(nbr_mgr_dump_entry_t &dump) {
 }
 
 void nbr_mgr_dump_intf_data(nbr_mgr_intf_entry_t intf) {
-    NBR_MGR_LOG_ERR("DUMP", "Intf entry VRF-id:%d ifindex:%d, is_admin_up:%d, VlanId:%d, flags:0x%x hlayer VRF:%d if-index:%d",
-                    intf.vrfid, intf.if_index, intf.is_admin_up, intf.vlan_id, intf.flags,
+    NBR_MGR_LOG_ERR("DUMP", "Intf entry VRF-id:%d ifindex:%d, is_admin_up:%d, is_oper_up:%d VlanId:%d, "
+                    "flags:0x%x hlayer VRF:%d if-index:%d",
+                    intf.vrfid, intf.if_index, intf.is_admin_up, intf.is_oper_up, intf.vlan_id, intf.flags,
                     intf.parent_or_child_vrfid, intf.parent_or_child_if_index);
 }
 
@@ -273,7 +288,7 @@ static void _nbr_mgr_dump_nbr(nbr_mgr_dump_entry_t &dump) {
 
 
 bool nbr_process::nbr_proc_dump_msg(nbr_mgr_dump_entry_t& dump) {
-    NBR_MGR_LOG_ERR("PROC", "DUMP AF:%d VRF-id:%d Nbr-ip:%s Intf:%d type:%d is_dump_all:%d",
+    NBR_MGR_LOG_INFO("PROC", "DUMP AF:%d VRF-id:%d Nbr-ip:%s Intf:%d type:%d is_dump_all:%d",
                      dump.af, dump.vrf_id, dump.nbr_ip, dump.if_index, dump.type, dump.is_dump_all);
 
     switch(dump.type) {
@@ -311,7 +326,7 @@ bool nbr_process::nbr_proc_dump_msg(nbr_mgr_dump_entry_t& dump) {
 bool nbr_mgr_dump_info(nbr_mgr_dump_entry_t *dump) {
     nbr_mgr_msg_t *p_msg = nullptr;
 
-    NBR_MGR_LOG_ERR ("NAS_DUMP","DUMP msg to be enqueued for type:%d vrf-id:%d if-index:%d is_dump_all:%d",
+    NBR_MGR_LOG_INFO ("NAS_DUMP","DUMP msg to be enqueued for type:%d vrf-id:%d if-index:%d is_dump_all:%d",
                       dump->type, dump->vrf_id, dump->if_index, dump->is_dump_all);
     nbr_mgr_msg_uptr_t p_msg_uptr = nbr_mgr_alloc_unique_msg(&p_msg);
     if (p_msg == NULL) {
