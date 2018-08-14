@@ -12,8 +12,8 @@ Vcs-Git: https://github.com/open-switch/opx-nas-l3.git
 
 Package: libopx-nas-l3-1
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends},libopx-nas-common1 (>= 6.1.0),libopx-common1 (>= 1.4.0),libopx-cps1 (>= 3.6.2),
-        libopx-logging1 (>= 2.1.0),libopx-nas-linux1 (>= 5.11.0),libopx-nas-ndi1 (>= 4.6.0)
+Depends: ${shlibs:Depends}, ${misc:Depends},libopx-nas-common1 ,libopx-common1 ,libopx-cps1 ,
+        libopx-logging1 ,libopx-nas-linux1 ,libopx-nas-ndi1 
 Description: This package contains base layer 3 functionality for the Openswitch software.
 
 Package: libopx-nas-l3-dev

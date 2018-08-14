@@ -191,7 +191,8 @@ t_std_error hal_form_nbr_entry(ndi_neighbor_t *p_nbr_entry, t_fib_nh *p_nh)
 
         /* Dont program the link local in the host table, set the state as NDI_NEIGHBOR_ENTRY_NO_HOST_ROUTE
          * for NDI to add SAI_NEIGHBOR_ENTRY_ATTR_NO_HOST_ROUTE */
-        if (STD_IP_IS_ADDR_LINK_LOCAL(&(p_nh->key.ip_addr))) {
+        if (STD_IP_IS_ADDR_LINK_LOCAL(&(p_nh->key.ip_addr)) ||
+            STD_IP_IS_ADDR_V4_LINK_LOCAL(&(p_nh->key.ip_addr))) {
             p_nbr_entry->state = NDI_NEIGHBOR_ENTRY_NO_HOST_ROUTE;
         } else if (p_nh->p_arp_info->state != 0) {
             p_nbr_entry->state  = (uint32_t)p_nh->p_arp_info->state;
