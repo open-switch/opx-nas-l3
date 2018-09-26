@@ -370,7 +370,7 @@ int fib_proc_dr_download (t_fib_route_entry *p_rt_entry, uint32_t nas_num_route_
          */
         if (((nas_num_route_msgs_in_queue * NAS_RT_DR_WALKER_SIG_MIN_THRESHOLD_PERCENT/100)
               < num_route_msgs_processed_before_signalling_dr_walker)) {
-        fib_resume_dr_walker_thread (af_index);
+            fib_resume_dr_walker_thread (af_index);
             num_route_msgs_processed_before_signalling_dr_walker = 0;
             pending_dr_walker_thread_wakeup = false;
         } else {
@@ -656,8 +656,8 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
         if (fib_get_intf_ip (p_intf, &dr_msg_info.prefix) != NULL) {
             HAL_RT_LOG_ERR("HAL-RT-LLA", "IP already exists vrf_id: %d, prefix: %s/%d,"
                            " proto: %d out-if:%d link-local-cnt:%d RIF-ref-cnt:%d route-present:%d RIF-ref-cnt:%d",
-                        dr_msg_info.vrf_id, FIB_IP_ADDR_TO_STR (&dr_msg_info.prefix),
-                        dr_msg_info.prefix_len, dr_msg_info.proto, if_index,
+                           dr_msg_info.vrf_id, FIB_IP_ADDR_TO_STR (&dr_msg_info.prefix),
+                           dr_msg_info.prefix_len, dr_msg_info.proto, if_index,
                            p_dr->num_ipv6_link_local, p_dr->num_ipv6_rif_link_local, is_route_present,
                            hal_rt_rif_ref_get(dr_msg_info.vrf_id, if_index));
 
@@ -893,7 +893,7 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
 
         HAL_RT_LOG_INFO("HAL-RT-LLA", "Route del vrf_id: %d, prefix: %s/%d, "
                        " proto: %d out-if:%d intf-mode:%s link-local-cnt:%d RIF-ref-cnt:%d", p_dr->vrf_id,
-                        FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
+                       FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
                        dr_msg_info.proto, if_index, hal_rt_intf_mode_to_str(p_intf->mode),
                        p_dr->num_ipv6_link_local, hal_rt_rif_ref_get(p_dr->vrf_id, if_index));
 
@@ -1103,16 +1103,15 @@ int fib_proc_dr_del (t_fib_dr *p_dr)
     }
     if (p_dr->status_flag & FIB_DR_STATUS_DEL)
     {
-    fib_mark_dr_dep_nh_for_resolution (p_dr);
+        fib_mark_dr_dep_nh_for_resolution (p_dr);
 
-    fib_delete_all_dr_nh (p_dr);
+        fib_delete_all_dr_nh (p_dr);
 
-    fib_delete_all_dr_fh (p_dr);
+        fib_delete_all_dr_fh (p_dr);
 
-    fib_delete_all_dr_dep_nh (p_dr);
+        fib_delete_all_dr_dep_nh (p_dr);
 
-    fib_del_dr_degen_fh (p_dr);
-
+        fib_del_dr_degen_fh (p_dr);
     }
     if (FIB_IS_DR_WRITTEN (p_dr))
     {

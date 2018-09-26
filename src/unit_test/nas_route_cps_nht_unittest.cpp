@@ -711,18 +711,21 @@ int nas_rt_nht_ut_1_5 (bool is_prereq) {
 
     if (is_prereq)
         return ret;
+
     if (ret == 0) {
-    nht_log_clear();
-    nht_del_route (rt1, pref_len1,p_tr_ip_intf2);
-    ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
-    /* If there is no publish, mark as success */
-    if (ret != 0)
-        ret = 0;
-    nas_rt_nht_print_result ("TC_1_5: STEP2 Direct NH case (dynamic arp) ARP resolved after NHT add", ret);
-    nht_log_clear();
-    nht_intf_admin_set(p_dut_intf2,0);
-    ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
-    nas_rt_nht_print_result ("TC_1_5: Direct NH case (dynamic arp) ARP resolved after NHT add", ret);
+        nht_log_clear();
+        nht_del_route (rt1, pref_len1,p_tr_ip_intf2);
+
+        ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
+        /* If there is no publish, mark as success */
+        if (ret != 0)
+            ret = 0;
+        nas_rt_nht_print_result ("TC_1_5: STEP2 Direct NH case (dynamic arp) ARP resolved after NHT add", ret);
+
+        nht_log_clear();
+        nht_intf_admin_set(p_dut_intf2,0);
+        ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
+        nas_rt_nht_print_result ("TC_1_5: Direct NH case (dynamic arp) ARP resolved after NHT add", ret);
     }
 
     /* clean-up */
@@ -744,11 +747,12 @@ int nas_rt_nht_ut_1_6 (bool is_prereq) {
 
     if (is_prereq)
         return ret;
+
     if (ret == 0) {
-    nht_log_clear();
-    nht_intf_admin_set(p_dut_intf2,0);
-    ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
-    nas_rt_nht_print_result ("TC_1_6: Direct NH case (dynamic arp) ARP moved to unresolved (interface down)", ret);
+        nht_log_clear();
+        nht_intf_admin_set(p_dut_intf2,0);
+        ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
+        nas_rt_nht_print_result ("TC_1_6: Direct NH case (dynamic arp) ARP moved to unresolved (interface down)", ret);
     }
 
     /* clean-up */
@@ -812,28 +816,29 @@ int nas_rt_nht_ut_1_8 (bool is_prereq) {
 
     if (is_prereq)
         return ret;
+
     if (ret == 0) {
-    nht_log_clear();
-    nht_intf_admin_set(p_dut_intf2,0);
-    ret = nas_rt_nht_validate (p_tr_ip3_intf2, 0, p_tr_ip3_intf2, ((af == AF_INET) ? 32 : 128));
-    nas_rt_nht_print_result ("TC_1_8: STEP 2 Re-run TC_1_6", ret);
+        nht_log_clear();
+        nht_intf_admin_set(p_dut_intf2,0);
+        ret = nas_rt_nht_validate (p_tr_ip3_intf2, 0, p_tr_ip3_intf2, ((af == AF_INET) ? 32 : 128));
+        nas_rt_nht_print_result ("TC_1_8: STEP 2 Re-run TC_1_6", ret);
 
-    nht_log_clear();
-    nht_intf_admin_set(p_dut_intf2,1);
-    nht_add_static_arp (p_tr_ip3_intf2, "00:20:00:00:05:00", p_dut_intf2);
-    ret = nas_rt_nht_validate (p_tr_ip3_intf2, 1, p_tr_ip3_intf2, ((af == AF_INET) ? 32 : 128));
-    nas_rt_nht_print_result ("TC_1_8: STEP 3 Re-run TC_1_6", ret);
+        nht_log_clear();
+        nht_intf_admin_set(p_dut_intf2,1);
+        nht_add_static_arp (p_tr_ip3_intf2, "00:20:00:00:05:00", p_dut_intf2);
+        ret = nas_rt_nht_validate (p_tr_ip3_intf2, 1, p_tr_ip3_intf2, ((af == AF_INET) ? 32 : 128));
+        nas_rt_nht_print_result ("TC_1_8: STEP 3 Re-run TC_1_6", ret);
 
-    nht_log_clear();
-    nht_config(p_tr_ip3_intf2, af, 0);
-    nht_intf_admin_set(p_dut_intf2,0);
-    nht_intf_admin_set(p_dut_intf2,1);
-    nht_add_static_arp (p_tr_ip3_intf2, "00:20:00:00:05:00", p_dut_intf2);
-    ret = nas_rt_nht_validate (p_tr_ip3_intf2, 0, p_tr_ip3_intf2, ((af == AF_INET) ? 32 : 128));
-    /* If there is no publish, mark as success */
-    if (ret != 0)
-        ret = 0;
-    nas_rt_nht_print_result ("TC_1_8: Re-run TC_1_6", ret);
+        nht_log_clear();
+        nht_config(p_tr_ip3_intf2, af, 0);
+        nht_intf_admin_set(p_dut_intf2,0);
+        nht_intf_admin_set(p_dut_intf2,1);
+        nht_add_static_arp (p_tr_ip3_intf2, "00:20:00:00:05:00", p_dut_intf2);
+        ret = nas_rt_nht_validate (p_tr_ip3_intf2, 0, p_tr_ip3_intf2, ((af == AF_INET) ? 32 : 128));
+        /* If there is no publish, mark as success */
+        if (ret != 0)
+            ret = 0;
+        nas_rt_nht_print_result ("TC_1_8: Re-run TC_1_6", ret);
     }
 
     /* Cleanup */
