@@ -43,11 +43,11 @@
 #define HAL_RT_V6_ADDR_LEN                HAL_INET6_LEN
 #define HAL_RT_V4_AFINDEX                 HAL_INET4_FAMILY
 #define HAL_RT_V6_AFINDEX                 HAL_INET6_FAMILY
+#define HAL_RT_MAX_VALID_AF_CNT           2
 #define HAL_RT_MAX_INSTANCE               1
 #define HAL_RT_V4_PREFIX_LEN              (8 * HAL_INET4_LEN)
 #define HAL_RT_V6_PREFIX_LEN              (8 * HAL_INET6_LEN)
 #define HAL_RT_MAX_ECMP_PATH              NDI_MAX_NH_ENTRIES_PER_GROUP   /* Maximum supported ECMP paths per Group */
-#define MAX_LEN_VRF_NAME                  32
 #define FIB_MIN_AFINDEX                   HAL_RT_V4_AFINDEX
 #define FIB_MAX_AFINDEX                   (HAL_RT_V6_AFINDEX + 1)
 /* The current neighbor reachable time is 1 hour, if the below variable changes,
@@ -99,6 +99,7 @@ typedef enum _rt_type {
     // MAX value for range check. MUST BE LAST.
     RT_TYPE_MAX,
 } t_rt_type;
+
 enum {
     RT_INTF_ADMIN_STATUS_NONE,
     RT_INTF_ADMIN_STATUS_UP,
@@ -179,6 +180,7 @@ typedef struct _t_fib_gbl_info {
     uint32_t         num_unk_msg;
     uint32_t         num_ip_msg;
     hal_mac_addr_t   base_mac_addr;
+    std_rt_table     *leaked_rt_tree;  /* Each node in the tree is of type t_fib_leaked_rt */
 } t_fib_gbl_info;
 
 typedef struct _t_fib_tnl_key {
@@ -329,7 +331,8 @@ typedef enum {
     FIB_MSG_TYPE_NBR_MGR_NBR_INFO, /* Nbr notification from the Nbr mgr */
     FIB_MSG_TYPE_NL_NBR,
     FIB_MSG_TYPE_INTF_IP_UNREACH_CFG, /* IP unreachable configuration from the user */
-    FIB_MSG_TYPE_INTF_IP_REDIRECTS_CFG /* IP redirects configuration from the user */
+    FIB_MSG_TYPE_INTF_IP_REDIRECTS_CFG, /* IP redirects configuration from the user */
+    FIB_MSG_TYPE_NEIGH_FLUSH /* IP neighbor flush mainly for the leaked ARPs/Neighbors from the user */
 } t_fib_msg_type;
 
 typedef struct  {
@@ -389,6 +392,7 @@ typedef struct {
 typedef struct {
     hal_ifindex_t if_index;
     char          if_name[HAL_IF_NAME_SZ];
+    char          vrf_name[NAS_VRF_NAME_SZ + 1];
     uint8_t af_index; /* This indicates IP unreachable to be generated
                          from the kernel for which address family (IPv4/IPv6) */
     bool is_op_del;
@@ -400,9 +404,15 @@ typedef struct {
 typedef struct {
     hal_ifindex_t if_index;
     char          if_name[HAL_IF_NAME_SZ];
-    char          vrf_name[MAX_LEN_VRF_NAME];
+    char          vrf_name[NAS_VRF_NAME_SZ + 1];
     bool          is_op_del;
 } t_fib_intf_ip_redirects_config;
+
+typedef struct {
+    unsigned long  vrf_id;
+    uint32_t af_index;
+    hal_ifindex_t if_index;
+} t_fib_neigh_flush;
 
 typedef struct {
     t_fib_msg_type type;
@@ -412,6 +422,7 @@ typedef struct {
         t_fib_intf_entry intf;
         t_fib_intf_ip_unreach_config     ip_unreach_cfg;
         t_fib_intf_ip_redirects_config   ip_redirects_cfg;
+        t_fib_neigh_flush neigh_flush;
     };
 } t_fib_msg;
 
@@ -427,6 +438,7 @@ typedef struct {
     hal_ifindex_t   if_index;
     t_fib_ip_addr   prefix;
     bool            is_neigh_flush_with_intf;
+    char             vrf_name[HAL_IF_NAME_SZ + 1];
     uint8_t         prefix_len;
 } t_fib_offload_msg_neigh_flush;
 
@@ -451,6 +463,7 @@ t_fib_offload_msg *hal_rt_alloc_offload_msg();
 #define RT_PER_TLV_MAX_LEN             (2 * (sizeof(unsigned long)))
 #define FIB_RDX_INTF_KEY_LEN           (8 * (sizeof (t_fib_intf_key)))
 #define FIB_RDX_NHT_KEY_LEN           (8 * (sizeof (t_fib_nht_key)))
+#define FIB_RDX_LEAKED_RT_KEY_LEN     (8 * (sizeof (t_fib_leaked_rt_key)))
 
 
 /* Common Data Structures */
@@ -773,4 +786,5 @@ bool hal_rt_process_intf_state_msg(t_fib_msg_type type, t_fib_intf_entry *p_intf
 bool fib_proc_ip_unreach_config_msg(t_fib_intf_ip_unreach_config *p_ip_unreach_cfg);
 t_std_error fib_proc_ip_redirects_config_msg(t_fib_intf_ip_redirects_config *p_ip_redirects_cfg);
 bool hal_rt_process_neigh_flush_offload_msg(t_fib_offload_msg_neigh_flush *p_flush_msg);
+t_std_error fib_process_neigh_flush(t_fib_neigh_flush *flush);
 #endif /* __HAL_RT_MAIN_H__ */

@@ -159,27 +159,39 @@ void fib_dump_peer_mac_db_get_all_with_vrf(hal_vrf_id_t vrf_id)
     return;
 }
 
-t_std_error nas_route_get_all_peer_routing_config(cps_api_object_list_t list){
+t_std_error nas_route_get_all_peer_routing_config(bool is_specific_vrf_get, hal_vrf_id_t filter_vrf_id,
+                                                  cps_api_object_list_t list){
 
     t_fib_vrf      *p_vrf = NULL;
-    uint32_t       vrf_id = 0;
+    uint32_t       vrf_id = (is_specific_vrf_get ? filter_vrf_id : FIB_MIN_VRF);
 
-    for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id ++) {
+    for (;vrf_id < FIB_MAX_VRF; vrf_id++) {
         p_vrf = hal_rt_access_fib_vrf(vrf_id);
         if (p_vrf == NULL) {
-            continue;
+            if (is_specific_vrf_get) {
+                break;
+            } else {
+                continue;
+            }
         }
 
         std_mutex_simple_lock_guard l(&nas_rt_mac_mutex);
         auto vrf_it = peer_mac_list.find(vrf_id);
-        if(vrf_it == peer_mac_list.end()) return STD_ERR_OK;
+        if(vrf_it == peer_mac_list.end()) {
+            if (is_specific_vrf_get) {
+                break;
+            } else {
+                continue;
+            }
+        }
         auto &mac_list = vrf_it->second;
 
         for(auto& x: mac_list){
             nas_rt_peer_mac_config_t *ptr = x.second.get();
             cps_api_object_t obj = nas_route_peer_routing_config_to_cps_object(vrf_id, ptr);
-            if(obj == NULL)
+            if(obj == NULL) {
                 continue;
+            }
 
             if (!cps_api_object_list_append(list,obj)) {
                 cps_api_object_delete(obj);
@@ -187,6 +199,8 @@ t_std_error nas_route_get_all_peer_routing_config(cps_api_object_list_t list){
                 return STD_ERR(ROUTE,FAIL,0);
             }
         }
+        if (is_specific_vrf_get)
+            break;
     }
     return STD_ERR_OK;
 }

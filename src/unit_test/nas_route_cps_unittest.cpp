@@ -377,31 +377,36 @@ TEST(std_nas_route_test, nas_mgmt_route_del_mgmt_vrf) {
     nas_ut_route_test(0, 0, AF_INET, "65.0.0.0", 16, "10.11.70.254", 0, NULL, "management");
     nas_ut_route_test(0, 0, AF_INET6, "6::", 64, NULL, 0, "eth0", "management");
 }
-
+*/
 
 TEST(std_nas_route_test, nas_default_v6_route_add_blackhole) {
-    nas_ut_route_op_spl_nh (1, "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_BLACKHOLE, AF_INET6);
+    nas_ut_route_op_spl_nh (1, "default", "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_BLACKHOLE, AF_INET6);
 }
 
 TEST(std_nas_route_test, nas_default_v6_route_add_unreachable) {
-    nas_ut_route_op_spl_nh (1, "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_UNREACHABLE, AF_INET6);
+    nas_ut_route_op_spl_nh (1, "default", "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_UNREACHABLE, AF_INET6);
 }
 
 TEST(std_nas_route_test, nas_default_v6_route_add_prohibit) {
-    nas_ut_route_op_spl_nh (1, "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_PROHIBIT, AF_INET6);
+    nas_ut_route_op_spl_nh (1, "default", "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_PROHIBIT, AF_INET6);
 }
 
+/*
 TEST(std_nas_route_test, nas_default_v6_route_del_blackhole) {
-    nas_ut_route_op_spl_nh (0, "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_BLACKHOLE, AF_INET6);
+    nas_ut_route_op_spl_nh (0, "default", "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_BLACKHOLE, AF_INET6);
 }
 
 TEST(std_nas_route_test, nas_default_v6_route_del_unreachable) {
-    nas_ut_route_op_spl_nh (0, "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_UNREACHABLE, AF_INET6);
+    nas_ut_route_op_spl_nh (0, "default", "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_UNREACHABLE, AF_INET6);
 }
 
 TEST(std_nas_route_test, nas_default_v6_route_del_prohibit) {
-    nas_ut_route_op_spl_nh (0, "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_PROHIBIT, AF_INET6);
+    nas_ut_route_op_spl_nh (0, "default", "0::0", 0, BASE_ROUTE_SPECIAL_NEXT_HOP_PROHIBIT, AF_INET6);
 }
+
+*/
+
+
 TEST(std_nas_route_test, nas_route_add) {
 
     cps_api_object_t obj = cps_api_object_create();

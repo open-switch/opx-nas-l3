@@ -36,12 +36,18 @@ cps_api_return_code_t nas_ut_rt_cfg (const char *rt_vrf_name, bool is_add, const
 cps_api_return_code_t nas_ut_neigh_cfg (bool is_add, const char *ip_addr, uint8_t af, const char *if_name, hal_mac_addr_t *hw_addr);
 void nas_route_dump_arp_object_content(cps_api_object_t obj);
 cps_api_return_code_t nas_ut_validate_neigh_cfg (const char *vrf_name, uint32_t af, const char *ip_addr,
-                                                 uint32_t state, bool should_exist_in_npu);
+                                                 uint32_t state, bool should_exist_in_npu, const char *nh_vrf_name);
 cps_api_return_code_t nas_ut_validate_rt_cfg (const char *rt_vrf_name, uint32_t af, const char *ip_addr, uint32_t prefix_len,
                                               const char *nh_vrf_name, const char *nh_addr, const char *if_name, bool should_exist_in_npu);
+cps_api_return_code_t nas_ut_validate_rt_ecmp_cfg (const char *rt_vrf_name, uint32_t af, const char *ip_addr, uint32_t prefix_len,
+                                              const char *nh_vrf_name, const char *nh_addr, const char *if_name, bool should_exist_in_npu,
+                                              uint32_t rt_nh_cnt);
 void nas_route_dump_route_object_content(cps_api_object_t obj);
-cps_api_return_code_t nas_ut_rt_ipv6_nh_cfg (bool is_add, const char *ip_addr, uint32_t prefix_len, uint8_t af,
-                                             const char *nh_addr1, const char *if_name1, const char *nh_addr2, const char *if_name2);
+
+cps_api_return_code_t nas_ut_rt_ipv6_nh_cfg (const char *rt_vrf_name, bool is_add, const char *ip_addr,
+                                             uint32_t prefix_len, uint8_t af, const char *nh_vrf_name,
+                                             const char *nh_addr1, const char *if_name1,
+                                             const char *nh_addr2, const char *if_name2);
 cps_api_return_code_t nas_ut_vrf_cfg (const char *vrf_name, bool is_add);
 cps_api_return_code_t nas_ut_intf_vrf_cfg (const char *vrf_name, const char *if_name, bool is_add);
 cps_api_return_code_t nas_ut_intf_mgmt_vrf_cfg(const char *vrf_name, const char *if_name, bool is_add);

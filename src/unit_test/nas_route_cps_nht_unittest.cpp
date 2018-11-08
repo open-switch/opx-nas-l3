@@ -34,6 +34,10 @@
 #include "cps_api_object_key.h"
 
 
+#include <ctime>
+#include <chrono>
+#include <iomanip>
+
 #include <gtest/gtest.h>
 #include <iostream>
 #include <sys/socket.h>
@@ -82,6 +86,7 @@ int pref_len6_1 = 16, pref_len6_2 = 32, pref_len6_3 = 48, pref_len6_4 = 128;
 int af6 = AF_INET6;
 
 bool g_scaled_test = false;
+static char time_start[100] = "\0";
 
 
 int nas_rt_nht_validate_util (const char *nht_dest, uint32_t nh_count,
@@ -397,13 +402,32 @@ void nht_intf_admin_set(const char *p_b2b_intf, bool is_up)
     if (g_scaled_test == false) sleep(2);
 }
 
+int nas_nht_get_time_str (char *ts_start, int str_len)
+{
+    if (!ts_start)
+        return 1;
+
+    //current time
+    std::chrono::time_point<std::chrono::system_clock> time_now = std::chrono::system_clock::now();
+    std::time_t time_now_t = std::chrono::system_clock::to_time_t(time_now);
+
+    //print time string
+    std::tm now_tm = *std::localtime(&time_now_t);
+    std::strftime(ts_start, str_len, "%Y-%m-%d %H:%M:%S", &now_tm);
+
+    return 0;
+}
+
 void nht_log_clear()
 {
-    if(system("echo 0 > /var/log/messages"));
+    time_start[0] = '\0';
+    if (nas_nht_get_time_str (time_start, 100))
+        printf ("\r\n!!!Error in retrieving timestamp!!!\r\n");
 }
+
 int nas_rt_nht_validate(const char *nht_dest, uint32_t nh_count,
                          const char *fib_best_match, uint32_t pref_len) {
-    sleep(2);
+    sleep(5);
     return (nas_rt_nht_validate_util(nht_dest, nh_count, fib_best_match, pref_len));
 }
 
@@ -425,9 +449,34 @@ int nas_rt_nht_validate_util (const char *nht_dest, uint32_t nh_count,
     }
     snprintf (pattern_str, 49, "%s", "NHT Event publish for ");
 
-    snprintf (cmd_str, 499, "grep \"%s\" /var/log/messages |  grep \"%s\"", pattern_str, find_str);
+    snprintf (cmd_str, 499, "journalctl --since \"%s\" -u base_nas_svc | grep -a \"%s\" |  grep \"%s\"", time_start, pattern_str, find_str);
     ret = system(cmd_str);
     return ret;
+}
+
+
+int nas_rt_nht_validate_util_acl_cleanup (const char *nht_dest, uint32_t nh_count,
+                         const char *fib_best_match, uint32_t pref_len) {
+    int ret = 0;
+    char pattern_str[50];
+    char find_str[300];
+    char cmd_str[500];
+
+    if (nht_dest == NULL) {
+        snprintf (find_str, 199, " "); /* for case where no event should be published */
+    } else {
+        snprintf (find_str, 199, "%s/%d,", nht_dest, pref_len);
+    }
+    snprintf (pattern_str, 49, "%s", "Dependent ACLs cleanup successful for Addr");
+
+    snprintf (cmd_str, 499, "journalctl --since \"%s\" -u base_nas_svc | grep -a \"%s\" |  grep \"%s\"", time_start, pattern_str, find_str);
+    ret = system(cmd_str);
+    return ret;
+}
+
+int nas_rt_nht_validate_acl_cleanup (const char *nht_dest, uint32_t nh_count,
+                         const char *fib_best_match, uint32_t pref_len) {
+    return (nas_rt_nht_validate_util_acl_cleanup(nht_dest, nh_count, fib_best_match, pref_len));
 }
 
 void nas_rt_nht_print_result (const char *tc_str, int ret) {
@@ -606,12 +655,14 @@ int nas_rt_nht_ut_1_3 (bool is_prereq) {
     nas_rt_nht_print_result ( "TC_1_3: STEP-1 Direct NH case (static) ARP delete", ret);
     if (is_prereq)
         return ret;
+
     if (ret == 0) {
-    nht_log_clear();
-    nht_del_static_arp (p_tr_ip3_intf1, p_dut_intf1);
-    ret = nas_rt_nht_validate (p_tr_ip3_intf1, 0, p_tr_ip3_intf1, ((af == AF_INET) ? 32 : 128));
-    nas_rt_nht_print_result ( "TC_1_3: Direct NH case (static) ARP delete", ret);
+        nht_log_clear();
+        nht_del_static_arp (p_tr_ip3_intf1, p_dut_intf1);
+        ret = nas_rt_nht_validate (p_tr_ip3_intf1, 0, p_tr_ip3_intf1, ((af == AF_INET) ? 32 : 128));
+        nas_rt_nht_print_result ( "TC_1_3: Direct NH case (static) ARP delete", ret);
     }
+
     /* clean-up */
     nht_config(p_tr_ip3_intf1, af, 0);
     nht_del_route (rt1, pref_len2, p_tr_ip3_intf1);
@@ -631,13 +682,15 @@ int nas_rt_nht_ut_1_4 (bool is_prereq) {
 
     ret = nas_rt_nht_validate (p_tr_ip_intf2, 1, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
     nas_rt_nht_print_result ("TC_1_4: STEP 1 Direct NH case (dynamic arp) ARP resolved before NHT add", ret);
+
     if (is_prereq)
         return ret;
+
     if (ret == 0) {
-    nht_log_clear();
-    nht_intf_admin_set(p_dut_intf2,0);
-    ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
-    nas_rt_nht_print_result ("TC_1_4: Direct NH case (dynamic arp) ARP resolved before NHT add", ret);
+        nht_log_clear();
+        nht_intf_admin_set(p_dut_intf2,0);
+        ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
+        nas_rt_nht_print_result ("TC_1_4: Direct NH case (dynamic arp) ARP resolved before NHT add", ret);
     }
 
     /* clean-up */
@@ -662,18 +715,21 @@ int nas_rt_nht_ut_1_5 (bool is_prereq) {
 
     if (is_prereq)
         return ret;
+
     if (ret == 0) {
-    nht_log_clear();
-    nht_del_route (rt1, pref_len1,p_tr_ip_intf2);
-    ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
-    /* If there is no publish, mark as success */
-    if (ret != 0)
-        ret = 0;
-    nas_rt_nht_print_result ("TC_1_5: STEP2 Direct NH case (dynamic arp) ARP resolved after NHT add", ret);
-    nht_log_clear();
-    nht_intf_admin_set(p_dut_intf2,0);
-    ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
-    nas_rt_nht_print_result ("TC_1_5: Direct NH case (dynamic arp) ARP resolved after NHT add", ret);
+        nht_log_clear();
+        nht_del_route (rt1, pref_len1,p_tr_ip_intf2);
+
+        ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
+        /* If there is no publish, mark as success */
+        if (ret != 0)
+            ret = 0;
+        nas_rt_nht_print_result ("TC_1_5: STEP2 Direct NH case (dynamic arp) ARP resolved after NHT add", ret);
+
+        nht_log_clear();
+        nht_intf_admin_set(p_dut_intf2,0);
+        ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
+        nas_rt_nht_print_result ("TC_1_5: Direct NH case (dynamic arp) ARP resolved after NHT add", ret);
     }
 
     /* clean-up */
@@ -695,11 +751,12 @@ int nas_rt_nht_ut_1_6 (bool is_prereq) {
 
     if (is_prereq)
         return ret;
+
     if (ret == 0) {
-    nht_log_clear();
-    nht_intf_admin_set(p_dut_intf2,0);
-    ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
-    nas_rt_nht_print_result ("TC_1_6: Direct NH case (dynamic arp) ARP moved to unresolved (interface down)", ret);
+        nht_log_clear();
+        nht_intf_admin_set(p_dut_intf2,0);
+        ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
+        nas_rt_nht_print_result ("TC_1_6: Direct NH case (dynamic arp) ARP moved to unresolved (interface down)", ret);
     }
 
     /* clean-up */
@@ -740,6 +797,7 @@ int nas_rt_nht_ut_1_7 (bool is_prereq) {
         ret = 0;
     nas_rt_nht_print_result ("TC_1_7: STEP4 Direct NH case (dynamic arp) NHT add for same dest from multiple clients", ret);
     nht_log_clear();
+
     nht_intf_admin_set(p_dut_intf2,0);
     ret = nas_rt_nht_validate (p_tr_ip_intf2, 0, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
     nas_rt_nht_print_result ("TC_1_7: Direct NH case (dynamic arp) NHT add for same dest from multiple clients", ret);
@@ -763,28 +821,29 @@ int nas_rt_nht_ut_1_8 (bool is_prereq) {
 
     if (is_prereq)
         return ret;
+
     if (ret == 0) {
-    nht_log_clear();
-    nht_intf_admin_set(p_dut_intf2,0);
-    ret = nas_rt_nht_validate (p_tr_ip3_intf2, 0, p_tr_ip3_intf2, ((af == AF_INET) ? 32 : 128));
-    nas_rt_nht_print_result ("TC_1_8: STEP 2 Re-run TC_1_6", ret);
+        nht_log_clear();
+        nht_intf_admin_set(p_dut_intf2,0);
+        ret = nas_rt_nht_validate (p_tr_ip3_intf2, 0, p_tr_ip3_intf2, ((af == AF_INET) ? 32 : 128));
+        nas_rt_nht_print_result ("TC_1_8: STEP 2 Re-run TC_1_6", ret);
 
-    nht_log_clear();
-    nht_intf_admin_set(p_dut_intf2,1);
-    nht_add_static_arp (p_tr_ip3_intf2, "00:20:00:00:05:00", p_dut_intf2);
-    ret = nas_rt_nht_validate (p_tr_ip3_intf2, 1, p_tr_ip3_intf2, ((af == AF_INET) ? 32 : 128));
-    nas_rt_nht_print_result ("TC_1_8: STEP 3 Re-run TC_1_6", ret);
+        nht_log_clear();
+        nht_intf_admin_set(p_dut_intf2,1);
+        nht_add_static_arp (p_tr_ip3_intf2, "00:20:00:00:05:00", p_dut_intf2);
+        ret = nas_rt_nht_validate (p_tr_ip3_intf2, 1, p_tr_ip3_intf2, ((af == AF_INET) ? 32 : 128));
+        nas_rt_nht_print_result ("TC_1_8: STEP 3 Re-run TC_1_6", ret);
 
-    nht_log_clear();
-    nht_config(p_tr_ip3_intf2, af, 0);
-    nht_intf_admin_set(p_dut_intf2,0);
-    nht_intf_admin_set(p_dut_intf2,1);
-    nht_add_static_arp (p_tr_ip3_intf2, "00:20:00:00:05:00", p_dut_intf2);
-    ret = nas_rt_nht_validate (p_tr_ip3_intf2, 0, p_tr_ip3_intf2, ((af == AF_INET) ? 32 : 128));
-    /* If there is no publish, mark as success */
-    if (ret != 0)
-        ret = 0;
-    nas_rt_nht_print_result ("TC_1_8: Re-run TC_1_6", ret);
+        nht_log_clear();
+        nht_config(p_tr_ip3_intf2, af, 0);
+        nht_intf_admin_set(p_dut_intf2,0);
+        nht_intf_admin_set(p_dut_intf2,1);
+        nht_add_static_arp (p_tr_ip3_intf2, "00:20:00:00:05:00", p_dut_intf2);
+        ret = nas_rt_nht_validate (p_tr_ip3_intf2, 0, p_tr_ip3_intf2, ((af == AF_INET) ? 32 : 128));
+        /* If there is no publish, mark as success */
+        if (ret != 0)
+            ret = 0;
+        nas_rt_nht_print_result ("TC_1_8: Re-run TC_1_6", ret);
     }
 
     /* Cleanup */
@@ -944,6 +1003,88 @@ int nas_rt_nht_ut_2_6(bool is_prereq) {
     nht_del_route (rt1,pref_len1, p_tr_ip_intf1);
     nht_intf_admin_set(p_dut_intf1,0);
     nht_intf_admin_set(p_dut_intf1,1);
+    return ret;
+}
+
+int nas_rt_nht_ut_2_7(bool is_prereq) {
+    int ret = 0;
+
+    nht_log_clear();
+
+    /* TC_2_7 - 2 NHT's pointing to same egress NH
+     * 1) NHT pointing to directly connected neighbor
+     * 2) NHT via recursive route resolution - Route with NH to directly connected neighbor
+     */
+
+    do {
+
+        /* configure NHT to directly connected neighbor */
+        nht_config(p_tr_ip_intf2, af, 1);
+        nht_resolve_nh(p_tr_ip_intf2);
+        ret = nas_rt_nht_validate (p_tr_ip_intf2, 1, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
+        nas_rt_nht_print_result ("TC_2_7: Step 1 - NHT pointing to directly connected neighbor", ret);
+
+        if (ret != 0)
+            break;
+
+        /* configure route via directly connected neighbor and NHT to a destination thru that route */
+        nht_log_clear();
+        nht_add_route (rt1,pref_len3, p_tr_ip_intf2);
+        nht_config(nht1, af, 1);
+        ret = nas_rt_nht_validate (nht1, 1, rt1, pref_len3);
+        nas_rt_nht_print_result ("TC_2_7: Step 2 - NHT via recursive route resolution", ret);
+
+        if (ret != 0)
+            break;
+
+        if (is_prereq)
+            return ret;
+
+        /* delete the route via directly connected neighbor and
+         * check the NHT update happens only for that one thru that route and not for NHT pointing to the directly connected neighbor.
+         */
+        nht_log_clear();
+        nht_del_route (rt1,pref_len3, p_tr_ip_intf2);
+        ret = nas_rt_nht_validate (nht1, 0, NULL, 0);
+        nas_rt_nht_print_result ("TC_2_7: Step 3 - route delete and NHT update for NHT via recursive route resolution", ret);
+
+        if (ret != 0)
+            break;
+
+        /* also verify ACL cleanup was not triggered from NAS-L3 */
+        ret = nas_rt_nht_validate_acl_cleanup (rt1, 1, NULL, pref_len3);
+        ret = !ret;
+        nas_rt_nht_print_result ("TC_2_7: Step 4 - validation for ACL cleanup from NAS", ret);
+
+        if (ret != 0)
+            break;
+
+        ret = nas_rt_nht_validate (p_tr_ip_intf2, 1, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
+        ret = !ret;
+        nas_rt_nht_print_result ("TC_2_7: Step 5 - No updates to NHT pointing to directly connected neighbor", ret);
+
+        if (ret != 0)
+            break;
+
+        /* also verify ACL cleanup was not triggered from NAS-L3 */
+        ret = nas_rt_nht_validate_acl_cleanup (p_tr_ip_intf2, 1, p_tr_ip_intf2, ((af == AF_INET) ? 32 : 128));
+        ret = !ret;
+        nas_rt_nht_print_result ("TC_2_7: Step 6 - validation for ACL cleanup from NAS", ret);
+
+        if (ret != 0)
+            break;
+
+    } while(0);
+
+    /* clean-up */
+    nht_config(p_tr_ip_intf2, af, 0);
+    nht_config(nht1, af, 0);
+    nht_del_route (rt1,pref_len3, p_tr_ip_intf2);
+    nht_intf_admin_set(p_dut_intf1,0);
+    nht_intf_admin_set(p_dut_intf2,0);
+
+    nht_intf_admin_set(p_dut_intf1,1);
+    nht_intf_admin_set(p_dut_intf2,1);
     return ret;
 }
 
@@ -1468,6 +1609,7 @@ int nas_rt_nht_ut_6_1(bool is_prereq) {
 
     nht_log_clear();
 
+    /* delete default management route if any */
     nht_add_route (rt5,0, p_tr_ip_intf1);
 
     nht_config(nht1, af, 1);
@@ -1479,7 +1621,7 @@ int nas_rt_nht_ut_6_1(bool is_prereq) {
             break;
     }while(0);
     if (ret != 0) {
-        nas_rt_nht_print_result("TC_6_1 STEP-1 - Default route coverage for best match case", ret);
+        nas_rt_nht_print_result("TC_6_1 STEP-1 - Default route coverage for best match case. Delete default management route if any.", ret);
     } else {
         nht_add_route (rt2, pref_len2, p_tr_ip_intf2);
         nht_resolve_nh(p_tr_ip_intf2);
@@ -1563,7 +1705,7 @@ int nas_rt_nht_ut_8_1(bool is_prereq) {
     nht_config_scale (nht_network4, af, 1, num_nht);
     do {
         nht_resolve_nh(p_tr_ip_intf1);
-        sleep (10);
+        sleep (50);
 
         do {
             if ((ret = nas_rt_nht_validate_multi_nht_to_one_route (nht_network1, 1, rt1, pref_len2, af, num_nht)) != 0) break;
@@ -1628,7 +1770,7 @@ int nas_rt_nht_ut_8_2(bool is_prereq) {
     nht_config_scale_with_prefix (nht_network4, af, 1, num_nht, pref_len3);
     do {
         nht_resolve_nh(p_tr_ip_intf1);
-        sleep (10);
+        sleep (50);
         do {
             if ((ret = nas_rt_nht_validate_one_nht_to_one_route (nht_network1, 1, rt1_prefix, pref_len3, af, num_nht)) != 0)
                 break;
@@ -2026,6 +2168,10 @@ TEST(std_nas_route_test, nas_nht_ut_2_6) {
     nas_rt_nht_ut_2_6(false);
 }
 
+TEST(std_nas_route_test, nas_nht_ut_2_7) {
+    nas_rt_nht_ut_2_7(false);
+}
+
 TEST(std_nas_route_test, nas_nht_ut_3_1) {
     nas_rt_nht_ut_3_1(false);
 }
@@ -2090,7 +2236,6 @@ TEST(std_nas_route_test, nas_nht_ut_9_1) {
     nas_rt_nht_ut_9_1(false);
 }
 
-
 void nas_rt_nht_route_info() {
 
     if (af == AF_INET) {
@@ -2117,6 +2262,7 @@ TEST(std_nas_route_test, nas_nht_ut) {
     int ret_ut_2_4 = 0;
     int ret_ut_2_5 = 0;
     int ret_ut_2_6 = 0;
+    int ret_ut_2_7 = 0;
     int ret_ut_3_1 = 0;
     int ret_ut_3_2 = 0;
     int ret_ut_3_3 = 0;
@@ -2149,6 +2295,7 @@ TEST(std_nas_route_test, nas_nht_ut) {
     ret_ut_2_4 = nas_rt_nht_ut_2_4(false);
     ret_ut_2_5 = nas_rt_nht_ut_2_5(false);
     ret_ut_2_6 = nas_rt_nht_ut_2_6(false);
+    ret_ut_2_7 = nas_rt_nht_ut_2_7(false);
     nas_route_nht_get (af);
 
     ret_ut_3_1 = nas_rt_nht_ut_3_1(false);
@@ -2196,6 +2343,7 @@ TEST(std_nas_route_test, nas_nht_ut) {
     nas_rt_nht_print_result ( "TC_2_4", ret_ut_2_4);
     nas_rt_nht_print_result ( "TC_2_5", ret_ut_2_5);
     nas_rt_nht_print_result ( "TC_2_6", ret_ut_2_6);
+    nas_rt_nht_print_result ( "TC_2_7", ret_ut_2_7);
     nas_rt_nht_print_result ( "TC_3_1", ret_ut_3_1);
     nas_rt_nht_print_result ( "TC_3_2", ret_ut_3_2);
     nas_rt_nht_print_result ( "TC_3_3", ret_ut_3_3);
@@ -2216,7 +2364,10 @@ TEST(std_nas_route_test, nas_nht_ut) {
 
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
-
+  /* Topology pre-requisite.
+   * Configure ports p_dut_intf1 & p_dut_intf2 in DUT with IP address.
+   * Configure ports p_tr_intf1 & p_tr_intf2 in TR with all primary & secondary address.
+   */
 
   printf("___________________________________________\n");
   /* Incase of premium package, all the ports are part of default bridge,
@@ -2256,7 +2407,7 @@ int main(int argc, char **argv) {
   printf("___________________________________________\n");
 
   /* Please update journal settings to disable log suppression/rate-limiting
-   * so that the required logs are logged in /var/log/messages file.
+   * so that the required logs are logged correctly.
    * Edit /etc/systemd/journald.conf for following settings to
    * disable rate-limiting and restart journal service
    * #RateLimitInterval=30s   ==> RateLimitInterval=0s
@@ -2268,7 +2419,7 @@ int main(int argc, char **argv) {
   if(system("sed -i '/#RateLimitBurst=1000/c RateLimitBurst=0' /etc/systemd/journald.conf"));
   if(system("service systemd-journald restart"));
 
-  if(system("os10-logging enable ROUTE DEBUG"));
+  if(system("opx-logging enable ROUTE INFO"));
   if(system("kill -USR1 `pidof base_nas`"));
 
   if (RUN_ALL_TESTS())
@@ -2279,7 +2430,7 @@ int main(int argc, char **argv) {
   printf ("\r\n !!! Test Completed !!! \r\n");
 
   /* revert back logging related changes done for executing the UT */
-  if(system("os10-logging disable ROUTE DEBUG"));
+  if(system("opx-logging disable ROUTE INFO"));
   if(system("kill -USR1 `pidof base_nas`"));
 
   if(system("sed -i '/SystemMaxUse=250M/c SystemMaxUse=50M' /etc/systemd/journald.conf"));

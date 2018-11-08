@@ -21,6 +21,7 @@
 #include "nbr_mgr_main.h"
 #include "nbr_mgr_cache.h"
 #include "nbr_mgr_log.h"
+#include "std_utils.h"
 #include <exception>
 #include <sstream>
 
@@ -361,7 +362,7 @@ void nbr_mgr_dump_nbr(uint32_t af, uint32_t vrf_id, const char *nbr_ip, uint32_t
     memset(&dump, 0, sizeof(dump));
     dump.af = af;
     dump.vrf_id = vrf_id;
-    strncpy(dump.nbr_ip, nbr_ip, sizeof(dump.nbr_ip));
+    safestrncpy(dump.nbr_ip, nbr_ip, sizeof(dump.nbr_ip));
     dump.if_index = if_index;
     dump.type = NBR_MGR_DUMP_NBR;
     nbr_mgr_dump_info(&dump);

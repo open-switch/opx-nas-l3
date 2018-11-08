@@ -65,6 +65,10 @@
 
 #define FIB_GET_IP_FROM_LINK_NODE_GLUE(_p_dll) \
         ((t_fib_ip_addr *) (((t_fib_link_node *)(((char *) (_p_dll)) - offsetof (t_fib_link_node, glue)))->self))
+
+#define FIB_GET_VRF_FROM_LINK_NODE_GLUE(_p_dll) \
+        ((hal_vrf_id_t *) (((t_fib_link_node *)(((char *) (_p_dll)) - offsetof (t_fib_link_node, glue)))->self))
+
 /* FH node and the NH node typedefs are the same. */
 #define FIB_GET_FH_FROM_LINK_NODE_GLUE(_p_dll) \
         FIB_GET_NH_FROM_LINK_NODE_GLUE (_p_dll)
@@ -96,6 +100,10 @@
 
 #define FIB_GET_LINK_NODE_FROM_IP_HOLDER(_ip_holder) \
         ((t_fib_link_node *)(_ip_holder).p_dll)
+
+#define FIB_GET_LINK_NODE_FROM_VRF_HOLDER(_vrf_holder) \
+        ((t_fib_link_node *)(_vrf_holder).p_dll)
+
 #define FIB_GET_FH_FROM_DRFH(_p_dr_fh) \
         (t_fib_nh *)((_p_dr_fh)->link_node.self)
 
@@ -189,6 +197,17 @@
         ((((_ip_holder).p_next_dll \
            = FIB_DLL_GET_NEXT (&((_p_intf)->ip_list), (_ip_holder).p_dll)) != NULL) \
          ? FIB_GET_IP_FROM_LINK_NODE_GLUE((_ip_holder).p_next_dll) : NULL)
+
+#define FIB_GET_FIRST_LEAKED_VRF_FROM_DR(_p_leaked_rt, _vrf_holder) \
+        ((((_vrf_holder).p_dll = \
+           FIB_DLL_GET_FIRST (&((_p_leaked_rt)->leaked_vrf_list))) != NULL) \
+         ? FIB_GET_VRF_FROM_LINK_NODE_GLUE((_vrf_holder).p_dll) : NULL)
+
+#define FIB_GET_NEXT_LEAKED_VRF_FROM_DR(_p_leaked_rt, _vrf_holder) \
+        ((((_vrf_holder).p_next_dll \
+           = FIB_DLL_GET_NEXT (&((_p_leaked_rt)->leaked_vrf_list), (_vrf_holder).p_dll)) != NULL) \
+         ? FIB_GET_VRF_FROM_LINK_NODE_GLUE((_vrf_holder).p_next_dll) : NULL)
+
 /*
  * FIB_GET_NEXT_PENDING_FH_FROM_INTF should NOT be used without using
  * FIB_GET_FIRST_PENDING_FH_FROM_INTF
@@ -286,6 +305,7 @@
              (_ip_holder).p_dll = (_ip_holder).p_next_dll, \
              _ip_holder.p_next_ip = (((_p_ip) != NULL) ? \
                FIB_GET_NEXT_IP_FROM_INTF ((_p_intf), (_ip_holder)) : NULL))
+
 #define FIB_FOR_EACH_PENDING_FH_FROM_INTF(_p_intf, _p_fh, _nh_holder) \
         for ((_p_fh) = \
              FIB_GET_FIRST_PENDING_FH_FROM_INTF ((_p_intf), (_nh_holder)), \
@@ -317,6 +337,18 @@
              (_nh_holder).p_dll = (_nh_holder).p_next_dll, \
              (_nh_holder).p_next_fh = (((_p_fh) != NULL) ? \
                   FIB_GET_NEXT_TUNNEL_FH_FROM_NH ((_p_nh), (_nh_holder)) : NULL))
+
+#define FIB_FOR_EACH_LEAKED_VRF_FROM_DR(_p_leaked_rt, _p_vrf, _vrf_holder) \
+        for ((_p_vrf) = \
+             FIB_GET_FIRST_LEAKED_VRF_FROM_DR ((_p_leaked_rt), (_vrf_holder)), \
+             (_vrf_holder).p_next_vrf = (((_p_vrf) != NULL) ? \
+               FIB_GET_NEXT_LEAKED_VRF_FROM_DR ((_p_leaked_rt), (_vrf_holder)) : NULL); \
+             (_p_vrf) != NULL; \
+             (_p_vrf) = (_vrf_holder).p_next_vrf, \
+             (_vrf_holder).p_dll = (_vrf_holder).p_next_dll, \
+             _vrf_holder.p_next_vrf = (((_p_vrf) != NULL) ? \
+               FIB_GET_NEXT_LEAKED_VRF_FROM_DR ((_p_leaked_rt), (_vrf_holder)) : NULL))
+
 
 /* Values of 'state' in 't_fib_dr_fh' */
 #define FIB_DRFH_STATUS_WRITTEN      0x1
@@ -385,6 +417,7 @@
          (_rt_type_ == RT_UNREACHABLE) ||                                   \
          (_rt_type_ == RT_CACHE) ||                                         \
          (_rt_type_ == RT_PROHIBIT))
+
 #define FIB_IS_NH_RESERVED(_p_nh)                                             \
         ((FIB_IS_NH_LOOP_BACK ((_p_nh))) ||                                   \
          (FIB_IS_NH_ZERO ((_p_nh))))
@@ -510,6 +543,18 @@ typedef struct _t_fib_nht {
                                        to the App and FALSE otherwise */
 }t_fib_nht;
 
+typedef struct _t_fib_leaked_rt_key {
+    hal_vrf_id_t     vrf_id;
+    uint8_t          prefix_len;
+    t_fib_ip_addr    prefix;
+} t_fib_leaked_rt_key;
+
+typedef struct _t_fib_leaked_rt {
+    std_rt_head      rt_head;
+    t_fib_leaked_rt_key key; /* Client given route/nexthop is present in the key */
+    std_dll_head     leaked_vrf_list; /* This holds the VRF-ids of the leaked VRFs */
+}t_fib_leaked_rt;
+
 typedef struct _t_fib_dr {
     std_radical_head_t radical;
     t_fib_dr_key       key;
@@ -545,6 +590,10 @@ typedef struct _t_fib_dr {
     t_rt_type          rt_type;     /* route with special nexthop types -
                                      * blackhole/unreachable/prohibit */
     bool               is_mgmt_route;
+    hal_vrf_id_t       parent_vrf_id; /* This helps creating the NH in leaked VRF with parent VRF
+                                         and then to resolve the ARP in the parent VRF */
+    uint8_t            rt_cfg_prefix_len; /* This holds the configured prefix len of an IP address,
+                                             in case of regular route, this field is not applicable. */
 } t_fib_dr;
 
 typedef struct _t_fib_nh_key {
@@ -592,6 +641,12 @@ typedef struct _t_fib_nh {
     bool               is_nht_active; /* true - if this NH is being tracked
                                         for PBR and ER-SPAN, false otherwise */
     bool               is_mgmt_nh;
+    hal_vrf_id_t       parent_vrf_id; /* Incase of regular ARP, vrf_id and parent_vrf_id are same
+                                     and for leaked ARP case, this parent_vrf_id holds the parent VRF
+                                     and vrf_id holds the leaked VRF */
+    uint32_t           clnts_ref_cnt; /* In case of parent NH being referrred by multiple leaked NH,
+                                       increment this counter in the parent NH and notify nbr-mgr accordingly
+                                       for proactive resolution */
 } t_fib_nh;
 
 /*
@@ -616,6 +671,13 @@ typedef struct _t_fib_ip_holder {
     std_dll         *p_next_dll;
     t_fib_ip_addr   *p_next_ip;
 } t_fib_ip_holder;
+
+typedef struct _t_fib_vrf_holder {
+    std_dll         *p_dll;
+    std_dll         *p_next_dll;
+    hal_vrf_id_t    *p_next_vrf;
+} t_fib_vrf_holder;
+
 typedef struct _t_fib_dr_nh {
     t_fib_link_node  link_node;
     /* Add any new fields above this */
@@ -843,8 +905,13 @@ int fib_create_intf_tree (void);
 
 int fib_destroy_intf_tree (void);
 
+int fib_create_leaked_rt_tree(void);
+
+int fib_destroy_leaked_rt_tree(void);
+
 t_fib_nh *fib_proc_nh_add (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr, uint32_t if_index,
-                      t_fib_nh_owner_type owner_type, uint32_t owner_value, bool is_mgmt_nh);
+                      t_fib_nh_owner_type owner_type, uint32_t owner_value, bool is_mgmt_nh,
+                      uint32_t parent_vrf_id);
 
 int fib_proc_nh_delete (t_fib_nh *p_nh, t_fib_nh_owner_type owner_type, uint32_t owner_value);
 
@@ -974,7 +1041,7 @@ t_fib_cmp_result fib_arp_info_cmp (t_fib_nh *p_fh, t_fib_arp_msg_info *p_fib_arp
 
 
 int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool isAdd);
-int nas_rt_handle_nht (t_fib_nht *p_nht_info, bool isAdd);
+int nas_rt_handle_nht (t_fib_nht *p_nht_info, bool isAdd, bool is_force_del);
 int fib_handle_intf_admin_status_change(int vrf_id, int af_index, t_fib_intf_entry *p_intf_chg);
 t_std_error fib_process_intf_mode_change (int vrf_id, int af_index, uint32_t if_index, uint32_t mode);
 int nas_route_process_nbr_refresh(cps_api_object_t obj);
@@ -986,4 +1053,9 @@ t_fib_intf *fib_get_first_intf ();
 t_fib_intf *fib_get_next_intf (uint32_t if_index, uint32_t vrf_id, uint8_t af_index);
 t_std_error fib_del_all_intf_ip (t_fib_intf *p_intf);
 t_std_error fib_nh_del_nh(t_fib_nh *p_nh, bool is_force_del);
+t_std_error hal_rt_leaked_nbr_prg(hal_vrf_id_t vrf_id, t_fib_nh *p_fh, bool is_add);
+t_std_error fib_prg_leaked_nbrs_on_leaked_route_update (hal_ifindex_t if_index, t_fib_dr *parent_dr, hal_vrf_id_t leaked_vrf_id, bool is_add);
+t_std_error fib_prg_leaked_nbrs_on_parent_route_update(t_fib_dr *p_dr, bool is_add);
+t_std_error nas_rt_flush_nhts(hal_vrf_id_t vrf_id, int af_index);
+t_std_error hal_rt_vrf_update (hal_vrf_id_t vrf_id, bool is_add);
 #endif /* __HAL_RT_ROUTE_H__ */

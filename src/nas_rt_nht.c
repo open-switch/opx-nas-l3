@@ -299,6 +299,7 @@ int nas_rt_find_next_best_dr_for_nht(t_fib_nht *p_fib_nht, int vrf_id, t_fib_ip_
     bool is_multiple_nht = false, is_conn_route_found = false;
     t_fib_nh_holder nh_holder;
     t_fib_ip_addr mask;
+    int parent_vrf_id = vrf_id;
 
     *is_next_best_rt_found = false;
     memset (&mask, 0, sizeof (t_fib_ip_addr));
@@ -307,6 +308,7 @@ int nas_rt_find_next_best_dr_for_nht(t_fib_nht *p_fib_nht, int vrf_id, t_fib_ip_
                          dest_addr->af_index);
         return STD_ERR_OK;
     }
+
     HAL_RT_LOG_DEBUG("HAL-RT-NHT", "vrf_id:%d, Route/NH/NHT:%s/%d NHT:%p ",
                  vrf_id, FIB_IP_ADDR_TO_STR (dest_addr), prefix_len, p_fib_nht);
 
@@ -324,10 +326,10 @@ int nas_rt_find_next_best_dr_for_nht(t_fib_nht *p_fib_nht, int vrf_id, t_fib_ip_
 
     p_best_dr = fib_get_best_fit_dr(vrf_id, dest_addr);
     while(p_best_dr) {
-        HAL_RT_LOG_DEBUG("HAL-RT-NHT", "vrf_id:%d, route:%s/%d is best match for %s/%d"
-                         " nh_handle:%lu nh-resolved:%d", vrf_id, FIB_IP_ADDR_TO_STR (&p_best_dr->key.prefix),
+        HAL_RT_LOG_INFO("HAL-RT-NHT", "vrf_id:%d, parent vrf:%d route:%s/%d is best match for %s/%d is_multiple_nht:%d"
+                         " nh_handle:%lu nh-resolved:%d", vrf_id, p_best_dr->parent_vrf_id, FIB_IP_ADDR_TO_STR (&p_best_dr->key.prefix),
                          p_best_dr->prefix_len, FIB_IP_ADDR_TO_STR(dest_addr), prefix_len, p_best_dr->nh_handle,
-                         p_best_dr->is_nh_resolved);
+                         p_best_dr->is_nh_resolved, is_multiple_nht);
         if (p_best_dr->is_mgmt_route) {
             p_best_dr = fib_get_next_best_fit_dr(vrf_id, &p_best_dr->key.prefix);
             continue;
@@ -339,6 +341,7 @@ int nas_rt_find_next_best_dr_for_nht(t_fib_nht *p_fib_nht, int vrf_id, t_fib_ip_
             /* Connected route found for the NHT destination, create the NH and resolve the NH proactively
              * if there is no best resolved route found */
             is_conn_route_found = true;
+            parent_vrf_id = p_best_dr->parent_vrf_id;
         }
         if (p_best_dr->is_nh_resolved) {
             *is_next_best_rt_found = true;
@@ -349,8 +352,16 @@ int nas_rt_find_next_best_dr_for_nht(t_fib_nht *p_fib_nht, int vrf_id, t_fib_ip_
     if (*is_next_best_rt_found == false) {
         if (is_conn_route_found) {
             /* There is a connected route to reach the NHT nexthop, resolve the NH thru Nbr-Mgr */
+            if (p_nh->vrf_id != p_nh->parent_vrf_id) {
+                t_fib_nh *p_parent_nh = fib_get_nh (p_nh->parent_vrf_id, dest_addr, p_nh->key.if_index);
+                if (p_parent_nh == NULL) {
+                    /* If parent NH is not present, create it before creating the leaked NH */
+                    fib_proc_nh_add (p_nh->parent_vrf_id, dest_addr, p_nh->key.if_index,
+                                     FIB_NH_OWNER_TYPE_CLIENT, 0, false, p_nh->parent_vrf_id);
+                }
+            }
             fib_proc_nh_add (vrf_id, dest_addr, p_nh->key.if_index,
-                             FIB_NH_OWNER_TYPE_CLIENT, 0, false);
+                             FIB_NH_OWNER_TYPE_CLIENT, 0, false, parent_vrf_id);
         }
         return STD_ERR_OK;
     }
@@ -559,7 +570,7 @@ int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
 
     t_fib_nht *p_fib_nht = NULL;
     t_fib_nh *p_fh = NULL;
-    hal_vrf_id_t    vrf_id = 0;
+    hal_vrf_id_t    vrf_id = 0, parent_vrf_id = 0;
     t_fib_ip_addr   dest_addr, mask;
     bool is_rt_found = false, is_next_best_rt_found = false,
          is_exact_match_req = false, is_conn_route = false;
@@ -594,12 +605,22 @@ int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
         }
 
         if (is_add && (p_nh->next_hop_id == 0)) {
+            bool rif_update = true;
+            if (p_nh->vrf_id != p_nh->parent_vrf_id) {
+                t_fib_nh *p_parent_nh = fib_get_nh (p_nh->parent_vrf_id, &p_nh->key.ip_addr,
+                                                    p_nh->key.if_index);
+                if (p_parent_nh && (p_parent_nh->next_hop_id)) {
+                    rif_update = false;
+                }
+            }
             if (hal_fib_next_hop_add(p_nh) != DN_HAL_ROUTE_E_NONE) {
-                HAL_RT_LOG_ERR("HAL-RT-NHT", "NextHop Add %s/%d NH-handle:%lu del failed!",
+                HAL_RT_LOG_ERR("HAL-RT-NHT", "NextHop Add %s/%d NH-handle:%lu add failed!",
                                FIB_IP_ADDR_TO_STR(&p_nh->key.ip_addr), prefix_len, p_nh->next_hop_id);
             } else {
                 /* increment the RIF for the first time update */
-                hal_rt_rif_ref_inc(p_nh->vrf_id, p_nh->key.if_index);
+                if (rif_update) {
+                    hal_rt_rif_ref_inc(p_nh->parent_vrf_id, p_nh->key.if_index);
+                }
             }
         }
 
@@ -615,8 +636,10 @@ int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
             t_fib_nh_holder nh_holder;
             p_fh = FIB_GET_FIRST_NH_FROM_DR(p_dr, nh_holder);
             /* Mark the connected route flag true only if the NH is zero. */
-            if (p_fh && (FIB_IS_NH_ZERO(p_fh)))
+            if (p_fh && (FIB_IS_NH_ZERO(p_fh))) {
                 is_conn_route = true;
+                parent_vrf_id = p_fh->parent_vrf_id;
+            }
         }
 
         if (p_dr->prefix_len == FIB_AFINDEX_TO_PREFIX_LEN (p_dr->key.prefix.af_index)) {
@@ -634,9 +657,9 @@ int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
         vrf_id = p_dr->vrf_id;
         memcpy(&dest_addr, &p_dr->key.prefix, sizeof(p_dr->key.prefix));
         prefix_len = p_dr->prefix_len;
-        HAL_RT_LOG_INFO("HAL-RT-NHT", "Route %s %s/%d exact_match_req:%d NH-handle:%lu is_conn_route:%d",
+        HAL_RT_LOG_INFO("HAL-RT-NHT", "Route %s %s/%d exact_match_req:%d NH-handle:%lu is_conn_route:%d parent VRF:%d",
                          ((is_add) ? "Add" : "Del"), FIB_IP_ADDR_TO_STR(&dest_addr), prefix_len,
-                         is_exact_match_req, p_dr->nh_handle, is_conn_route);
+                         is_exact_match_req, p_dr->nh_handle, is_conn_route, parent_vrf_id);
     }
 
     do {
@@ -646,18 +669,27 @@ int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
                      FIB_IP_ADDR_TO_STR(&dest_addr), prefix_len, FIB_IP_ADDR_TO_STR(&mask));
 
         while(p_fib_nht) {
-            HAL_RT_LOG_INFO("HAL-RT-NHT", "NHT:%s NH/Route Match addr:%s/%d is_conn_route:%d",
+            HAL_RT_LOG_INFO("HAL-RT-NHT", "NHT:%s NH/Route Match addr:%s/%d is_conn_route:%d parent VRF:%d",
                              FIB_IP_ADDR_TO_STR(&p_fib_nht->key.dest_addr),
                              FIB_IP_ADDR_TO_STR(&p_fib_nht->fib_match_dest_addr),
-                             p_fib_nht->prefix_len, is_conn_route);
+                             p_fib_nht->prefix_len, is_conn_route, parent_vrf_id);
 
             if (FIB_IS_IP_ADDR_IN_PREFIX(&dest_addr, &mask, &p_fib_nht->key.dest_addr) == false)
                 break;
 
             if (is_add) {
                 if (is_conn_route) {
+                    if (p_fh->vrf_id != p_fh->parent_vrf_id) {
+                        t_fib_nh *p_parent_nh = fib_get_nh (p_fh->parent_vrf_id, &p_fib_nht->key.dest_addr, p_fh->key.if_index);
+                        if (p_parent_nh == NULL) {
+                            /* If parent NH is not present, create it before creating the leaked NH */
+                            fib_proc_nh_add (p_fh->parent_vrf_id, &p_fib_nht->key.dest_addr, p_fh->key.if_index,
+                                             FIB_NH_OWNER_TYPE_CLIENT, 0, false, p_fh->parent_vrf_id);
+                        }
+                    }
+
                     fib_proc_nh_add (p_fib_nht->vrf_id, &p_fib_nht->key.dest_addr,
-                                     p_fh->key.if_index, FIB_NH_OWNER_TYPE_CLIENT, 0, false);
+                                     p_fh->key.if_index, FIB_NH_OWNER_TYPE_CLIENT, 0, false, parent_vrf_id);
                     /* Check if this Route is better match for NHT(s) */
                 } else if ((!(FIB_IS_AFINDEX_VALID (p_fib_nht->fib_match_dest_addr.af_index)) &&
                             (STD_IP_IS_ADDR_ZERO(&p_fib_nht->fib_match_dest_addr))) ||
@@ -762,8 +794,9 @@ int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
         if ((is_add == false) && (p_nh->next_hop_id) &&
             (FIB_IS_NH_REF_COUNT_ZERO (p_nh))) {
             if (hal_fib_next_hop_del(p_nh) == DN_HAL_ROUTE_E_FAIL) {
-                HAL_RT_LOG_ERR("HAL-RT-NHT", "NextHop Del %s/%d NH-handle:%lu del failed!",
-                               FIB_IP_ADDR_TO_STR(&dest_addr), prefix_len, p_nh->next_hop_id);
+                HAL_RT_LOG_ERR("HAL-RT-NHT", "NextHop Del VRF:%d Parent:%d %s/%d NH-handle:%lu del failed!",
+                               p_nh->vrf_id, p_nh->parent_vrf_id, FIB_IP_ADDR_TO_STR(&dest_addr),
+                               prefix_len, p_nh->next_hop_id);
             }
             p_nh->next_hop_id = 0;
         }
@@ -771,7 +804,7 @@ int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
     return STD_ERR_OK;
 }
 
-int nas_rt_handle_nht (t_fib_nht *p_nht_info, bool is_add) {
+int nas_rt_handle_nht (t_fib_nht *p_nht_info, bool is_add, bool is_force_del) {
 
     t_fib_nh *p_nh = NULL;
     t_fib_dr *p_dr = NULL;
@@ -780,12 +813,14 @@ int nas_rt_handle_nht (t_fib_nht *p_nht_info, bool is_add) {
 
     p_nht = fib_get_nht (p_nht_info->vrf_id, &p_nht_info->key.dest_addr);
     if (p_nht != NULL) {
-        HAL_RT_LOG_DEBUG("HAL-RT-NHT",
-                         "vrf_id: %d, dest_addr: %s already exists, ref-cnt:%d",
+        HAL_RT_LOG_INFO("HAL-RT-NHT",
+                         "vrf_id: %d, dest_addr: %s already exists, ref-cnt:%d force-del:%d",
                          p_nht->vrf_id,
-                         FIB_IP_ADDR_TO_STR (&p_nht->key.dest_addr), p_nht->ref_count);
+                         FIB_IP_ADDR_TO_STR (&p_nht->key.dest_addr), p_nht->ref_count, is_force_del);
         if (is_add == false) { /* Delete NHT case handling */
-            if (p_nht->ref_count)
+            if (is_force_del) {
+                p_nht->ref_count = 0;
+            } else if (p_nht->ref_count)
                 --(p_nht->ref_count);
 
             if (!p_nht->ref_count) {
@@ -796,12 +831,21 @@ int nas_rt_handle_nht (t_fib_nht *p_nht_info, bool is_add) {
                 p_nh = fib_get_next_nh(p_nht_info->vrf_id, &p_nht_info->key.dest_addr, 0);
                 if (p_nh && (memcmp(&p_nh->key.ip_addr, &p_nht->key.dest_addr,
                                     sizeof(t_fib_ip_addr)) == 0)) {
-                    HAL_RT_LOG_DEBUG("HAL-RT-NHT", "vrf_id: %d, nh_addr: %s is_add:%d state:%d"
-                                     " NH_handle:%lu next match found in NH table",
-                                     p_nh->vrf_id, FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr), is_add,
-                                     ((p_nh->p_arp_info) ? p_nh->p_arp_info->state : 0), p_nh->next_hop_id);
+                    HAL_RT_LOG_INFO("HAL-RT-NHT", "vrf_id: %d, nh_addr: %s is_add:%d state:%d"
+                                    " NH_handle:%lu next match found in NH table",
+                                    p_nh->vrf_id, FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr), is_add,
+                                    ((p_nh->p_arp_info) ? p_nh->p_arp_info->state : 0), p_nh->next_hop_id);
 
-                    fib_proc_nh_delete (p_nh, FIB_NH_OWNER_TYPE_CLIENT, 0);
+                    if (p_nh->vrf_id != p_nh->parent_vrf_id) {
+                        fib_proc_nh_delete (p_nh, FIB_NH_OWNER_TYPE_CLIENT, 0);
+                        t_fib_nh *p_parent_nh = fib_get_nh (p_nh->parent_vrf_id, &p_nh->key.ip_addr, p_nh->key.if_index);
+                        if (p_parent_nh && (p_parent_nh->clnts_ref_cnt == 0)) {
+                            fib_proc_nh_delete (p_parent_nh, FIB_NH_OWNER_TYPE_CLIENT, 0);
+                        }
+                    } else if (p_nh->clnts_ref_cnt == 0) {
+                        /* Parent NH can be deleted only if there is reference to leaked NH */
+                        fib_proc_nh_delete (p_nh, FIB_NH_OWNER_TYPE_CLIENT, 0);
+                    }
                 } else if (FIB_IS_AFINDEX_VALID(p_nht->fib_match_dest_addr.af_index)) {
                     p_dr = fib_get_dr (p_nht->vrf_id, &p_nht->fib_match_dest_addr,
                                        p_nht->prefix_len);
@@ -895,13 +939,37 @@ int nas_rt_handle_nht (t_fib_nht *p_nht_info, bool is_add) {
                          ((p_nh->p_arp_info->state == FIB_ARP_RESOLVED) ? "Yes" : "No"),
                          p_nh->next_hop_id, p_nh->rtm_ref_count);
 
+        if (p_nh->vrf_id != p_nh->parent_vrf_id) {
+            t_fib_nh *p_parent_nh = fib_get_nh (p_nh->parent_vrf_id, &p_nht_info->key.dest_addr, p_nh->key.if_index);
+            if (p_parent_nh == NULL) {
+                /* If parent NH is not present, create it before creating the leaked NH */
+                fib_proc_nh_add (p_nh->parent_vrf_id, &p_nht_info->key.dest_addr, p_nh->key.if_index,
+                                 FIB_NH_OWNER_TYPE_CLIENT, 0, false, p_nh->parent_vrf_id);
+            }
+        }
+
         fib_proc_nh_add (p_nht_info->vrf_id, &p_nht_info->key.dest_addr,
-                         p_nh->key.if_index, FIB_NH_OWNER_TYPE_CLIENT, 0, false);
+                         p_nh->key.if_index, FIB_NH_OWNER_TYPE_CLIENT, 0, false, p_nh->parent_vrf_id);
         if (p_nh->p_arp_info->state != FIB_ARP_RESOLVED) {
             return STD_ERR_OK;
         }
 
         if (is_add && (p_nh->next_hop_id == 0)) {
+            HAL_RT_LOG_INFO("HAL-RT-NHT",
+                            "vrf_id: %d, nexthop: %s NH table Add:%d "
+                            "resolved:%s group-id:%lu rt-cnt:%d",
+                            p_nht_info->vrf_id, FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr), is_add,
+                            ((p_nh->p_arp_info->state == FIB_ARP_RESOLVED) ? "Yes" : "No"),
+                            p_nh->next_hop_id, p_nh->rtm_ref_count);
+            bool rif_update = true;
+            if (p_nh->vrf_id != p_nh->parent_vrf_id) {
+                t_fib_nh *p_parent_nh = fib_get_nh (p_nh->parent_vrf_id, &p_nh->key.ip_addr,
+                                                    p_nh->key.if_index);
+                if (p_parent_nh && (p_parent_nh->next_hop_id)) {
+                    rif_update = false;
+                }
+            }
+
             if (hal_fib_next_hop_add(p_nh) != DN_HAL_ROUTE_E_NONE) {
                 HAL_RT_LOG_ERR("HAL-RT-NHT", "vrf_id: %d, nexthop: %s exact fit found "
                                "and resolved: %s but group-id:%lu add failed!",
@@ -909,8 +977,10 @@ int nas_rt_handle_nht (t_fib_nht *p_nht_info, bool is_add) {
                                ((p_nh->p_arp_info->state == FIB_ARP_RESOLVED) ? "Yes" : "No"), p_nh->next_hop_id);
                 return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
             }
-            /* increment the RIF for the first time update */
-            hal_rt_rif_ref_inc(p_nh->vrf_id, p_nh->key.if_index);
+            if (rif_update) {
+                /* increment the RIF for the first time update */
+                hal_rt_rif_ref_inc(p_nh->parent_vrf_id, p_nh->key.if_index);
+            }
         }
         /* NH should always be matched for exact address.
          * check if returned NH address is same as NHT dest address
@@ -931,4 +1001,28 @@ int nas_rt_handle_nht (t_fib_nht *p_nht_info, bool is_add) {
     return STD_ERR_OK;
 }
 
+t_std_error nas_rt_flush_nhts(hal_vrf_id_t vrf_id, int af_index) {
+    t_fib_nht *p_fib_nht = NULL, *p_fib_del_nht = NULL;
+
+    p_fib_nht = fib_get_first_nht(vrf_id, af_index);
+    while(p_fib_nht) {
+        if (p_fib_del_nht) {
+            HAL_RT_LOG_INFO("NHT-FLUSH", "vrf_id: %d, dest_addr: %s already exists, ref-cnt:%d",
+                            p_fib_del_nht->vrf_id,
+                            FIB_IP_ADDR_TO_STR (&p_fib_del_nht->key.dest_addr), p_fib_del_nht->ref_count);
+
+            nas_rt_handle_nht(p_fib_del_nht, false, true);
+        }
+        p_fib_del_nht = p_fib_nht;
+        p_fib_nht = fib_get_next_nht(vrf_id, &p_fib_nht->key.dest_addr);
+    }
+
+    if (p_fib_del_nht) {
+        HAL_RT_LOG_INFO("NHT-FLUSH", "vrf_id: %d, dest_addr: %s already exists, ref-cnt:%d",
+                        p_fib_del_nht->vrf_id,
+                        FIB_IP_ADDR_TO_STR (&p_fib_del_nht->key.dest_addr), p_fib_del_nht->ref_count);
+        nas_rt_handle_nht(p_fib_del_nht, false, true);
+    }
+    return STD_ERR_OK;
+}
 

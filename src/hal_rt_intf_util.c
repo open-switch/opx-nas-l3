@@ -377,6 +377,7 @@ int fib_process_route_del_on_intf_event (t_fib_intf *p_intf, t_fib_intf_event_ty
                                  FIB_IP_ADDR_TO_STR (&p_del_dr->key.prefix),
                                  p_del_dr->prefix_len, p_del_dr->rt_type);
 
+                /* @@TODO Delete the leaked route and the associated NHs */
                 fib_proc_dr_del (p_del_dr);
             }
         }
@@ -483,6 +484,10 @@ static t_std_error hal_rt_intf_check_lla_dep_nh(t_fib_nh *p_nh) {
 }
 
 static t_std_error hal_rt_pub_nbr_evt(t_fib_nh *p_fh, cps_api_operation_types_t op) {
+
+    if (p_fh->vrf_id != p_fh->parent_vrf_id) {
+        return STD_ERR_OK;
+    }
     cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_fh, op);
     if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
         HAL_RT_LOG_ERR ("HAL-RT-NH-PUB",
@@ -495,7 +500,7 @@ static t_std_error hal_rt_pub_nbr_evt(t_fib_nh *p_fh, cps_api_operation_types_t 
     return STD_ERR_OK;
 }
 
-int fib_process_nh_del_on_intf_event (t_fib_intf *p_intf, t_fib_intf_event_type intf_event) {
+int fib_process_nh_del_on_intf_event (t_fib_intf *p_intf, t_fib_intf_event_type intf_event, bool is_intf_del) {
 
     t_fib_nh       *p_fh = NULL, *p_fh_del = NULL;
     t_fib_nh_holder nh_holder;
@@ -531,6 +536,12 @@ int fib_process_nh_del_on_intf_event (t_fib_intf *p_intf, t_fib_intf_event_type 
              */
             fib_proc_nh_dead (p_fh);
             hal_rt_pub_nbr_evt(p_fh, cps_api_oper_DELETE);
+            /* Interface del will not delete the NH if NH is associated with LLA route,
+             * make sure to remove the DEAD status if present so that LLA programming for other
+             * same LLAs (e.g multiple port-channels have same MAC i.e same LLA) wont be affected. */
+            if (is_intf_del && (hal_rt_intf_check_lla_dep_nh(p_fh) == STD_ERR_OK)) {
+                p_fh->status_flag &= ~FIB_NH_STATUS_DEAD;
+            }
         }
     }
 
@@ -630,12 +641,12 @@ int fib_handle_intf_admin_status_change(int vrf_id, int af_index, t_fib_intf_ent
         } else {
             fib_route_del_on_intf_down(p_intf);
             fib_process_link_local_address_del_on_intf_event (p_intf, FIB_INTF_ADMIN_EVENT);
-            fib_process_nh_del_on_intf_event (p_intf, FIB_INTF_ADMIN_EVENT);
+            fib_process_nh_del_on_intf_event (p_intf, FIB_INTF_ADMIN_EVENT, false);
         }
     } else if (p_intf_chg->is_op_del) {
         fib_route_del_on_intf_down(p_intf);
         fib_process_link_local_address_del_on_intf_event (p_intf, FIB_INTF_ADMIN_EVENT);
-        fib_process_nh_del_on_intf_event (p_intf, FIB_INTF_ADMIN_EVENT);
+        fib_process_nh_del_on_intf_event (p_intf, FIB_INTF_ADMIN_EVENT, true);
     }
     /* reset intf delete pending flag since this is a new update */
     p_intf->is_intf_delete_pending = false;
@@ -770,7 +781,7 @@ t_std_error fib_process_intf_mode_change (int vrf_id, int af_index, uint32_t if_
              * so that in the fib_process_nh_del_on_intf_event function,
              * next-hop delete will be successful if we remove the HW binding for those routes. */
             fib_process_pending_resolve_dr(vrf_id, af_index);
-            fib_process_nh_del_on_intf_event (p_intf, (vrf_id ? FIB_INTF_FORCE_DEL : FIB_INTF_MODE_CHANGE_EVENT));
+            fib_process_nh_del_on_intf_event (p_intf, (vrf_id ? FIB_INTF_FORCE_DEL : FIB_INTF_MODE_CHANGE_EVENT), false);
             if (vrf_id) {
                 fib_del_all_intf_ip(p_intf);
                 p_intf->is_intf_delete_pending = true;
@@ -788,8 +799,8 @@ t_std_error fib_process_intf_mode_change (int vrf_id, int af_index, uint32_t if_
     return STD_ERR_OK;
 }
 
-int fib_process_route_del_on_mgmt_ip_del_event (hal_ifindex_t if_index, hal_vrf_id_t vrf_id,
-                                                t_fib_ip_addr *prefix, uint8_t prefix_len) {
+int fib_process_route_del_on_ip_del_event (hal_ifindex_t if_index, hal_vrf_id_t vrf_id,
+                                           t_fib_ip_addr *prefix, uint8_t prefix_len) {
     t_fib_nh        *p_nh = NULL;
     t_fib_nh_holder nh_holder;
     t_fib_nh_dep_dr   *p_nh_dep_dr = NULL;
@@ -797,17 +808,17 @@ int fib_process_route_del_on_mgmt_ip_del_event (hal_ifindex_t if_index, hal_vrf_
     t_fib_ip_addr mask;
     t_fib_dr *p_dr = NULL;
 
-    HAL_RT_LOG_INFO("MGMT-RT-DEL", "intf:%d vrf_id: %d, prefix: %s, prefix_len: %d",
+    HAL_RT_LOG_INFO("IP-RT-DEL", "intf:%d vrf_id: %d, prefix: %s, prefix_len: %d",
                    if_index, vrf_id, FIB_IP_ADDR_TO_STR (prefix), prefix_len);
     p_intf = fib_get_intf (if_index, vrf_id, prefix->af_index);
     if (p_intf == NULL) {
-        HAL_RT_LOG_ERR("MGMT-RT-DEL", "intf:%d not present for vrf_id: %d, prefix: %s, prefix_len: %d",
+        HAL_RT_LOG_ERR("IP-RT-DEL", "intf:%d not present for vrf_id: %d, prefix: %s, prefix_len: %d",
                        if_index, vrf_id, FIB_IP_ADDR_TO_STR (prefix), prefix_len);
         return STD_ERR_OK;
     }
     memset (&mask, 0, sizeof (t_fib_ip_addr));
     if (nas_rt_get_mask (prefix->af_index, prefix_len, &mask) == false) {
-        HAL_RT_LOG_ERR("MGMT-RT-DEL", "intf:%d vrf_id: %d, prefix: %s, prefix_len: %d get mask failed",
+        HAL_RT_LOG_ERR("IP-RT-DEL", "intf:%d vrf_id: %d, prefix: %s, prefix_len: %d get mask failed",
                        if_index, vrf_id, FIB_IP_ADDR_TO_STR (prefix), prefix_len);
         return STD_ERR_OK;
     }
@@ -815,22 +826,25 @@ int fib_process_route_del_on_mgmt_ip_del_event (hal_ifindex_t if_index, hal_vrf_
     /* Loop for all the FH and associated routes for deletion */
     FIB_FOR_EACH_FH_FROM_INTF (p_intf, p_nh, nh_holder) {
         if (FIB_IS_NH_ZERO(p_nh)) {
-            HAL_RT_LOG_INFO("MGMT-RT-DEL", "intf:%d vrf_id: %d, prefix: %s, prefix_len: %d NH zero",
-                           if_index, vrf_id, FIB_IP_ADDR_TO_STR (prefix), prefix_len);
+            HAL_RT_LOG_INFO("IP-RT-DEL", "intf:%d vrf_id: %d, prefix: %s, prefix_len: %d NH zero",
+                            if_index, vrf_id, FIB_IP_ADDR_TO_STR (prefix), prefix_len);
             continue;
         }
         if (FIB_IS_IP_ADDR_IN_PREFIX(&p_nh->key.ip_addr, &mask, prefix)) {
             p_nh_dep_dr = fib_get_first_nh_dep_dr (p_nh);
             while ((p_nh_dep_dr != NULL) && (p_nh_dep_dr->p_dr != NULL)) {
-                HAL_RT_LOG_INFO("MGMT-RT-DEL", "intf:%d vrf_id: %d, prefix: %s, prefix_len: %d NH:%s",
-                               if_index, vrf_id, FIB_IP_ADDR_TO_STR (&p_nh_dep_dr->p_dr->key.prefix),
-                               p_nh_dep_dr->p_dr->prefix_len, FIB_IP_ADDR_TO_STR(&p_nh->key.ip_addr));
-                p_nh_dep_dr->p_dr->status_flag |= FIB_DR_STATUS_DEL;
+                HAL_RT_LOG_INFO("IP-RT-DEL", "intf:%d vrf_id: %d, prefix: %s, prefix_len: %d NH:%s num_nh:%d",
+                                if_index, vrf_id, FIB_IP_ADDR_TO_STR (&p_nh_dep_dr->p_dr->key.prefix),
+                                p_nh_dep_dr->p_dr->prefix_len, FIB_IP_ADDR_TO_STR(&p_nh->key.ip_addr),
+                                p_nh_dep_dr->p_dr->num_nh);
                 p_dr = p_nh_dep_dr->p_dr;
                 p_nh_dep_dr = fib_get_next_nh_dep_dr (p_nh, p_nh_dep_dr->key.vrf_id,
                                                       &p_nh_dep_dr->key.dr_key.prefix,
                                                       p_nh_dep_dr->prefix_len);
-                fib_proc_dr_del (p_dr);
+                if (p_dr->num_nh == 1) {
+                    p_dr->status_flag |= FIB_DR_STATUS_DEL;
+                    fib_proc_dr_del (p_dr);
+                }
             }
         }
     }

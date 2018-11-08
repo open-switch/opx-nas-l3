@@ -249,7 +249,7 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
                         HAL_RT_LOG_DEBUG("HAL-RT-NDI",
                                          "NH Group: FH nh_handle is NULL. Creating!" "if_index %d Vrf_id: %d.",
                                          p_fh->key.if_index, vrf_id);
-                        if (hal_rif_index_get_or_create(npu_id, vrf_id, p_fh->key.if_index,
+                        if (hal_rif_index_get_or_create(npu_id, p_fh->vrf_id, p_fh->key.if_index,
                                                         &rif_id) != STD_ERR_OK) {
                             HAL_RT_LOG_ERR("HAL-RT-NDI", "RIF creation failed for host:%s "
                                            "while programming the route:%s/%d",
@@ -489,6 +489,7 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
                             p_dr->prefix_len, p_dr->nh_handle, nh_group_handle,
                             (ecmp_handle_created && p_dr->ofh_cnt <= 1) ?
                             "(Changed non-ECMP to ECMP)" : "");
+
             /*
              * If ECMP group table us full, route will be set as non-ECMP.
              * So cleanup the reference to old multipath object, so that when

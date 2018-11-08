@@ -121,11 +121,12 @@ t_std_error nas_route_nht_publish_object(cps_api_object_t obj);
 
 t_std_error nas_route_get_all_arp_info(cps_api_object_list_t list, uint32_t vrf_id, uint32_t af,
                                        hal_ip_addr_t *p_nh_addr, bool is_specific_nh_get,
-                                       bool is_proactive_nh_get);
+                                       bool is_proactive_nh_get, bool is_specific_vrf_get);
 
 cps_api_return_code_t nas_route_process_cps_peer_routing(cps_api_transaction_params_t * param,
                                         size_t ix);
-t_std_error nas_route_get_all_peer_routing_config(cps_api_object_list_t list);
+t_std_error nas_route_get_all_peer_routing_config(bool is_specific_vrf_get, hal_vrf_id_t vrf_id,
+                                                  cps_api_object_list_t list);
 
 cps_api_return_code_t nas_route_process_cps_virtual_routing_ip_cfg (cps_api_transaction_params_t * param,
                                         size_t ix);
@@ -149,9 +150,9 @@ bool nas_route_fdb_add_cps_msg (t_fib_nh *p_nh);
 
 bool nas_route_is_rsvd_intf(hal_ifindex_t nh_if_index);
 cps_api_return_code_t nas_route_process_cps_ip_unreachables_msg(cps_api_transaction_params_t * param, size_t ix);
-cps_api_return_code_t nas_route_get_all_ip_unreach_info(cps_api_object_list_t list, uint32_t af, char *if_name,
-                                              bool is_specific_get);
-cps_api_return_code_t nas_route_os_ip_unreachable_config(uint32_t af, char *if_name, bool is_del, bool is_enable);
+cps_api_return_code_t nas_route_get_all_ip_unreach_info(cps_api_object_list_t list, hal_vrf_id_t vrf_id,
+                                                        uint32_t af, char *if_name, bool is_specific_get);
+cps_api_return_code_t nas_route_os_ip_unreachable_config(char *vrf_name, uint32_t af, char *if_name, bool is_del, bool is_enable);
 cps_api_return_code_t nas_route_process_cps_ip_redirects_msg(cps_api_transaction_params_t * param, size_t ix);
 cps_api_return_code_t nas_route_get_all_ip_redirects_info (cps_api_object_list_t list,
                                                            hal_vrf_id_t vrf_id, char *if_name);

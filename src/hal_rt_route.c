@@ -49,6 +49,8 @@ static inline uint32_t hal_rt_type_to_packet_action (t_rt_type rt_type)
             /* RT_UNREACHABLE, RT_PROHIBIT and other cases, TRAP to CPU */
             NDI_ROUTE_PACKET_ACTION_TRAPCPU);
 }
+
+
 dn_hal_route_err hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr) {
     t_fib_nh *p_fh;
     t_fib_dr_fh *p_dr_fh;
@@ -212,6 +214,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
     bool rif_update = false;
     bool is_link_local_addr = false, is_nht_notif_done = false;
     hal_ifindex_t  if_index = 0;
+    uint32_t nh_vrf_id = 0;
 
     if (STD_IP_IS_ADDR_LINK_LOCAL(&p_dr->key.prefix))
         is_link_local_addr = true;
@@ -251,11 +254,11 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                  * So no need to create again.
                  */
                 if (!is_link_local_addr &&
-                    (hal_rif_index_get_or_create(npu_id, vrf_id, p_fh->key.if_index,
+                    (hal_rif_index_get_or_create(npu_id, p_fh->vrf_id, p_fh->key.if_index,
                                                 &rif_id) != STD_ERR_OK)) {
                     HAL_RT_LOG_ERR("HAL-RT-NDI", "RIF creation failed. VRF %d."
                                    " Prefix: %s/%d: if-index:%d",
-                                   vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
+                                   p_fh->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
                                    p_dr->prefix_len, p_fh->key.if_index);
                     return DN_HAL_ROUTE_E_FAIL;
                 }
@@ -285,6 +288,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                 if (!is_link_local_addr)
                     rif_update = true;
                 if_index = p_fh->key.if_index;
+                nh_vrf_id = p_fh->vrf_id;
             }
         }
 
@@ -323,10 +327,15 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                 if (!(p_nh->status_flag & FIB_NH_STATUS_DEAD)) {
                     is_nh_found = true;
                     break;
+                } else {
+                    HAL_RT_LOG_INFO("HAL-RT-NDI", "vrf_id: %d, ip_addr: %s, if_index: %d, "
+                                    "owner_flag: 0x%x status: 0x%x",
+                                    p_nh->vrf_id, FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr),
+                                    p_nh->key.if_index, p_nh->owner_flag, p_nh->status_flag);
                 }
             }
             if (is_nh_found == false) {
-                HAL_RT_LOG_DEBUG("HAL-RT-NDI", "Null NH!");
+                HAL_RT_LOG_INFO("HAL-RT-NDI", "Null NH!");
                 return DN_HAL_ROUTE_E_FAIL;
             }
             /* For link local address on interface,
@@ -334,7 +343,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
              * So no need to create again.
              */
             if (!is_link_local_addr &&
-                (hal_rif_index_get_or_create(npu_id, vrf_id, p_nh->key.if_index,
+                (hal_rif_index_get_or_create(npu_id, p_nh->vrf_id, p_nh->key.if_index,
                                             &rif_id) != STD_ERR_OK)) {
                 HAL_RT_LOG_ERR("HAL-RT-NDI", "RIF creation failed VRF %d."
                                " Prefix: %s/%d: if-index:%d",
@@ -351,6 +360,10 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                 nbr_entry.rif_id = rif_id;
                 if (p_nh->next_hop_id == 0) {
                     if (ndi_route_next_hop_add(&nbr_entry, &nh_handle) != STD_ERR_OK) {
+                        HAL_RT_LOG_ERR("HAL-RT-NDI", "NH add failed VRF %d."
+                                       " Prefix: %s/%d: if-index:%d",
+                                       vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix),
+                                       p_dr->prefix_len, p_nh->key.if_index);
                         return STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0);
                     }
                     HAL_RT_LOG_DEBUG("HAL-RT-NDI",
@@ -381,6 +394,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                 route_entry.action = NDI_ROUTE_PACKET_ACTION_TRAPCPU;
             }
             if_index = p_nh->key.if_index;
+            nh_vrf_id = p_nh->vrf_id;
         } else {
             if (FIB_IS_FH_IP_TUNNEL(p_fh)) {
                 if (FIB_IS_NH_ZERO(p_fh)) {
@@ -395,6 +409,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                 if (!is_link_local_addr)
                     rif_update = true;
                 if_index = p_fh->key.if_index;
+                nh_vrf_id = p_fh->vrf_id;
             } else {
                 route_entry.action = NDI_ROUTE_PACKET_ACTION_FORWARD;
             }
@@ -420,7 +435,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                  * Not keeping track of associated indirect routes
                  */
                 if(rif_update)
-                    hal_rt_rif_ref_inc(vrf_id, if_index);
+                    hal_rt_rif_ref_inc(nh_vrf_id, if_index);
                 p_dr->a_is_written[npu_id] = true;
                 p_dr->nh_handle = nh_handle;
                 HAL_RT_LOG_INFO("HAL-RT-NDI(RT-END)",
@@ -456,6 +471,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
                     error_occured = true;
                     break;
                 }
+
                 HAL_RT_LOG_INFO("HAL-RT-NDI(RT-END)",
                                 "RT modified - VRF %d. Prefix: %s/%d: NH:%s old hdl %lu, new hdl %lu RIF 0x%lx",
                                 vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len,
@@ -489,7 +505,7 @@ dn_hal_route_err _hal_fib_route_add(uint32_t vrf_id, t_fib_dr *p_dr,
             p_dr->nh_handle = nh_handle;
 
             if(rif_update)
-                hal_rt_rif_ref_inc(vrf_id, if_index);
+                hal_rt_rif_ref_inc(nh_vrf_id, if_index);
         } else {
             /*
              * This case is hit when ARP is re-resolved and DR thread walks

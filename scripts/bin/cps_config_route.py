@@ -17,7 +17,7 @@ import sys
 import getopt
 import cps_utils
 import socket
-import nas_ut_framework as nas_ut
+import nas_common_utils as nas_common
 import nas_route_utils as nas_route
 import netaddr as net
 import time
@@ -80,7 +80,7 @@ def add_embd_param(obj, outer_param, inner_param, val_list, type=''):
 
 def nas_route_op(op, obj, ver):
     nas_route.init(ver)
-    nas_ut.get_cb_method(op)(obj)
+    nas_common.get_cb_method(op)(obj)
 
 
 def usage():

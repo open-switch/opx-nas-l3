@@ -180,7 +180,7 @@ t_std_error nas_route_get_all_virtual_routing_ip_config (cps_api_object_list_t l
 
             std_mutex_simple_lock_guard l(&nas_rt_ip_mutex);
             auto vrf_it = virtual_routing_ip_list.find(vrf_id);
-            if(vrf_it == virtual_routing_ip_list.end()) return STD_ERR_OK;
+            if(vrf_it == virtual_routing_ip_list.end()) { continue; }
             auto &ip_list = vrf_it->second;
 
             for(auto& ip_it: ip_list){
@@ -217,7 +217,7 @@ t_std_error nas_route_get_all_virtual_routing_ip_config (cps_api_object_list_t l
         if(ip_it == ip_list.end()) return STD_ERR_OK;
 
         auto& if_ip_list = ip_it->second;
-        std::string if_name_str = p_cfg->if_name;
+        std::string if_name_str(p_cfg->if_name);
         auto if_name_it = if_ip_list.find(if_name_str);
         if(if_name_it == if_ip_list.end()) return STD_ERR_OK;
 

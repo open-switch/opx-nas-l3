@@ -285,7 +285,7 @@ public:
     }
 
     bool trigger_resolve() const;
-    bool trigger_refresh() const;
+    bool trigger_refresh(bool track_refresh = true) const;
     bool trigger_instant_refresh() const;
     bool trigger_delay_resolve() const;
     bool trigger_delay_refresh() const;
@@ -366,7 +366,7 @@ using nbr_if_list = std::unordered_map<hal_ifindex_t, nbr_mgr_intf_entry_t, nbr_
 class nbr_process {
 
 public:
-    nbr_process() { };
+    nbr_process() { memset(&stats, 0, sizeof(stats));};
 
     //Prevent copy construction and assignment operations
     nbr_process(const nbr_process& src) = delete;

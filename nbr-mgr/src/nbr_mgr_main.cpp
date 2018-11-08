@@ -99,7 +99,6 @@ static void sigterm_hdlr(int signo)
 
 /* Nbr Mgr process entry function */
 int main() {
-
     (void)signal(SIGTERM, sigterm_hdlr);
 
     if (!nbr_mgr_init()) {

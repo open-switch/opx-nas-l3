@@ -141,9 +141,9 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
         NBR_MGR_LOG_INFO("CPS-INTF","Intf:%d is_del:%d flags:0x%x status:%s type:%d",
                          index, is_op_del, p_intf->flags, (is_admin_up ? "Up" : "Down"), type);
         /* Allow only the L2 (bridge) and L3 ports for L3 operations */
-        if ((type != BASE_CMN_INTERFACE_TYPE_L2_PORT) && (type != BASE_CMN_INTERFACE_TYPE_L3_PORT) &&
-            (type != BASE_CMN_INTERFACE_TYPE_LAG) && (type != BASE_CMN_INTERFACE_TYPE_VLAN) &&
-            (type != BASE_CMN_INTERFACE_TYPE_MACVLAN)) {
+        if ((type != BASE_CMN_INTERFACE_TYPE_BRIDGE) && (type != BASE_CMN_INTERFACE_TYPE_L3_PORT) &&
+            (type != BASE_CMN_INTERFACE_TYPE_LAG) && (type != BASE_CMN_INTERFACE_TYPE_L2_PORT) &&
+            (type != BASE_CMN_INTERFACE_TYPE_MACVLAN) && (type != BASE_CMN_INTERFACE_TYPE_MANAGEMENT)) {
             return false;
         }
         /* Incase of LAG/VLAN member delete, ignore it,
@@ -157,15 +157,18 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
                                      index, p_intf->flags, (is_admin_up ? "Up" : "Down"), type, intf_member_port);
                     return false;
                 }
-            } else if (type == BASE_CMN_INTERFACE_TYPE_VLAN) {
+            } else if (type == BASE_CMN_INTERFACE_TYPE_L2_PORT) {
                 NBR_MGR_LOG_INFO("CPS-INTF","VLAN member del Intf:%d flags:0x%x status:%s type:%d",
                                  index, p_intf->flags, (is_admin_up ? "Up" : "Down"), type);
                 return false;
             }
         }
-        if (type == BASE_CMN_INTERFACE_TYPE_L2_PORT) {
+        if (type == BASE_CMN_INTERFACE_TYPE_BRIDGE) {
             is_bridge = true;
-        } else if (type == BASE_CMN_INTERFACE_TYPE_VLAN) {
+        } else if (type == BASE_CMN_INTERFACE_TYPE_L2_PORT) {
+            /* Make sure only the VLAN flag is set since this event handled
+             * only for VLAN-id update not for admin/oper status update for VLAN interface. */
+            p_intf->flags = 0;
             cps_api_object_attr_t vlan_id_attr =
                 cps_api_object_attr_get(obj, BASE_IF_VLAN_IF_INTERFACES_INTERFACE_ID);
             if (vlan_id_attr) {

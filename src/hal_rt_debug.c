@@ -209,31 +209,31 @@ void fib_dump_vrf_info_per_vrf_per_af (uint32_t vrf_id, uint32_t in_af_index)
     printf ("**************************************************\r\n");
     printf ("  vrf_id                     :  %d\r\n", p_vrf_info->vrf_id);
     printf ("  vrf_name                   :  %s\r\n", p_vrf_info->vrf_name);
-    printf ("  is_vrf_created              :  %d\r\n", p_vrf_info->is_vrf_created);
+    printf ("  is_vrf_created             :  %d\r\n", p_vrf_info->is_vrf_created);
     printf ("  af_index                   :  %d\r\n", p_vrf_info->af_index);
 
-    printf ("  num_dr_processed_by_walker    :  %d\r\n",
+    printf ("  num_dr_processed_by_walker :  %d\r\n",
             p_vrf_info->num_dr_processed_by_walker);
 
-    printf ("  num_nh_processed_by_walker    :  %d\r\n",
+    printf ("  num_nh_processed_by_walker :  %d\r\n",
             p_vrf_info->num_nh_processed_by_walker);
 
-    printf ("  clear_ip_fib_on              :  %d\r\n", p_vrf_info->clear_ip_fib_on);
-    printf ("  clear_ip_route_on            :  %d\r\n", p_vrf_info->clear_ip_route_on);
-    printf ("  clear_arp_on                :  %d\r\n", p_vrf_info->clear_arp_on);
-    printf ("  dr_clear_on                 :  %d\r\n", p_vrf_info->dr_clear_on);
-    printf ("  nh_clear_on                 :  %d\r\n", p_vrf_info->nh_clear_on);
-    printf ("  dr_clear_max_radix_ver        :  %lld\r\n",
+    printf ("  clear_ip_fib_on            :  %d\r\n", p_vrf_info->clear_ip_fib_on);
+    printf ("  clear_ip_route_on          :  %d\r\n", p_vrf_info->clear_ip_route_on);
+    printf ("  clear_arp_on               :  %d\r\n", p_vrf_info->clear_arp_on);
+    printf ("  dr_clear_on                :  %d\r\n", p_vrf_info->dr_clear_on);
+    printf ("  nh_clear_on                :  %d\r\n", p_vrf_info->nh_clear_on);
+    printf ("  dr_clear_max_radix_ver     :  %lld\r\n",
             p_vrf_info->dr_clear_max_radix_ver);
-    printf ("  nh_clear_max_radix_ver        :  %lld\r\n",
+    printf ("  nh_clear_max_radix_ver     :  %lld\r\n",
             p_vrf_info->nh_clear_max_radix_ver);
-    printf ("  dr_ha_on                    :  %d\r\n", p_vrf_info->dr_ha_on);
-    printf ("  nh_ha_on                    :  %d\r\n", p_vrf_info->nh_ha_on);
-    printf ("  is_catch_all_disabled        :  %d\r\n",
+    printf ("  dr_ha_on                   :  %d\r\n", p_vrf_info->dr_ha_on);
+    printf ("  nh_ha_on                   :  %d\r\n", p_vrf_info->nh_ha_on);
+    printf ("  is_catch_all_disabled      :  %d\r\n",
             p_vrf_info->is_catch_all_disabled);
-    printf ("  dr_ha_max_radix_ver           :  %lld\r\n",
+    printf ("  dr_ha_max_radix_ver        :  %lld\r\n",
             p_vrf_info->dr_ha_max_radix_ver);
-    printf ("  nh_ha_max_radix_ver           :  %lld\r\n",
+    printf ("  nh_ha_max_radix_ver        :  %lld\r\n",
             p_vrf_info->nh_ha_max_radix_ver);
 
     printf ("**************************************************\r\n");

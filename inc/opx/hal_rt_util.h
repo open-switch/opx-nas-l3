@@ -30,6 +30,7 @@
 #include "std_ip_utils.h"
 #include "dell-base-common.h"
 #include <arpa/inet.h>
+#include "hal_if_mapping.h"
 
 #define FIB_MAX_SCRATCH_BUFSZ             256
 #define FIB_NUM_SCRATCH_BUF               16
@@ -149,13 +150,13 @@ t_std_error hal_rt_get_if_index_from_if_name(char *if_name, hal_vrf_id_t *vrf_id
 bool hal_rt_is_intf_mac_vlan (hal_vrf_id_t vrf_id, hal_ifindex_t if_index);
 bool hal_rt_get_vrf_id(const char *vrf_name, hal_vrf_id_t *vrf_id);
 bool hal_rt_get_vrf_name(hal_vrf_id_t vrf_id, char *vrf_name);
-int fib_process_route_del_on_mgmt_ip_del_event (hal_ifindex_t if_index, hal_vrf_id_t vrf_id,
-                                                t_fib_ip_addr *prefix, uint8_t prefix_len);
+int fib_process_route_del_on_ip_del_event (hal_ifindex_t if_index, hal_vrf_id_t vrf_id,
+                                           t_fib_ip_addr *prefix, uint8_t prefix_len);
 int nas_rt_get_mask (uint8_t af_index, uint8_t prefix_len, t_fib_ip_addr *mask);
 bool hal_rt_is_local_ip_conflict(hal_vrf_id_t vrf_id, hal_ip_addr_t *nbr);
 int fib_route_del_on_intf_down (t_fib_intf *p_intf);
 int fib_process_link_local_address_del_on_intf_event (t_fib_intf *p_intf, t_fib_intf_event_type intf_event);
-int fib_process_nh_del_on_intf_event (t_fib_intf *p_intf, t_fib_intf_event_type intf_event);
+int fib_process_nh_del_on_intf_event (t_fib_intf *p_intf, t_fib_intf_event_type intf_event, bool is_intf_del);
 t_std_error hal_rt_get_parent_if_index_from_l3_intf(hal_vrf_id_t vrf_id, uint32_t if_index,
                                                     uint32_t *p_parent_if_index);
 bool hal_rt_flush_vrf_info(hal_vrf_id_t vrf_id);
@@ -166,5 +167,13 @@ int nas_rt_process_offload_msg(t_fib_offload_msg *p_offload_msg);
 int fib_offload_msg_main(void);
 bool hal_rt_is_vrf_valid(hal_vrf_id_t vrf_id);
 t_std_error fib_process_pending_resolve_dr(int vrf_id, int af_index);
+t_std_error hal_rt_add_dep_leaked_vrf (t_fib_leaked_rt_key *p_parent_route, hal_vrf_id_t leak_vrf_id);
+t_std_error hal_rt_del_dep_leaked_vrf (t_fib_leaked_rt_key *p_parent_route, hal_vrf_id_t leak_vrf_id);
+t_std_error fib_prg_nbr_to_leaked_vrfs_on_parent_nbr_update(t_fib_nh *p_fh, bool is_add);
+t_std_error hal_rt_get_parent_intf_ctrl(hal_vrf_id_t vrf_id, hal_ifindex_t if_index,
+                                        interface_ctrl_t *p_intf_ctrl);
+t_std_error hal_rt_lag_obj_id_get (hal_ifindex_t if_index, ndi_obj_id_t *obj_id);
+t_std_error hal_rt_get_first_vrf_id(hal_vrf_id_t *p_vrf_id);
+t_std_error hal_rt_get_next_vrf_id(hal_vrf_id_t vrf_id, hal_vrf_id_t *p_next_vrf_id);
 #endif /* __HAL_RT_UTIL_H__ */
 

@@ -366,7 +366,7 @@ bool nbr_mgr_refresh_status_db_read() {
         }
         cps_api_object_it_begin(cps_obj,&it);
 
-        char  vrf_name[HAL_IF_NAME_SZ];
+        char  vrf_name[NAS_VRF_NAME_SZ + 1];
         memset (vrf_name,0,sizeof(vrf_name));
         uint32_t af = HAL_INET4_FAMILY, enable = true;
 

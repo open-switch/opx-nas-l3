@@ -151,7 +151,13 @@ std::string hal_rt_offload_queue_msg_type_stats ()
 }
 
 bool hal_rt_process_neigh_flush_offload_msg(t_fib_offload_msg_neigh_flush *p_flush_msg) {
-    char vrf_name[MAX_LEN_VRF_NAME];
+    hal_vrf_id_t  vrf_id = 0;
+
+    if (hal_rt_get_vrf_id(p_flush_msg->vrf_name, &vrf_id) == false) {
+        /* possibly vrf is deleted before the offload message is processed. skip this msg. */
+        HAL_RT_LOG_DEBUG ("HAL-RT-OFF", "VRF-name:%s is not valid!", p_flush_msg->vrf_name);
+        return true;
+    }
 
     cps_api_object_guard obj_g (cps_api_obj_tool_create(cps_api_qualifier_TARGET,
                                  BASE_NEIGHBOR_FLUSH_OBJ, false));
@@ -162,15 +168,8 @@ bool hal_rt_process_neigh_flush_offload_msg(t_fib_offload_msg_neigh_flush *p_flu
         return false;
     }
 
-    memset (vrf_name, 0, MAX_LEN_VRF_NAME);
-    if (!hal_rt_get_vrf_name(p_flush_msg->vrf_id, vrf_name))
-    {
-        HAL_RT_LOG_ERR ("HAL-RT-OFF", " Invalid VRF id:%d", p_flush_msg->vrf_id);
-        return false;
-    }
-
-    cps_api_object_attr_add(obj_g.get(), BASE_NEIGHBOR_FLUSH_INPUT_VRF_NAME, vrf_name,
-                            strlen(vrf_name)+1);
+    cps_api_object_attr_add(obj_g.get(), BASE_NEIGHBOR_FLUSH_INPUT_VRF_NAME, p_flush_msg->vrf_name,
+                            strlen(p_flush_msg->vrf_name)+1);
     cps_api_object_attr_add_u32(obj_g.get(),BASE_NEIGHBOR_FLUSH_INPUT_AF, p_flush_msg->prefix.af_index);
 
     size_t addr_len = (p_flush_msg->prefix.af_index == AF_INET) ? HAL_INET4_LEN:HAL_INET6_LEN;
@@ -185,14 +184,16 @@ bool hal_rt_process_neigh_flush_offload_msg(t_fib_offload_msg_neigh_flush *p_flu
         memset(&intf_ctrl, 0, sizeof(intf_ctrl));
 
         intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF;
+        intf_ctrl.vrf_id = p_flush_msg->vrf_id;
         intf_ctrl.if_index = p_flush_msg->if_index;
 
         if (dn_hal_get_interface_info(&intf_ctrl) == STD_ERR_OK) {
             cps_api_object_attr_add(obj_g.get(), BASE_NEIGHBOR_FLUSH_INPUT_IFNAME, intf_ctrl.if_name,
                                     strlen(intf_ctrl.if_name)+1);
-            HAL_RT_LOG_INFO ("HAL-RT-OFF", " Processing Neigh flush message for "
-                             "vrf_id: %d, prefix: %s, prefix_len: %d "
-                             "flush_with_intf: %s, if_name: %s(%d)", p_flush_msg->vrf_id,
+            HAL_RT_LOG_DEBUG ("HAL-RT-OFF", " Processing Neigh flush message for "
+                             "vrf: %s(%d), prefix: %s, prefix_len: %d "
+                             "flush_with_intf: %s, if_name: %s(%d)",
+                             p_flush_msg->vrf_name, p_flush_msg->vrf_id,
                              FIB_IP_ADDR_TO_STR (&p_flush_msg->prefix), p_flush_msg->prefix_len,
                              (p_flush_msg->is_neigh_flush_with_intf ? "true":"false"),
                              intf_ctrl.if_name, p_flush_msg->if_index);
@@ -205,9 +206,10 @@ bool hal_rt_process_neigh_flush_offload_msg(t_fib_offload_msg_neigh_flush *p_flu
         }
     } else {
 
-        HAL_RT_LOG_INFO ("HAL-RT-OFF", " Processing Neigh flush message for "
-                         "vrf_id: %d, prefix: %s, prefix_len: %d "
-                         "flush_with_intf: %s, if_name: %s(%d)", p_flush_msg->vrf_id,
+        HAL_RT_LOG_DEBUG ("HAL-RT-OFF", " Processing Neigh flush message for "
+                         "vrf_id: %s(%d), prefix: %s, prefix_len: %d "
+                         "flush_with_intf: %s, if_name: %s(%d)",
+                         p_flush_msg->vrf_name, p_flush_msg->vrf_id,
                          FIB_IP_ADDR_TO_STR (&p_flush_msg->prefix), p_flush_msg->prefix_len,
                          (p_flush_msg->is_neigh_flush_with_intf ? "true":"false"),
                          "N/A", p_flush_msg->if_index);

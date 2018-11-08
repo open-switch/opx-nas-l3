@@ -24,6 +24,7 @@
 #include "nbr_mgr_timer.h"
 #include "std_thread_tools.h"
 #include "std_mac_utils.h"
+#include "std_utils.h"
 #include <exception>
 #include <iostream>
 
@@ -37,7 +38,6 @@ bool nbr_mgr_process_main(void)
 {
     try {
         p_nbr_process_hdl = new nbr_process;
-        memset(&(p_nbr_process_hdl->stats), 0, sizeof(nbr_mgr_stats));
 
         std_thread_init_struct(&nbr_mgr_proc_thr);
         nbr_mgr_proc_thr.name = "nbr_mgr_proc_thr";
@@ -480,6 +480,13 @@ bool nbr_process::nbr_proc_nbr_msg(nbr_mgr_nbr_entry_t& entry) {
                 ptr->process_nbr_data(entry);
             };
 
+            /* Ignore the neighbors with invalid interface */
+            nbr_mgr_intf_entry_t intf;
+            if(nbr_get_if_data(entry.vrfid, entry.if_index, intf) == false) {
+                NBR_MGR_LOG_INFO("PROC", "Nbr VRF:%d if_index %d router-intf %d not present in the cache",
+                                  entry.vrfid, entry.parent_if, entry.if_index);
+                return false;
+            }
             //Do not create the entry with DELAY/PROBE/FAILED if not already present
             if((entry.status & NBR_MGR_NUD_DELAY) ||
                (entry.status & NBR_MGR_NUD_PROBE) ||
@@ -952,6 +959,10 @@ bool nbr_data::process_nbr_data(nbr_mgr_nbr_entry_t& entry) {
                 rc = trigger_resolve();
             return rc;
         }
+        else if (((entry.status == NBR_MGR_NUD_STALE) || (entry.status == NBR_MGR_NUD_REACHABLE))
+               && !nbr_check_intf_up(m_vrf_id, m_ifindex)) {
+            return (trigger_refresh(false));
+        }
 
         /* Update the parent if not done already for the nbr triggered for pro-active resolution.
          * @@TODO Optimize this by getting the MAC-VLAN with parent interface in the interface event. */
@@ -1228,7 +1239,7 @@ bool nbr_data::process_nbr_data(nbr_mgr_nbr_entry_t& entry) {
                                 m_vrf_id, m_vrf_name.c_str(), m_family, ip.c_str(), m_ifindex,
                                 entry.mbr_if_index, m_status, m_flags,
                                 entry.msg_type, entry.status, entry.flags);
-                return true;
+                return false;
             }
             /* Nbr stop resolve update from NAS-L3 -
              * This neighbor is no longer needs to be proactively resolved */
@@ -1272,7 +1283,7 @@ void nbr_data::populate_nbr_entry(nbr_mgr_nbr_entry_t& entry) const {
     entry.family = m_family;
     memcpy(&entry.nbr_addr, &m_ip_addr, sizeof(entry.nbr_addr));
     entry.if_index = m_ifindex;
-    strncpy(entry.vrf_name, m_vrf_name.c_str(), sizeof(entry.vrf_name));
+    safestrncpy(entry.vrf_name, m_vrf_name.c_str(), sizeof(entry.vrf_name));
     entry.status = m_status;
     if (m_mac_data_ptr) {
         std_string_to_mac(&entry.nbr_hwaddr, m_mac_data_ptr->get_mac_addr().c_str(),
@@ -1449,7 +1460,8 @@ bool nbr_data::trigger_delay_resolve() const {
     return nbr_mgr_nbr_resolve(NBR_MGR_NL_DELAY_RESOLVE_MSG, &nbr);
 }
 
-bool nbr_data::trigger_refresh() const {
+bool nbr_data::trigger_refresh(bool track_refresh) const {
+
     nbr_mgr_nbr_entry_t nbr;
 
     /* Dont refresh for static ARP entry */
@@ -1466,18 +1478,22 @@ bool nbr_data::trigger_refresh() const {
                      ip.c_str(), m_mac_data_ptr->get_mac_addr().c_str(), m_ifindex);
     memset(&nbr, 0, sizeof(nbr));
     populate_nbr_entry(nbr);
-
-    //Skip refresh if the interface is admin down/not exist
-    if(!nbr_check_intf_up(nbr.vrfid, nbr.if_index))
-        return false;
-
-    if (!(m_flags & NBR_MGR_MAC_NOT_PRESENT))
-        m_flags |= NBR_MGR_NBR_REFRESH;
-
     nbr_stats.refresh_cnt++;
-    /* Refresh the neighbor */
-    return nbr_mgr_nbr_resolve(NBR_MGR_NL_REFRESH_MSG, &nbr);
+    if (track_refresh) {
+        //Skip refresh if the interface is admin down/not exist
+        if(!nbr_check_intf_up(nbr.vrfid, nbr.if_index))
+            return false;
+
+        if (!(m_flags & NBR_MGR_MAC_NOT_PRESENT))
+            m_flags |= NBR_MGR_NBR_REFRESH;
+        /* Refresh the neighbor */
+        return nbr_mgr_nbr_resolve(NBR_MGR_NL_REFRESH_MSG, &nbr);
+    } else {
+        /* Refresh the neighbor with delay */
+        return nbr_mgr_nbr_resolve(NBR_MGR_NL_DELAY_REFRESH_MSG, &nbr);
+    }
 }
+
 
 bool nbr_data::trigger_delay_refresh() const {
     nbr_mgr_nbr_entry_t nbr;

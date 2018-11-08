@@ -153,7 +153,6 @@ t_std_error hal_rt_find_or_create_ecmp_group(t_fib_dr *p_dr, ndi_nh_group_t *ent
 
     npu_id_t            unit;
     int                 is_mp_obj_created;
-    int                 is_mp_obj_replaced;
     int                 error_occured = false;
     int                 ecmp_count;
     t_fib_hal_dr_info   *p_hal_dr_info;
@@ -167,7 +166,6 @@ t_std_error hal_rt_find_or_create_ecmp_group(t_fib_dr *p_dr, ndi_nh_group_t *ent
 
     *p_out_is_mp_table_full   = false;
     is_mp_obj_created  = false;
-    is_mp_obj_replaced = false;
     if (p_dr->nh_count > ((hal_rt_access_fib_config())->ecmp_max_paths)) {
         ecmp_count         = (hal_rt_access_fib_config())->ecmp_max_paths;
     }else {
@@ -243,10 +241,6 @@ t_std_error hal_rt_find_or_create_ecmp_group(t_fib_dr *p_dr, ndi_nh_group_t *ent
                      */
                     error_occured = true;
                 }
-                else
-                {
-                    is_mp_obj_replaced = true;
-                }
             }
             else
             {
@@ -302,9 +296,6 @@ t_std_error hal_rt_find_or_create_ecmp_group(t_fib_dr *p_dr, ndi_nh_group_t *ent
             if (is_mp_obj_created == true)
             {
                 hal_rt_fib_check_and_delete_mp_obj (p_dr, p_mp_obj, entry->npu_id, true, false);
-            }
-            if (is_mp_obj_replaced == true) {
-                hal_rt_fib_check_and_delete_mp_obj (p_dr, p_mp_obj, entry->npu_id, false, false);
             }
 
             if (*p_out_is_mp_table_full == true) {

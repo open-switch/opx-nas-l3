@@ -189,6 +189,8 @@ int hal_rt_vrf_init (hal_vrf_id_t vrf_id, const char *vrf_name)
     memcpy(&p_vrf->router_mac, &gbl_info->base_mac_addr, HAL_MAC_ADDR_LEN);
     ga_fib_vrf[vrf_id] = p_vrf;
 
+    hal_rt_vrf_update(vrf_id, true);
+
     for (af_index = FIB_MIN_AFINDEX; af_index < FIB_MAX_AFINDEX; af_index++) {
         p_vrf_info = hal_rt_access_fib_vrf_info(vrf_id, af_index);
 
@@ -242,7 +244,7 @@ int hal_rt_vrf_de_init (hal_vrf_id_t vrf_id)
 
     p_vrf = hal_rt_access_fib_vrf(vrf_id);
     if (p_vrf == NULL) {
-        HAL_RT_LOG_DEBUG("HAL-RT", "Vrf node NULL. Vrf_id: %d", vrf_id);
+        HAL_RT_LOG_ERR("HAL-RT", "Vrf node NULL. Vrf_id: %d", vrf_id);
         return STD_ERR(ROUTE, FAIL, rc);
     }
 
@@ -281,6 +283,7 @@ int hal_rt_vrf_de_init (hal_vrf_id_t vrf_id)
     memset (p_vrf, 0, sizeof (t_fib_vrf));
     FIB_VRF_MEM_FREE (p_vrf);
     ga_fib_vrf[vrf_id] = NULL;
+    hal_rt_vrf_update(vrf_id, false);
     HAL_RT_LOG_INFO("VRF-DEINIT", "VRF-id:%d info. deleted successfully!", vrf_id);
     return STD_ERR_OK;
 }
@@ -357,13 +360,32 @@ t_std_error hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac
                                "Invalid interface %s interface get failed ", p_status->if_name);
                 return STD_ERR_OK;
             }
-
-            HAL_RT_LOG_DEBUG("HAL-RT", "RIF entry creation for intf:%s(%d) of type:%d",
+            if ((vrf_id != FIB_DEFAULT_VRF) && (intf_ctrl.int_type == nas_int_type_MACVLAN)) {
+                if (hal_rt_get_parent_intf_ctrl(intf_ctrl.l3_intf_info.vrf_id,
+                                                intf_ctrl.l3_intf_info.if_index, &intf_ctrl) != STD_ERR_OK) {
+                    HAL_RT_LOG_ERR("RT-RIF-ADD",
+                                   "Invalid interface VRF-id:%d if-index:%d. RIF ID get failed ",
+                                   intf_ctrl.l3_intf_info.vrf_id,
+                                   intf_ctrl.l3_intf_info.if_index);
+                    return STD_ERR(ROUTE,FAIL,0);
+                }
+            }
+            HAL_RT_LOG_INFO("HAL-RT", "RIF entry creation for intf:%s(%d) of type:%d",
                              intf_ctrl.if_name, intf_ctrl.if_index, intf_ctrl.int_type);
             if(intf_ctrl.int_type == nas_int_type_PORT) {
                 rif_entry.rif_type = NDI_RIF_TYPE_PORT;
                 rif_entry.attachment.port_id.npu_id = intf_ctrl.npu_id;
                 rif_entry.attachment.port_id.npu_port = intf_ctrl.port_id;
+            } else if(intf_ctrl.int_type == nas_int_type_LAG) {
+                ndi_obj_id_t obj_id;
+                rif_entry.rif_type = NDI_RIF_TYPE_LAG;
+                if(hal_rt_lag_obj_id_get(intf_ctrl.if_index, &obj_id) == STD_ERR_OK) {
+                    rif_entry.attachment.lag_id = obj_id;
+                } else {
+                    HAL_RT_LOG_ERR("HAL-RT", "LAG object id not present for rif-id:0x%lx intf:%s(%d) type:%d",
+                                   rif_id, intf_ctrl.if_name, intf_ctrl.if_index, intf_ctrl.int_type);
+                    return STD_ERR(ROUTE,FAIL,0);
+                }
             } else if(intf_ctrl.int_type == nas_int_type_VLAN) {
                 rif_entry.rif_type = NDI_RIF_TYPE_VLAN;
                 rif_entry.attachment.vlan_id = intf_ctrl.vlan_id;
@@ -455,7 +477,9 @@ cps_api_object_t nas_route_peer_routing_config_to_cps_object(uint32_t vrf_id,
                                     cps_api_qualifier_TARGET);
     cps_api_object_set_key(obj,&key);
 
-    cps_api_object_attr_add_u32(obj,BASE_ROUTE_PEER_ROUTING_CONFIG_VRF_ID,vrf_id);
+    cps_api_object_attr_add(obj,BASE_ROUTE_PEER_ROUTING_CONFIG_VRF_NAME,
+                            FIB_GET_VRF_NAME(vrf_id, HAL_INET4_FAMILY),
+                            strlen((const char*)FIB_GET_VRF_NAME(vrf_id, HAL_INET4_FAMILY))+1);
     cps_api_object_attr_add(obj,BASE_ROUTE_PEER_ROUTING_CONFIG_IFNAME,&p_status->if_name,strlen(p_status->if_name)+1);
     memset(buff, '\0', sizeof(buff));
     const char *_p = std_mac_to_string((const hal_mac_addr_t *)&p_status->mac, buff, sizeof(buff));
@@ -621,6 +645,8 @@ t_std_error hal_rt_task_init (void)
 
     fib_create_intf_tree ();
 
+    fib_create_leaked_rt_tree ();
+
     if ((rc = hal_rt_vrf_init (FIB_DEFAULT_VRF, FIB_DEFAULT_VRF_NAME)) != STD_ERR_OK) {
         HAL_RT_LOG_ERR( "HAL-RT", "VRF Init failed");
         return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
@@ -643,6 +669,7 @@ void hal_rt_task_exit (void)
         hal_rt_vrf_de_init (vrf_id);
     }
     fib_destroy_intf_tree ();
+    fib_destroy_leaked_rt_tree ();
     memset (&g_fib_config, 0, sizeof (g_fib_config));
     memset(&g_fib_gbl_info, 0, sizeof(g_fib_gbl_info));
     exit(0);

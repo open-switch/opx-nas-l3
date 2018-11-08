@@ -113,4 +113,5 @@ void fib_dump_peer_mac_db_get_all_with_vrf(hal_vrf_id_t vrf_id);
 void fib_dump_all_mp_node (uint32_t vrf_id, uint32_t af_index);
 
 void nas_rt_shell_debug_command_init (void);
+
 #endif /* __HAL_RT_DEBUG_H__ */

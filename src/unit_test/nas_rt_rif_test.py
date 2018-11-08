@@ -15,7 +15,7 @@
 
 import cps
 from cps_utils import *
-import nas_ut_framework as nas_ut
+import nas_common_utils as nas_common
 import cps_object
 import nas_os_if_utils as nas_if
 import sys
@@ -60,7 +60,7 @@ def nas_vlan_op(op, data_dict):
             data_dict[intf_rpc_op_attr_id] = intf_rpc_op_type_map[op]
         obj = cps_object.CPSObject( intf_rpc_key_id, data=data_dict)
         op = 'rpc'
-    nas_ut.get_cb_method(op)(obj)
+    nas_common.get_cb_method(op)(obj)
 
 def commit(obj, op):
     l = []
@@ -78,7 +78,7 @@ def exec_shell(cmd):
 def get_sw_mode():
     global mode
     mode = 'OPX'
-    ret = exec_shell('os10-show-version | grep \"OS_NAME.*Enterprise\"')
+    ret = exec_shell('opx-show-version | grep \"OS_NAME.*Enterprise\"')
     if ret:
         mode = 'DoD'
 

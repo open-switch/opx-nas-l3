@@ -57,7 +57,8 @@ static cps_api_return_code_t nas_rt_ut_v6_rt_cfg(bool is_add)
     return cps_api_ret_code_OK;
 }
 
-static cps_api_return_code_t nas_rt_ut_v6_rt_nh_cfg (bool is_add)
+static cps_api_return_code_t nas_rt_ut_v6_rt_nh_cfg (bool is_add, const char *rt_vrf_name,
+                                                     const char *nh_vrf_name)
 {
     if (is_add)
     {
@@ -66,7 +67,8 @@ static cps_api_return_code_t nas_rt_ut_v6_rt_nh_cfg (bool is_add)
         nas_ut_neigh_cfg (1, "200:1::11", AF_INET6, "br200", &hw_addr);
         nas_ut_neigh_cfg (1, "201:1::11", AF_INET6, "br201", &hw_addr);
     }
-    nas_ut_rt_ipv6_nh_cfg (is_add, "101:101::0", 64, AF_INET6, "200:1::11", "br200", "201:1::11", "br201");
+    nas_ut_rt_ipv6_nh_cfg (rt_vrf_name, is_add, "101:101::0", 64, AF_INET6, nh_vrf_name,
+                           "200:1::11", "br200", "201:1::11", "br201");
 
     return cps_api_ret_code_OK;
 }
@@ -156,7 +158,7 @@ TEST(hal_rt_dr_test, hal_rt_dr_ut_dup_rt_2nh_del) {
 
     /* add route nh */
     //@@TODO - to call route replace with all nh's including new nh for IPv4
-    nas_rt_ut_v6_rt_nh_cfg(1);
+    nas_rt_ut_v6_rt_nh_cfg(1, NULL, NULL);
 
     /* wait for few secs after configuration, to make sure NAS-L3 processed those netlink events */
     sleep (5);
@@ -171,7 +173,7 @@ TEST(hal_rt_dr_test, hal_rt_dr_ut_dup_rt_2nh_del) {
     system("ifconfig br201 down");
     /* delete the route nh */
     //@@TODO - to call route replace with remaining nh's excluding deleted nh for IPv4
-    nas_rt_ut_v6_rt_nh_cfg(0);
+    nas_rt_ut_v6_rt_nh_cfg(0, NULL, NULL);
 
     /* wait for few secs after config delete, to make sure NAS-L3 processed those netlink events */
     sleep (5);
@@ -187,6 +189,49 @@ TEST(hal_rt_dr_test, hal_rt_dr_ut_dup_rt_2nh_del) {
     nas_rt_ut_v4_cfg_del();
     nas_rt_ut_v6_cfg_del();
 }
+
+TEST(hal_rt_dr_test, hal_rt_dr_ut_dup_rt_2nh_with_default_vrf_del) {
+    cps_api_return_code_t rc;
+    system("ifconfig br100 up");
+    system("ip addr add 100.1.1.2/24 dev br100");
+    system("ip addr add  100:1::1/64 dev br100");
+    nas_rt_ut_v4_cfg_add();
+    nas_rt_ut_v6_cfg_add();
+
+    /* add route nh */
+    //@@TODO - to call route replace with all nh's including new nh for IPv4
+    nas_rt_ut_v6_rt_nh_cfg(1, "default", "default");
+
+    /* wait for few secs after configuration, to make sure NAS-L3 processed those netlink events */
+    sleep (5);
+    rc = nas_rt_ut_validate_v4_rt_cfg(1);
+    ASSERT_TRUE(rc == cps_api_ret_code_OK);
+
+    rc = nas_rt_ut_validate_v6_rt_cfg(1);
+    ASSERT_TRUE(rc == cps_api_ret_code_OK);
+
+    /* bring admin down */
+    system("ifconfig br200 down");
+    system("ifconfig br201 down");
+    /* delete the route nh */
+    //@@TODO - to call route replace with remaining nh's excluding deleted nh for IPv4
+    nas_rt_ut_v6_rt_nh_cfg(0, "default", NULL);
+
+    /* wait for few secs after config delete, to make sure NAS-L3 processed those netlink events */
+    sleep (5);
+
+    /* verify the route is still present */
+    rc = nas_rt_ut_validate_v4_rt_cfg(1);
+    ASSERT_TRUE(rc == cps_api_ret_code_OK);
+
+    rc = nas_rt_ut_validate_v6_rt_cfg(1);
+    ASSERT_TRUE(rc == cps_api_ret_code_OK);
+
+    ///* clean up */
+    nas_rt_ut_v4_cfg_del();
+    nas_rt_ut_v6_cfg_del();
+}
+
 
 TEST(hal_rt_dr_test, hal_rt_dr_check_full_addr) {
     cps_api_return_code_t rc = nas_ut_validate_rt_cfg ("default", AF_INET, "100.1.1.2", 32, "default",

@@ -17,7 +17,7 @@ libopx_hal_routing_la_SOURCES=src/hal_rt_arp.c src/hal_rt_host.c  src/hal_rt_mpa
                               src/hal_rt_mpath_grp.c src/hal_rt_route.c src/nas_rt_cps.c src/hal_rt_dr.c \
                               src/hal_rt_mem.c src/hal_rt_mpath_util.c src/hal_rt_util.cpp \
                               src/nas_rt_mac.cpp src/hal_rt_intf_util.c src/hal_rt_offload.cpp \
-                              src/nas_rt_virt_routing.cpp
+                              src/nas_rt_virt_routing.cpp src/hal_rt_leak.c
 
 libopx_hal_routing_la_CPPFLAGS= -D_FILE_OFFSET_BITS=64 -I$(top_srcdir)/inc/opx -I$(includedir)/opx $(COMMON_HARDEN_FLAGS) -fPIC
 
@@ -27,7 +27,7 @@ libopx_hal_routing_la_CFLAGS=$(C_HARDEN_FLAGS)
 
 libopx_hal_routing_la_LDFLAGS=-shared -version-info 1:1:0 $(LD_HARDEN_FLAGS)
 
-libopx_hal_routing_la_LIBADD=-lopx_nas_linux -lopx_nas_common -lopx_common -lopx_nas_ndi -lopx_cps_api_common -lopx_logging -lcrypto
+libopx_hal_routing_la_LIBADD=-lopx_nas_linux -lopx_nas_common -lopx_common -lopx_nas_ndi -lopx_cps_api_common -lopx_logging -lcrypto -lpthread
 
 bin_PROGRAMS=base_nbr_mgr_svc
 

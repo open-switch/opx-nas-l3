@@ -26,6 +26,7 @@
 #include "ds_common_types.h"
 #include "std_type_defs.h"
 #include "cps_api_interface_types.h"
+#include "nas_vrf_utils.h"
 
 #include <deque>
 #include <mutex>
@@ -105,7 +106,7 @@ typedef struct {
                                                or parent interface */
     unsigned long parent_or_child_vrfid; /* VRF-id of the router interface in VRF context (child VRF-id or
                                             parent VRF-id */
-    char vrf_name[HAL_IF_NAME_SZ + 1];
+    char vrf_name[NAS_VRF_NAME_SZ + 1];
     char if_name[HAL_IF_NAME_SZ + 1]; /* interface name */
 } nbr_mgr_intf_entry_t;
 

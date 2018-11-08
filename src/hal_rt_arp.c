@@ -322,7 +322,8 @@ t_std_error fib_proc_arp_add (uint8_t af_index, void *p_arp_info, bool is_mgmt_i
             fib_arp_msg_info.out_if_index, fib_arp_msg_info.status, p_nh);
 
     p_nh = fib_proc_nh_add (fib_arp_msg_info.vrf_id, &fib_arp_msg_info.ip_addr,
-                            fib_arp_msg_info.if_index, FIB_NH_OWNER_TYPE_ARP, 0, is_mgmt_intf);
+                            fib_arp_msg_info.if_index, FIB_NH_OWNER_TYPE_ARP, 0, is_mgmt_intf,
+                            fib_arp_msg_info.vrf_id);
     if (p_nh == NULL) {
         HAL_RT_LOG_ERR("HAL-RT-ARP", "%s (): NH addition failed. "
                     "vrf_id: %d, ip_addr: %s, if_index: 0x%x", __FUNCTION__,
@@ -516,16 +517,57 @@ t_fib_cmp_result fib_arp_info_cmp (t_fib_nh *p_fh, t_fib_arp_msg_info *p_fib_arp
     return FIB_CMP_RESULT_NOT_EQUAL;
 }
 
+static t_std_error nas_route_get_all_vrf_arp_info(cps_api_object_list_t list, uint32_t af,
+                                                  bool is_proactive_nh_get) {
+    t_fib_nh *p_nh = NULL;
+    uint32_t vrf_id = FIB_MIN_VRF;
+
+    for (; vrf_id < FIB_MAX_VRF; vrf_id++) {
+        if ((hal_rt_access_fib_vrf(vrf_id) == NULL) ||
+            (FIB_GET_VRF_INFO (vrf_id, af) == NULL)) {
+            continue;
+        }
+        p_nh = fib_get_first_nh (vrf_id, af);
+        while (p_nh != NULL){
+            cps_api_object_t obj = NULL;
+            /* Publish the NHs (Route associated and/or NHT used) that need to be resolved proactively */
+            if (is_proactive_nh_get && (!(STD_IP_IS_ADDR_ZERO(&p_nh->key.ip_addr))) &&
+                ((p_nh->rtm_ref_count) || (p_nh->is_nht_active))) {
+                obj = nas_route_nh_to_nbr_cps_object(p_nh, cps_api_oper_CREATE, false);
+                /* Notify the ARP information for the incomplete, reachable and stale neighbors */
+            } else if ((!is_proactive_nh_get) && (FIB_IS_NH_OWNER_ARP (p_nh))
+                       && (p_nh->p_arp_info != NULL) &&
+                       ((p_nh->p_arp_info->arp_status != RT_NUD_PROBE) &&
+                        (p_nh->p_arp_info->arp_status != RT_NUD_DELAY))) {
+                obj = nas_route_nh_to_arp_cps_object(p_nh, cps_api_oper_CREATE);
+            }
+            if(obj != NULL){
+                if (!cps_api_object_list_append(list,obj)) {
+                    cps_api_object_delete(obj);
+                    HAL_RT_LOG_ERR("HAL-RT-ARP","Failed to append object to object list");
+                    return STD_ERR(ROUTE,FAIL,0);
+                }
+            }
+
+            p_nh = fib_get_next_nh (vrf_id, &p_nh->key.ip_addr, p_nh->key.if_index);
+        }
+    }
+    return STD_ERR_OK;
+}
+
 t_std_error nas_route_get_all_arp_info(cps_api_object_list_t list, uint32_t vrf_id, uint32_t af,
                                        hal_ip_addr_t *p_nh_addr, bool is_specific_nh_get,
-                                       bool is_proactive_nh_get) {
-
+                                       bool is_proactive_nh_get, bool is_specific_vrf_get) {
     t_fib_nh *p_nh = NULL;
 
     if (af >= FIB_MAX_AFINDEX)
     {
         HAL_RT_LOG_ERR("HAL-RT-ARP","Invalid Address family");
         return STD_ERR(ROUTE,FAIL,0);
+    }
+
+    if (is_specific_vrf_get == false) {
+        return (nas_route_get_all_vrf_arp_info(list, af, is_proactive_nh_get));
     }
 
     if (is_specific_nh_get) {
@@ -586,7 +628,7 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf) {
     }
     cps_api_object_attr_t vrf_name_attr = cps_api_object_attr_get(obj,NI_IF_INTERFACES_INTERFACE_BIND_NI_NAME);
     if (vrf_name_attr) {
-        char vrf_name [MAX_LEN_VRF_NAME + 1];
+        char vrf_name [NAS_VRF_NAME_SZ + 1];
         memset(vrf_name, '\0', sizeof(vrf_name));
         safestrncpy(vrf_name, (const char *)cps_api_object_attr_data_bin(vrf_name_attr),
                     sizeof(vrf_name));
@@ -613,7 +655,9 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf) {
          * status changes route/nh information can be deleted/re-programmed
          * to hardware as required.
          */
+
         hal_ifindex_t if_master_index = cps_api_object_attr_data_u32(if_master_attr);
+
         cps_api_object_attr_t if_name_attr = cps_api_object_attr_get(obj,IF_INTERFACES_INTERFACE_NAME);
         if (if_name_attr != NULL) {
             const char *name = (const char*)cps_api_object_attr_data_bin(if_name_attr);
@@ -624,7 +668,6 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf) {
             HAL_RT_LOG_INFO ("HAL-RT-INTF", "Intf:%d Master intf:%d.",
                              index, if_master_index);
         }
-    
     }
 
     /* If the interface VLAN/LAG deleted, flush all the neighbors and routes associated with it */
@@ -661,7 +704,7 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf) {
         HAL_RT_LOG_INFO("HAL-RT-INTF","Intf:%d admin_status:%d is_op_del:%d type:%d",
                         index, admin_status, is_op_del, type);
         /* Allow only the L2 (bridge) and L3 ports for L3 operations */
-        if ((type != BASE_CMN_INTERFACE_TYPE_L2_PORT) && (type != BASE_CMN_INTERFACE_TYPE_L3_PORT) &&
+        if ((type != BASE_CMN_INTERFACE_TYPE_BRIDGE) && (type != BASE_CMN_INTERFACE_TYPE_L3_PORT) &&
             (type != BASE_CMN_INTERFACE_TYPE_LAG) && (type != BASE_CMN_INTERFACE_TYPE_MACVLAN)) {
             return false;
         }
@@ -686,13 +729,14 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf) {
 
 bool fib_proc_ip_unreach_config_msg(t_fib_intf_ip_unreach_config *p_ip_unreach_cfg) {
     bool os_gbl_cfg_req = false, os_gbl_cfg_enable = false, os_intf_cfg_enable = true;
+
     bool rc = hal_rt_handle_ip_unreachable_config(p_ip_unreach_cfg, &os_gbl_cfg_req);
     if (rc == false)
         return false;
 
     if (os_gbl_cfg_req) {
         /* @@TODO This needs to be enabled/disabled per VRF level globally */
-        if (nas_route_os_ip_unreachable_config(p_ip_unreach_cfg->af_index,
+        if (nas_route_os_ip_unreachable_config(p_ip_unreach_cfg->vrf_name, p_ip_unreach_cfg->af_index,
                                                NULL, p_ip_unreach_cfg->is_op_del,
                                                os_gbl_cfg_enable)
             != cps_api_ret_code_OK) {
@@ -706,7 +750,7 @@ bool fib_proc_ip_unreach_config_msg(t_fib_intf_ip_unreach_config *p_ip_unreach_c
 
     /* Program the IP table filter to allow the ICMP unreachable message
      * generation on this interface for a non-routable packets */
-    if (nas_route_os_ip_unreachable_config(p_ip_unreach_cfg->af_index,
+    if (nas_route_os_ip_unreachable_config(p_ip_unreach_cfg->vrf_name, p_ip_unreach_cfg->af_index,
                                            p_ip_unreach_cfg->if_name,
                                            p_ip_unreach_cfg->is_op_del,
                                            os_intf_cfg_enable) !=
@@ -716,7 +760,7 @@ bool fib_proc_ip_unreach_config_msg(t_fib_intf_ip_unreach_config *p_ip_unreach_c
                        p_ip_unreach_cfg->is_op_del, p_ip_unreach_cfg->if_index,
                        p_ip_unreach_cfg->af_index);
         if (os_gbl_cfg_req && (p_ip_unreach_cfg->is_op_del == false)) {
-            nas_route_os_ip_unreachable_config(p_ip_unreach_cfg->af_index,
+            nas_route_os_ip_unreachable_config(p_ip_unreach_cfg->vrf_name, p_ip_unreach_cfg->af_index,
                                                NULL, true, os_gbl_cfg_enable);
         }
         return false;

@@ -238,7 +238,7 @@ int fib_destroy_intf_tree (void)
 
 t_fib_nh *fib_proc_nh_add (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr,
                       uint32_t if_index, t_fib_nh_owner_type owner_type, uint32_t owner_value,
-                      bool is_mgmt_nh)
+                      bool is_mgmt_nh, uint32_t parent_vrf_id)
 {
     t_fib_nh    *p_nh = NULL;
     bool   resolve_nh = false;
@@ -278,9 +278,16 @@ t_fib_nh *fib_proc_nh_add (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr,
         }
 
         p_nh->vrf_id = vrf_id;
+        p_nh->parent_vrf_id = parent_vrf_id;
         p_nh->is_mgmt_nh = is_mgmt_nh;
 
         fib_create_nh_dep_dr_tree (p_nh);
+        if (vrf_id != parent_vrf_id) {
+            t_fib_nh *p_parent_nh = fib_get_nh (p_nh->parent_vrf_id, p_ip_addr, if_index);
+            if (p_parent_nh) {
+                p_nh->next_hop_id = p_parent_nh->next_hop_id;
+            }
+        }
 
         /* First Hop */
         if (((p_nh->key.if_index != 0) || (FIB_IS_NH_LOOP_BACK (p_nh))) &&
@@ -308,7 +315,7 @@ t_fib_nh *fib_proc_nh_add (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr,
 
         if (p_nh->key.if_index)
         {
-            t_fib_intf *p_intf = fib_get_intf (p_nh->key.if_index, vrf_id, p_nh->key.ip_addr.af_index);
+            t_fib_intf *p_intf = fib_get_intf (p_nh->key.if_index, parent_vrf_id, p_nh->key.ip_addr.af_index);
             /* if nh is created now and the interface is already in non-l3 mode
              * then set the nh status to dead.
              */
@@ -394,8 +401,20 @@ t_fib_nh *fib_proc_nh_add (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr,
           && (p_nh->rtm_ref_count == 1)) ||
          ((owner_type == FIB_NH_OWNER_TYPE_CLIENT) && (p_nh->rtm_ref_count == 0))))
     {
-        /* Set the proactive NH resolution if route/NHT are associated with the NH */
-        nas_route_resolve_nh(p_nh, true);
+        bool is_resolve_req = true;
+        if (p_nh->vrf_id != p_nh->parent_vrf_id) {
+            t_fib_nh *p_parent_nh = fib_get_nh (p_nh->parent_vrf_id, p_ip_addr, if_index);
+            if (p_parent_nh) {
+                p_parent_nh->clnts_ref_cnt++;
+                if (p_parent_nh->clnts_ref_cnt != 1) {
+                    is_resolve_req = false;
+                }
+            }
+        }
+        if (is_resolve_req) {
+            /* Set the proactive NH resolution if route/NHT are associated with the NH */
+            nas_route_resolve_nh(p_nh, true);
+        }
     }
 
     HAL_RT_LOG_DEBUG("HAL-RT-NH",
@@ -417,9 +436,9 @@ t_fib_nh *fib_proc_nh_add (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr,
     }
 
     HAL_RT_LOG_INFO("NH-ADD-RSLV",
-                 "AFTER vrf_id: %d, ip_addr: %s, if_index: %d, "
+                 "AFTER vrf_id: %d, ip_addr: %s, parent VRF:%d if_index: %d, "
                  "owner_flag: 0x%x, status_flag: 0x%x, rtm_ref_count: %d, resolve_nh: %d",
-                  vrf_id, FIB_IP_ADDR_TO_STR (p_ip_addr), if_index, p_nh->owner_flag, p_nh->status_flag,
+                  vrf_id, FIB_IP_ADDR_TO_STR (p_ip_addr), parent_vrf_id, if_index, p_nh->owner_flag, p_nh->status_flag,
                   p_nh->rtm_ref_count, resolve_nh);
 
     return p_nh;
@@ -479,8 +498,20 @@ int fib_proc_nh_delete (t_fib_nh *p_nh, t_fib_nh_owner_type owner_type,
           && (p_nh->rtm_ref_count == 0)) ||
          ((owner_type == FIB_NH_OWNER_TYPE_CLIENT) && (p_nh->rtm_ref_count == 0))))
     {
-        /* Reset the proactive NH resolution if no route and NHT are associated with the NH */
-        nas_route_resolve_nh(p_nh, false);
+        bool is_resolve_req = true;
+        if (p_nh->vrf_id != p_nh->parent_vrf_id) {
+            t_fib_nh *p_parent_nh = fib_get_nh (p_nh->parent_vrf_id, &p_nh->key.ip_addr, p_nh->key.if_index);
+            if (p_parent_nh && (p_parent_nh->clnts_ref_cnt)) {
+                p_parent_nh->clnts_ref_cnt--;
+                if (p_parent_nh->clnts_ref_cnt != 0) {
+                    is_resolve_req = false;
+                }
+            }
+        }
+        if (is_resolve_req) {
+            /* Reset the proactive NH resolution if no route and NHT are associated with the NH */
+            nas_route_resolve_nh(p_nh, false);
+        }
     }
 
     if (owner_type == FIB_NH_OWNER_TYPE_ARP)
@@ -2455,9 +2486,11 @@ int fib_nh_walker_main (void)
     std_radix_version_t  max_walker_version = 0;
     uint32_t             tot_nh_processed = 0;
     uint32_t             num_active_vrfs = 0;
-    uint32_t             vrf_id = 0;
+    uint32_t             vrf_id = 0, next_vrf_id = 0;
     int                  af_index = 0;
     int                  rc = STD_ERR_OK;
+    uint8_t              af_itr = 0;
+    t_std_error          vrf_rc = STD_ERR_OK;
 
     for ( ; ;)
     {
@@ -2472,8 +2505,15 @@ int fib_nh_walker_main (void)
         tot_nh_processed = 0;
         num_active_vrfs  = 0;
 
-        for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id++) {
-            for (af_index = FIB_MIN_AFINDEX; af_index < FIB_MAX_AFINDEX; af_index++) {
+        next_vrf_id = 0;
+        vrf_rc = hal_rt_get_first_vrf_id(&next_vrf_id);
+        /* VRF-ids loop */
+        while(vrf_rc == STD_ERR_OK) {
+            vrf_id = next_vrf_id;
+            vrf_rc = hal_rt_get_next_vrf_id(vrf_id, &next_vrf_id);
+            /* Address family loop */
+            for (af_itr = 0, af_index = HAL_RT_V4_AFINDEX; af_itr < HAL_RT_MAX_VALID_AF_CNT;
+                 af_index = HAL_RT_V6_AFINDEX, af_itr++) {
                 nas_l3_lock();
                 if (hal_rt_access_fib_vrf(vrf_id) == NULL) {
                     nas_l3_unlock();
@@ -2615,7 +2655,7 @@ t_std_error fib_nh_del_nh(t_fib_nh *p_nh, bool is_force_del) {
                                  HAL_RT_GET_ERR_STR (hal_err));
             }
         }
-        if (!(p_nh->status_flag & FIB_NH_STATUS_DEAD)) {
+        if ((!(p_nh->status_flag & FIB_NH_STATUS_DEAD)) && (p_nh->vrf_id == p_nh->parent_vrf_id)) {
             cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_nh, cps_api_oper_DELETE);
             if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
                 HAL_RT_LOG_ERR("HAL-RT-DR","Failed to publish neighbor delete");
@@ -2774,9 +2814,11 @@ int fib_nh_walker_call_back (std_radical_head_t *p_rt_head, va_list ap)
                         FIB_DECR_CNTRS_CAM_HOST_ENTRIES (p_nh->vrf_id, p_nh->key.ip_addr.af_index);
                     }
                 }
-                cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_nh, op);
-                if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
-                    HAL_RT_LOG_ERR("HAL-RT-NBR","Failed to publish neighbor delete");
+                if (p_nh->vrf_id == p_nh->parent_vrf_id) {
+                    cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_nh, op);
+                    if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
+                        HAL_RT_LOG_ERR("HAL-RT-NBR","Failed to publish neighbor delete");
+                    }
                 }
             }
         }
@@ -2808,9 +2850,11 @@ int fib_nh_walker_call_back (std_radical_head_t *p_rt_head, va_list ap)
     {
         fib_proc_nh_dead (p_nh);
         p_nh->status_flag &= ~FIB_NH_STATUS_REQ_RESOLVE;
-        cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_nh, cps_api_oper_DELETE);
-        if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
-            HAL_RT_LOG_ERR("HAL-RT-DR","Failed to publish neighbor delete");
+        if (p_nh->vrf_id == p_nh->parent_vrf_id) {
+            cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_nh, cps_api_oper_DELETE);
+            if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
+                HAL_RT_LOG_ERR("HAL-RT-DR","Failed to publish neighbor delete");
+            }
         }
     }
 

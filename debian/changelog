@@ -1,3 +1,32 @@
+opx-nas-l3 (3.10.1) unstable; urgency=medium
+
+  * Feature: Static L2 VxLAN Support
+  * Bugfix: Increase service timeout
+  * Bugfix: Refresh mgmt neighbors continuously
+  * Bugfix: Flush the IPv4 routes (since OS does not send route del event) that are reachable via IP
+            subnet upon deleting the IP address.
+  * Bugfix: If the interface is down, ARP should not be programmed into hardware and the kernel entry
+            should be changed to failed state
+  * Update: Debug dump routines to include multipath object dump
+  * Update: Modify error log on next hop delete failure to be more informative
+  * Update: NHT get all for all VRFs supported
+  * Update: Add support for virtual rif attribute as part of VRRP peer routing MAC configuration
+  * Update: NHT support for non-default VRF
+  * Update: Add validations to ensure that on destination change (route/nh/nht), the next-hop id that the NHT
+            currently uses will trigger ACL clean-up only if this next-hop id is not
+            being used by any other NHT via connected neighbor.
+  * Update: Process all the routes from change list before deleting the next-hop in the mode change scenario
+  * Update: LLA programming should be done when one of the LLA satisfies the L3 mode and admin up condition
+  * Update: Refresh/Resolve the unresolved neighbors during MAC add processing
+  * Update: Publish the neighbor events during interface mode change when an interface part of non-default
+            VRF is getting deleted
+  * Update: Allow the mgmt interface in the nbr-mgr cache for handling intf events for mgmt neighbors.
+  * Update: Handle the RIF creation when the local interface DB is not populated
+  * Update: Change to accommodate event type change for 1d bridge feature
+  * Update: Renaming nas_ut_framework to nas_common_utils
+
+ -- Dell EMC <ops-dev@lists.openswitch.net>  Tue, 06 Nov 2018 15:00:00 -0800
+
 opx-nas-l3 (3.9.0+opx3) unstable; urgency=medium
 
   * Update: Add support for BGP IPv4 Unnumbering
@@ -44,7 +73,7 @@ opx-nas-l3 (3.6.0) unstable; urgency=medium
   * Update: Program loopback address in NPU
   * Update: Added support for virtual routing IP configuration to configure peer's link local
             address in hardware.
-  * Bugfix: Update the mgmt route status when the default route with eth0 is getting replaced 
+  * Bugfix: Update the mgmt route status when the default route with eth0 is getting replaced
             with default route with null interface.
 
 
@@ -64,12 +93,12 @@ opx-nas-l3 (3.2.0+opx3) unstable; urgency=medium
 
 opx-nas-l3 (3.2.0+opx2) unstable; urgency=medium
 
-  * Update: Modified code to not trigger neighbor refresh on MAC delete/stale notification if the 
+  * Update: Modified code to not trigger neighbor refresh on MAC delete/stale notification if the
             neighbor is already in INCOMPLETE state
   * Update: Synchronized RIF create flows between Native RIF & Peer Routing RIF using nas-l3 lock
   * Update: Modified trace logs to print rif id in hex format
   * Update: Updated cps_route_config.py script to handle static routes configuration for IPv6
-  * Update: Modification to make sure the next dependent route loop is not affected because of the 
+  * Update: Modification to make sure the next dependent route loop is not affected because of the
             current route deletion
   * Update: Event filter implementation to selectively publish the routes to App.
                - Configure event filter for mgmt routes
@@ -80,7 +109,7 @@ opx-nas-l3 (3.2.0+opx2) unstable; urgency=medium
 
 opx-nas-l3 (3.2.0+opx1) unstable; urgency=medium
 
-  * Bugfix: Reset next-hop entry's resolution status upon interface status/mode change. 
+  * Bugfix: Reset next-hop entry's resolution status upon interface status/mode change.
   * Bugfix: Reset the MAC not present flag when the neighbor state moved to FAILED
 
  -- Dell EMC <ops-dev@lists.openswitch.net>  Wed, 16 Jan 2018 11:00:00 -0800
