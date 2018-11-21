@@ -12,7 +12,6 @@
 #
 # See the Apache Version 2.0 License for specific language governing
 # permissions and limitations under the License.
-
 import sys
 import getopt
 import cps_utils
@@ -166,8 +165,12 @@ def main(argv):
             else:
                 route_prefix += 2**(32-prefix_len)
         end = time.time()
-        print 'Total time for adding %d routes = %f seconds' % (int (num_of_routes),(end - start))
-
+        if (end > start):
+            print 'Total time for adding %d routes = %f seconds' % (
+                   int (num_of_routes),(end - start))
+        else:
+            print 'Total time for adding %d routes: Unknown' % (
+                   int (num_of_routes))
 
     elif choice == 'update'and ip_addr != '' and nh_ip_addr != '':
         nh_ip_list = str.split(nh_ip_addr)
@@ -191,7 +194,12 @@ def main(argv):
             else:
                 route_prefix += 2**(32-prefix_len)
         end = time.time()
-        print 'Total time for deleting %d routes = %f seconds' % (int (num_of_routes),(end - start))
+        if (end > start):
+            print 'Total time for deleting %d routes = %f seconds' % (
+                   int (num_of_routes), (end - start))
+        else:
+            print 'Total time for deleting %d routes: Unknown' % (
+                   int (num_of_routes))
 
     else:
         usage()

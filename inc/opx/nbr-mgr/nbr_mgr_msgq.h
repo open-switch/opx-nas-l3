@@ -174,4 +174,7 @@ bool nbr_mgr_process_delay_resolve_msg(burst_resolvefunc cb);
 bool nbr_mgr_enqueue_delay_resolve_msg(nbr_mgr_msg_uptr_t msg);
 bool nbr_mgr_process_nl_msg(cps_api_object_t obj, void *param);
 std::string nbr_mgr_netlink_q_stats();
+std::string nbr_mgr_burst_q_stats();
+std::string nbr_mgr_delay_q_stats();
+std::string nbr_mgr_instant_q_stats();
 #endif

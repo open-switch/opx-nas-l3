@@ -485,9 +485,6 @@ static t_std_error hal_rt_intf_check_lla_dep_nh(t_fib_nh *p_nh) {
 
 static t_std_error hal_rt_pub_nbr_evt(t_fib_nh *p_fh, cps_api_operation_types_t op) {
 
-    if (p_fh->vrf_id != p_fh->parent_vrf_id) {
-        return STD_ERR_OK;
-    }
     cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_fh, op);
     if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
         HAL_RT_LOG_ERR ("HAL-RT-NH-PUB",

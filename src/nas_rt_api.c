@@ -724,7 +724,7 @@ cps_api_object_t nas_route_nh_to_arp_cps_object(t_fib_nh *entry, cps_api_operati
     memset(mac_addr, '\0', sizeof(mac_addr));
     hal_rt_mac_to_str (&entry->p_arp_info->mac_addr, mac_addr, HAL_RT_MAX_BUFSZ);
 
-    HAL_RT_LOG_DEBUG("HAL-RT-NH-PUB", "VRF %d. Addr: %s, Interface: %d MAC:%s age-out:%d op:%d",
+    HAL_RT_LOG_INFO("HAL-RT-NH-PUB", "VRF %d. Addr: %s, Interface: %d MAC:%s age-out:%d op:%d",
                      entry->vrf_id, FIB_IP_ADDR_TO_STR (&entry->key.ip_addr),
                      entry->key.if_index, mac_addr, entry->reachable_state_time_stamp, op);
 

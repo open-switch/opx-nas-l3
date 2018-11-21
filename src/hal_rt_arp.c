@@ -701,17 +701,19 @@ bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf) {
         cps_api_object_attr_get(obj, BASE_IF_LINUX_IF_INTERFACES_INTERFACE_DELL_TYPE);
     if (intf_type) {
         type = cps_api_object_attr_data_u32(intf_type);
-        HAL_RT_LOG_INFO("HAL-RT-INTF","Intf:%d admin_status:%d is_op_del:%d type:%d",
-                        index, admin_status, is_op_del, type);
-        /* Allow only the L2 (bridge) and L3 ports for L3 operations */
-        if ((type != BASE_CMN_INTERFACE_TYPE_BRIDGE) && (type != BASE_CMN_INTERFACE_TYPE_L3_PORT) &&
-            (type != BASE_CMN_INTERFACE_TYPE_LAG) && (type != BASE_CMN_INTERFACE_TYPE_MACVLAN)) {
-            return false;
-        }
         cps_api_object_attr_t intf_member_port =
             cps_api_object_attr_get(obj, DELL_IF_IF_INTERFACES_INTERFACE_MEMBER_PORTS_NAME);
-        /* Incase of LAG member delete, ignore it, allow only LAG intf admin down/up and delete */
-        if (is_op_del && intf_member_port && (type == BASE_CMN_INTERFACE_TYPE_LAG)) {
+        HAL_RT_LOG_INFO("HAL-RT-INTF","Intf:%d admin_status:%d is_op_del:%d type:%d mbr:%s",
+                        index, admin_status, is_op_del, type,
+                        (intf_member_port ? ((char*)cps_api_object_attr_data_bin(intf_member_port)) : "NA"));
+        /* Allow only the L2 (bridge) and L3 ports for L3 operations */
+        if ((type != BASE_CMN_INTERFACE_TYPE_BRIDGE) && (type != BASE_CMN_INTERFACE_TYPE_L3_PORT) &&
+            (type != BASE_CMN_INTERFACE_TYPE_LAG) && (type != BASE_CMN_INTERFACE_TYPE_MACVLAN) &&
+            (type != BASE_CMN_INTERFACE_TYPE_MANAGEMENT)) {
+            return false;
+        }
+        /* Incase of LAG member add/delete, ignore it, allow only LAG intf admin down/up and delete */
+        if (intf_member_port && (type == BASE_CMN_INTERFACE_TYPE_LAG)) {
             return false;
         }
     }

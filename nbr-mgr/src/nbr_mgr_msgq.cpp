@@ -114,6 +114,18 @@ std::string nbr_mgr_netlink_q_stats() {
     return (p_msgq_nl_nas_msg_hdl->queue_stats());
 }
 
+std::string nbr_mgr_burst_q_stats() {
+    return (p_msgq_burst_rslv_hdl->queue_stats());
+}
+
+std::string nbr_mgr_delay_q_stats() {
+    return (p_msgq_delay_rslv_hdl->queue_stats());
+}
+
+std::string nbr_mgr_instant_q_stats() {
+    return (p_msgq_instant_rslv_hdl->queue_stats());
+}
+
 bool nbr_mgr_enqueue_netlink_nas_msg(nbr_mgr_msg_uptr_t msg)
 {
     return (p_msgq_nl_nas_msg_hdl->enqueue(std::move(msg)));

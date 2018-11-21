@@ -829,7 +829,7 @@ int fib_del_dr_degen_fh (t_fib_dr *p_dr);
 
 t_fib_dr *fib_get_best_fit_dr (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr);
 
-t_fib_dr *fib_get_next_best_fit_dr (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr);
+t_fib_dr *fib_get_next_best_fit_dr (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr, uint8_t prefix_len);
 
 t_fib_cmp_result fib_dr_nh_cmp (t_fib_dr *p_dr, void *p_rtm_fib_cmd, int *p_nhInfo_size);
 
@@ -1002,9 +1002,7 @@ int fib_add_nh_fh_from_best_fit_dr_nh (t_fib_nh *p_nh, t_fib_dr *p_best_fit_dr);
 
 int fib_mark_nh_for_resolution (t_fib_nh *p_nh);
 
-int fib_mark_nh_dep_dr_for_resolution (t_fib_nh *p_nh);
-
-int fib_update_nh_dep_dr_resolution_status (t_fib_nh *p_nh);
+int fib_update_nh_dep_dr_resolution_status (t_fib_nh *p_nh, bool is_mark_dr_for_resolve);
 
 int fib_resolve_nh_dep_dr (t_fib_nh *p_nh);
 

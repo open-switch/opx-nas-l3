@@ -113,6 +113,15 @@ static bool nbr_check_intf_up(hal_vrf_id_t vrfid, hal_ifindex_t idx) {
     return false;
 }
 
+//Return the admin status of interface - true if up, false if down
+static bool nbr_check_intf_admin_up(hal_vrf_id_t vrfid, hal_ifindex_t idx) {
+    nbr_mgr_intf_entry_t intf;
+    if(nbr_get_if_data(vrfid, idx, intf))
+        return (intf.is_admin_up);
+
+    return false;
+}
+
 //Return the oper status of interface - true if up, false if down
 static bool nbr_check_intf_oper_up(hal_vrf_id_t vrfid, hal_ifindex_t idx) {
     nbr_mgr_intf_entry_t intf;
@@ -243,11 +252,11 @@ bool nbr_process::mac_db_remove(hal_ifindex_t ifidx, const std::string& mac)
 bool nbr_process::nbr_proc_fdb_msg(const nbr_mgr_nbr_entry_t& entry) {
 
     std::string mac = nbr_mac_addr_string (entry.nbr_hwaddr);
-    NBR_MGR_LOG_INFO("PROC", "FDB msg_type:%s, vrf-id:%lu, family:%s(%d), MAC:%s, "
-                     "ifindex:%d/phy_idx:%d, expire:%lu, flags:0x%lx, status:%s",
-                     ((entry.msg_type == NBR_MGR_NBR_ADD) ? "Add" : "Del"), entry.vrfid,
-                     "Bridge", entry.family, mac.c_str(), entry.if_index, entry.mbr_if_index,
-                     entry.expire, entry.flags, nbr_mgr_nl_neigh_state_to_str (entry.status));
+    NBR_MGR_EXT_LOG_INFO("PROC", "FDB msg_type:%s, vrf-id:%lu, family:%s(%d), MAC:%s, "
+                         "ifindex:%d/phy_idx:%d, expire:%lu, flags:0x%lx, status:%s",
+                         ((entry.msg_type == NBR_MGR_NBR_ADD) ? "Add" : "Del"), entry.vrfid,
+                         "Bridge", entry.family, mac.c_str(), entry.if_index, entry.mbr_if_index,
+                         entry.expire, entry.flags, nbr_mgr_nl_neigh_state_to_str (entry.status));
 
     mac_data_ptr ptr;
     try {
@@ -261,16 +270,23 @@ bool nbr_process::nbr_proc_fdb_msg(const nbr_mgr_nbr_entry_t& entry) {
                 NBR_MGR_LOG_INFO("PROC", "FDB already learnt or refreshed!");
                 return true;
             }
+            ptr->fdb_msg_cnt(true);
             if(entry.mbr_if_index) {
                 ptr->update_mac_if(entry.mbr_if_index);
                 ptr->set_fdb_type(FDB_TYPE::FDB_LEARNED);
-            } else
+                if (ptr->get_mac_learnt_flag() == false) {
+                    ptr->set_mac_learnt_flag(true);
+                }
+            } else {
+                ptr->fdb_add_msg_no_mbr_cnt();
                 ptr->set_fdb_type(FDB_TYPE::FDB_IGNORE);
+            }
             NBR_MGR_LOG_DEBUG("PROC", "Fdb entry created/Updated");
         } else {
             ptr = mac_db_get(entry.if_index, entry.nbr_hwaddr);
             stats.fdb_del_msg_cnt++;
 
+            ptr->fdb_msg_cnt(false);
             if(ptr->nbr_list_empty())
                 return delete_mac_instance(entry.nbr_hwaddr, entry.if_index);
 
@@ -930,10 +946,27 @@ void nbr_data::display() const {
 bool nbr_data::process_nbr_data(nbr_mgr_nbr_entry_t& entry) {
     bool rc = true;
     std::string ip = nbr_ip_addr_string (m_ip_addr);
-    NBR_MGR_LOG_DEBUG("PROC", "vrf %d(%s), family %d, Nbr %s, if_index %d, phy_idx %d, status %d,"
-                      "flags %d entry type:%d status:%lu flags:%lu",
-                      m_vrf_id, m_vrf_name.c_str(), m_family, ip.c_str(), m_ifindex, entry.mbr_if_index, m_status,
-                      m_flags, entry.msg_type, entry.status, entry.flags);
+    std::string mac = nbr_mac_addr_string (entry.nbr_hwaddr);
+    NBR_MGR_EXT_LOG_INFO("PROC", "Current vrf:%d(%s), family:%d, Nbr:%s, MAC:%s if_index:%d, status: (%s)0x%x,"
+                         "flags:0x%x m_parent_if:%d MAC valid now:%s learnt-first:%s admin-up:%d oper-up:%d pub:%d"
+                         " last-pub-status 0x%x refresh cnt:%d mac-lrn:%d failed-cnt:%d retry-cnt:%d",
+                         m_vrf_id, m_vrf_name.c_str(), m_family, ip.c_str(),
+                         (m_mac_data_ptr ? m_mac_data_ptr->get_mac_addr().c_str() : "NA"), m_ifindex,
+                         nbr_mgr_nl_neigh_state_to_str (m_status), m_status,
+                         m_flags, m_parent_if, ((m_mac_data_ptr && m_mac_data_ptr->is_valid())
+                                                ? "Yes" : "No"),
+                         ((m_mac_data_ptr && m_mac_data_ptr->get_mac_learnt_flag())
+                          ? "Yes" : "No"),
+                         nbr_check_intf_admin_up(m_vrf_id, m_ifindex), nbr_check_intf_oper_up(m_vrf_id, m_ifindex),
+                         m_published, m_last_status_published, m_refresh_cnt, m_refresh_for_mac_learn_retry_cnt,
+                         m_failed_cnt, m_retry_cnt);
+
+    NBR_MGR_EXT_LOG_INFO("PROC", "New: vrf:%d(%s), family:%d, Nbr:%s, MAC:%s "
+                         "entry type:%d status (%s)0x%x flags:%lu auto-ref-on-stale:%d if-index:%d parent-inf:%d",
+                         entry.vrfid, m_vrf_name.c_str(), entry.family, ip.c_str(), mac.c_str(),
+                         entry.msg_type, nbr_mgr_nl_neigh_state_to_str(entry.status), entry.status,
+                         entry.flags, entry.auto_refresh_on_stale_enabled,
+                         entry.if_index, entry.parent_if);
     /*
      * Nbr entry already exists
      * 1. If Nbr add and status incomplete, program blackhole entry in the NPU.
@@ -960,8 +993,8 @@ bool nbr_data::process_nbr_data(nbr_mgr_nbr_entry_t& entry) {
             return rc;
         }
         else if (((entry.status == NBR_MGR_NUD_STALE) || (entry.status == NBR_MGR_NUD_REACHABLE))
-               && !nbr_check_intf_up(m_vrf_id, m_ifindex)) {
-            return (trigger_refresh(false));
+                 && !nbr_check_intf_up(m_vrf_id, m_ifindex)) {
+            trigger_refresh(false);
         }
 
         /* Update the parent if not done already for the nbr triggered for pro-active resolution.
@@ -1118,12 +1151,13 @@ bool nbr_data::process_nbr_data(nbr_mgr_nbr_entry_t& entry) {
                  */
                 nbr_stats.retry_cnt++;
                 if (m_retry_cnt == NBR_MGR_MAX_NBR_RETRY_CNT) {
+                    m_flags &= ~NBR_MGR_NBR_REFRESH;
                     NBR_MGR_LOG_INFO("PROC", "MAC not learnt with the ARP refresh, vrf-id:%d(%s),"
-                                    " family:%d, Nbr:%s, if_index:%d (ll-intf:%d), phy_idx:%d, status:%d,"
-                                    "flags:0x%x entry type:%d status:%lu flags:%lu",
-                                    m_vrf_id, m_vrf_name.c_str(), m_family, ip.c_str(), m_ifindex,
-                                    m_parent_if, entry.mbr_if_index, m_status,
-                                    m_flags, entry.msg_type, entry.status, entry.flags);
+                                     " family:%d, Nbr:%s, if_index:%d (ll-intf:%d), phy_idx:%d, status:%d,"
+                                     "flags:0x%x entry type:%d status:%lu flags:%lu",
+                                     m_vrf_id, m_vrf_name.c_str(), m_family, ip.c_str(), m_ifindex,
+                                     m_parent_if, entry.mbr_if_index, m_status,
+                                     m_flags, entry.msg_type, entry.status, entry.flags);
                 } else {
                     if (!(m_flags & NBR_MGR_NBR_REFRESH))
                         m_flags |= NBR_MGR_MAC_NOT_PRESENT;
@@ -1140,7 +1174,7 @@ bool nbr_data::process_nbr_data(nbr_mgr_nbr_entry_t& entry) {
                                      m_flags, entry.msg_type, entry.status, entry.flags);
                 }
             }
-            if (m_mac_data_ptr && (m_flags & NBR_MGR_MAC_NOT_PRESENT)) {
+            if ((m_mac_data_ptr && (m_flags & NBR_MGR_MAC_NOT_PRESENT)) || m_del_published) {
                 /* Dont wait for MAC to learn in the kernel, program the NPU since
                  * SAI accepts the host creation even if the associated MAC is not learnt
                  * in the NPU, but refresh the nbr until the MAC learns in the kernel,
@@ -1373,24 +1407,19 @@ bool nbr_data::handle_if_state_change(nbr_mgr_intf_entry_t& intf) {
     NBR_MGR_LOG_INFO("PROC-IF-CHG", "Handle IF state change for %s if-index:%d "
                      "admin %d, oper %d m_flags 0x%x, m_status 0x%x ",
                      ip.c_str(), intf.if_index, intf.is_admin_up, intf.is_oper_up, m_flags, m_status);
-    bool trig_nbr_resolve = false;
     if (intf.flags & NBR_MGR_INTF_ADMIN_MSG) {
-        if (intf.is_admin_up) {
-            trig_nbr_resolve = true;
-        } else {
+        if (intf.is_admin_up == false) {
             m_status = NBR_MGR_NUD_NONE;
         }
+        return true;
     }
-    if (intf.flags & NBR_MGR_INTF_OPER_MSG) {
-        if (intf.is_oper_up) {
-            trig_nbr_resolve = true;
-        }
-    }
-    if (trig_nbr_resolve) {
-        if((m_flags & NBR_MGR_NBR_RESOLVE) &&
-           !(m_status & NBR_MGR_NUD_REACHABLE) &&
-           !(m_status & NBR_MGR_NUD_PERMANENT))
+    /* If the oper. status changes to up, resolve the failed neighbors. */
+    if ((intf.flags & NBR_MGR_INTF_OPER_MSG) && (intf.is_oper_up) && !(m_status & NBR_MGR_NUD_PERMANENT)) {
+        if ((m_status & NBR_MGR_NUD_FAILED) || (m_status == NBR_MGR_NUD_NONE)) {
             trigger_resolve();
+        } else {
+            trigger_refresh();
+        }
     }
 
     return true;
@@ -1585,6 +1614,14 @@ bool nbr_data::publish_entry(nbr_mgr_op_t op, const nbr_mgr_nbr_entry_t& entry) 
 
     //If already published, modify operation to UPDATE
     if(m_published && op == NBR_MGR_OP_CREATE) op = NBR_MGR_OP_UPDATE;
+
+    /* Track the del publish, if del published, make sure to publish the add when available to NAS for HW programming */
+    if (((op == NBR_MGR_OP_CREATE) && (entry.status & NBR_MGR_NUD_FAILED)) ||
+        (op == NBR_MGR_OP_DELETE)) {
+        m_del_published = true;
+    } else {
+        m_del_published = false;
+    }
 
     if(nbr_mgr_program_npu(op, entry)) m_published = true;
 

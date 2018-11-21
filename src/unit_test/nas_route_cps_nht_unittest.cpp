@@ -65,7 +65,7 @@ const char *p_tr_mpath_intf2 = "30.0.0.";
 
 const char *nht1 = "40.0.0.1", *nht2 = "40.1.1.1", *nht3 = "40.1.1.2", *nht4 = "40.1.2.1",
      *nht5 = "40.2.0.1", *nht6 = "40.0.1.1", *rt1="40.0.0.0", *rt2 = "40.1.0.0", *rt3 = "40.1.1.0", *rt4 = "40.1.1.1", *rt5 = "0.0.0.0";
-int pref_len1 = 8, pref_len2 = 16, pref_len3 = 24, pref_len4 = 32;
+int pref_len1 = 8, pref_len2 = 16, pref_len3 = 24, pref_len4 = 32, pref_len5 = 20;
 int af = AF_INET;
 
 /* Constants for IPv6 NHT */
@@ -1604,6 +1604,79 @@ int nas_rt_nht_ut_5_2(bool is_prereq) {
     return ret;
 }
 
+int nas_rt_nht_ut_5_3(bool is_prereq) {
+    int ret = 0;
+    nht_log_clear();
+
+    /* TC_5_3 Indirect NH case - Route added, ARP not resolved */
+    nht_add_route (rt1,pref_len1, p_tr_ip2_intf1);
+    nht_add_route (rt2,pref_len2, p_tr_ip2_intf1);
+    nht_add_route (rt3,pref_len3, p_tr_ip2_intf1);
+    nht_add_route (rt2,pref_len5, p_tr_ip2_intf1);
+
+    nht_config(nht3, af, 1);
+
+    ret = nas_rt_nht_validate (nht3, 0, rt1, pref_len1);
+    nas_rt_nht_print_result ("TC_5_3: Indirect NH case - Route added, ARP not resolved", ret);
+
+    if (is_prereq)
+        return ret;
+
+    /* clean-up */
+    nht_config(nht3, af, 0);
+    nht_del_route (rt1,pref_len1, p_tr_ip2_intf1);
+    nht_del_route (rt2,pref_len2, p_tr_ip2_intf1);
+    nht_del_route (rt3,pref_len3, p_tr_ip2_intf1);
+    nht_del_route (rt2,pref_len5, p_tr_ip2_intf1);
+    nht_intf_admin_set(p_dut_intf1,0);
+    nht_intf_admin_set(p_dut_intf1,1);
+    return ret;
+}
+
+int nas_rt_nht_ut_5_4(bool is_prereq) {
+    int ret = 0;
+    nht_log_clear();
+
+    /* TC_5_4 Indirect NH case - Route added, ARP resolved */
+    nht_add_route (rt1,pref_len1, p_tr_ip_intf1);
+    nht_add_route (rt2,pref_len2, p_tr_ip_intf1);
+    nht_add_route (rt3,pref_len3, p_tr_ip_intf1);
+    nht_add_route (rt2,pref_len5, p_tr_ip_intf1);
+    nht_resolve_nh(p_tr_ip_intf1);
+    nht_config(nht3, af, 1);
+
+    do {
+        if ((ret = nas_rt_nht_validate(nht3, 1, rt3, pref_len3)) != 0)
+            break;
+        nht_del_route (rt3, pref_len3, p_tr_ip_intf1);
+        if ((ret = nas_rt_nht_validate(nht3, 1, rt2, pref_len5)) == 0)
+            break;
+        nht_del_route (rt2, pref_len5, p_tr_ip_intf1);
+        if ((ret = nas_rt_nht_validate(nht3, 1, rt2, pref_len2)) == 0)
+            break;
+        nht_del_route (rt2, pref_len2, p_tr_ip_intf1);
+        if ((ret = nas_rt_nht_validate(nht3, 1, rt1, pref_len1)) == 0)
+            break;
+        /* Test case is passed */
+        ret = 0;
+    }while(0);
+
+    nas_rt_nht_print_result ("TC_5_4: Indirect NH case - Route added, ARP resolved", ret);
+
+    if (is_prereq)
+        return ret;
+
+    /* clean-up */
+    nht_config(nht3, af, 0);
+    nht_del_route (rt1,pref_len1, p_tr_ip_intf1);
+    nht_del_route (rt2,pref_len2, p_tr_ip_intf1);
+    nht_del_route (rt3,pref_len3, p_tr_ip_intf1);
+    nht_del_route (rt2,pref_len5, p_tr_ip_intf1);
+    nht_intf_admin_set(p_dut_intf1,0);
+    nht_intf_admin_set(p_dut_intf1,1);
+    return ret;
+}
+
 int nas_rt_nht_ut_6_1(bool is_prereq) {
     int ret = 0;
 
@@ -2111,7 +2184,7 @@ TEST(std_nas_route_test, nas_nht_ipv6_get) {
 }
 
 /* NHT UT test cases */
-
+#ifdef NHT_UT_INDIVIDUAL_TESTS
 TEST(std_nas_route_test, nas_nht_ut_1_1) {
     nas_rt_nht_ut_1_1(false);
 }
@@ -2235,6 +2308,7 @@ TEST(std_nas_route_test, nas_nht_ut_8_2) {
 TEST(std_nas_route_test, nas_nht_ut_9_1) {
     nas_rt_nht_ut_9_1(false);
 }
+#endif
 
 void nas_rt_nht_route_info() {
 
@@ -2273,6 +2347,8 @@ TEST(std_nas_route_test, nas_nht_ut) {
     int ret_ut_4_5 = 0;
     int ret_ut_5_1 = 0;
     int ret_ut_5_2 = 0;
+    int ret_ut_5_3 = 0;
+    int ret_ut_5_4 = 0;
     int ret_ut_6_1 = 0;
     int ret_ut_6_2 = 0;
     int ret_ut_8_1 = 0;
@@ -2312,6 +2388,8 @@ TEST(std_nas_route_test, nas_nht_ut) {
 
     ret_ut_5_1 = nas_rt_nht_ut_5_1(false);
     ret_ut_5_2 = nas_rt_nht_ut_5_2(false);
+    ret_ut_5_3 = nas_rt_nht_ut_5_3(false);
+    ret_ut_5_4 = nas_rt_nht_ut_5_4(false);
     nas_route_nht_get (af);
 
     ret_ut_6_1 = nas_rt_nht_ut_6_1(false);
@@ -2354,6 +2432,8 @@ TEST(std_nas_route_test, nas_nht_ut) {
     nas_rt_nht_print_result ( "TC_4_5", ret_ut_4_5);
     nas_rt_nht_print_result ( "TC_5_1", ret_ut_5_1);
     nas_rt_nht_print_result ( "TC_5_2", ret_ut_5_2);
+    nas_rt_nht_print_result ( "TC_5_3", ret_ut_5_3);
+    nas_rt_nht_print_result ( "TC_5_4", ret_ut_5_4);
     nas_rt_nht_print_result ( "TC_6_1", ret_ut_6_1);
     nas_rt_nht_print_result ( "TC_6_2", ret_ut_6_2);
     nas_rt_nht_print_result ( "TC_8_1", ret_ut_8_1);

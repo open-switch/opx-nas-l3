@@ -2604,7 +2604,7 @@ t_std_error fib_nh_del_nh(t_fib_nh *p_nh, bool is_force_del) {
                     ((p_nh->p_arp_info) ? p_nh->p_arp_info->arp_status : 0));
 
     /* Update NH resolution status in the route entry */
-    fib_update_nh_dep_dr_resolution_status(p_nh);
+    fib_update_nh_dep_dr_resolution_status(p_nh, true);
     if (FIB_IS_NH_FH (p_nh))
     {
         HAL_RT_LOG_DEBUG("HAL-RT-NH",
@@ -2655,15 +2655,13 @@ t_std_error fib_nh_del_nh(t_fib_nh *p_nh, bool is_force_del) {
                                  HAL_RT_GET_ERR_STR (hal_err));
             }
         }
-        if ((!(p_nh->status_flag & FIB_NH_STATUS_DEAD)) && (p_nh->vrf_id == p_nh->parent_vrf_id)) {
+        if (!(p_nh->status_flag & FIB_NH_STATUS_DEAD)) {
             cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_nh, cps_api_oper_DELETE);
             if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
                 HAL_RT_LOG_ERR("HAL-RT-DR","Failed to publish neighbor delete");
             }
         }
     }
-
-    fib_mark_nh_dep_dr_for_resolution (p_nh);
 
     fib_del_nh_best_fit_dr (p_nh);
 
@@ -2752,7 +2750,7 @@ int fib_nh_walker_call_back (std_radical_head_t *p_rt_head, va_list ap)
         fib_delete_all_nh_fh (p_nh);
 
         /* Update NH resolution status in the route entry */
-        fib_update_nh_dep_dr_resolution_status(p_nh);
+        fib_update_nh_dep_dr_resolution_status(p_nh, true);
 
         /* First Hop */
         if (FIB_IS_NH_FH (p_nh))
@@ -2814,11 +2812,9 @@ int fib_nh_walker_call_back (std_radical_head_t *p_rt_head, va_list ap)
                         FIB_DECR_CNTRS_CAM_HOST_ENTRIES (p_nh->vrf_id, p_nh->key.ip_addr.af_index);
                     }
                 }
-                if (p_nh->vrf_id == p_nh->parent_vrf_id) {
-                    cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_nh, op);
-                    if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
-                        HAL_RT_LOG_ERR("HAL-RT-NBR","Failed to publish neighbor delete");
-                    }
+                cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_nh, op);
+                if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
+                    HAL_RT_LOG_ERR("HAL-RT-NBR","Failed to publish neighbor delete");
                 }
             }
         }
@@ -2829,8 +2825,6 @@ int fib_nh_walker_call_back (std_radical_head_t *p_rt_head, va_list ap)
                 fib_resolve_nh (p_nh);
             }
         }
-
-        fib_mark_nh_dep_dr_for_resolution (p_nh);
 
         p_nh->status_flag &= ~FIB_NH_STATUS_REQ_RESOLVE;
 
@@ -2850,11 +2844,9 @@ int fib_nh_walker_call_back (std_radical_head_t *p_rt_head, va_list ap)
     {
         fib_proc_nh_dead (p_nh);
         p_nh->status_flag &= ~FIB_NH_STATUS_REQ_RESOLVE;
-        if (p_nh->vrf_id == p_nh->parent_vrf_id) {
-            cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_nh, cps_api_oper_DELETE);
-            if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
-                HAL_RT_LOG_ERR("HAL-RT-DR","Failed to publish neighbor delete");
-            }
+        cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_nh, cps_api_oper_DELETE);
+        if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
+            HAL_RT_LOG_ERR("HAL-RT-DR","Failed to publish neighbor delete");
         }
     }
 
@@ -2957,7 +2949,7 @@ int fib_proc_nh_dead (t_fib_nh *p_nh)
                p_nh->status_flag, p_nh->owner_flag);
 
     /* Update NH resolution status in the route entry */
-    fib_update_nh_dep_dr_resolution_status(p_nh);
+    fib_update_nh_dep_dr_resolution_status(p_nh, false);
     if (FIB_IS_NH_FH (p_nh))
     {
         HAL_RT_LOG_DEBUG("NH-DEAD",
@@ -3137,9 +3129,10 @@ int fib_mark_nh_for_resolution (t_fib_nh *p_nh)
     return STD_ERR_OK;
 }
 
-int fib_mark_nh_dep_dr_for_resolution (t_fib_nh *p_nh)
+int fib_update_nh_dep_dr_resolution_status (t_fib_nh *p_nh, bool is_mark_dr_for_resolve)
 {
     t_fib_nh_dep_dr   *p_nh_dep_dr = NULL;
+    bool               is_nh_resolved = false;
 
     if (!p_nh)
     {
@@ -3156,6 +3149,11 @@ int fib_mark_nh_dep_dr_for_resolution (t_fib_nh *p_nh)
                 p_nh->vrf_id,
                FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr), p_nh->key.if_index,
                p_nh->status_flag, p_nh->owner_flag);
+
+    if ((p_nh->p_arp_info) && (p_nh->p_arp_info->state == FIB_ARP_RESOLVED) &&
+        !(p_nh->status_flag & FIB_NH_STATUS_DEAD)) {
+        is_nh_resolved = true;
+    }
 
     p_nh_dep_dr = fib_get_first_nh_dep_dr (p_nh);
 
@@ -3180,74 +3178,17 @@ int fib_mark_nh_dep_dr_for_resolution (t_fib_nh *p_nh)
                    p_nh->status_flag, p_nh->owner_flag, p_nh_dep_dr->key.vrf_id,
                    FIB_IP_ADDR_TO_STR (&p_nh_dep_dr->key.dr_key.prefix),
                    p_nh_dep_dr->prefix_len);
+
+        p_nh_dep_dr->p_dr->is_nh_resolved = is_nh_resolved;
 
         /*
          * Mark DR for resolution only for ECMP case
          */
-        if(p_nh_dep_dr->p_dr->num_nh > 1) {
+        if((is_mark_dr_for_resolve) && (p_nh_dep_dr->p_dr->num_nh > 1)) {
             /* set ADD flag to trigger route download to walker */
             p_nh_dep_dr->p_dr->status_flag |= FIB_DR_STATUS_ADD;
-            fib_mark_dr_for_resolution (p_nh_dep_dr->p_dr);
-        }
-
-        p_nh_dep_dr =
-            fib_get_next_nh_dep_dr (p_nh, p_nh_dep_dr->key.vrf_id,
-                               &p_nh_dep_dr->key.dr_key.prefix,
-                               p_nh_dep_dr->prefix_len);
-    }
-
-    return STD_ERR_OK;
-}
-
-int fib_update_nh_dep_dr_resolution_status (t_fib_nh *p_nh)
-{
-    t_fib_nh_dep_dr   *p_nh_dep_dr = NULL;
-
-    if (!p_nh)
-    {
-        HAL_RT_LOG_ERR("HAL-RT-NH",
-                   "%s (): Invalid input param. p_nh: %p",
-                   __FUNCTION__, p_nh);
-
-        return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
-    }
-
-    HAL_RT_LOG_DEBUG("HAL-RT-NH",
-               "NH: vrf_id: %d, ip_addr: %s, if_index: 0x%x, "
-               "status_flag: 0x%x, owner_flag: 0x%x",
-                p_nh->vrf_id,
-               FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr), p_nh->key.if_index,
-               p_nh->status_flag, p_nh->owner_flag);
-
-    p_nh_dep_dr = fib_get_first_nh_dep_dr (p_nh);
-
-    while (p_nh_dep_dr != NULL)
-    {
-        if (p_nh_dep_dr->p_dr == NULL)
-        {
-            p_nh_dep_dr =
-                fib_get_next_nh_dep_dr (p_nh, p_nh_dep_dr->key.vrf_id,
-                                   &p_nh_dep_dr->key.dr_key.prefix,
-                                   p_nh_dep_dr->prefix_len);
-
-            continue;
-        }
-
-        HAL_RT_LOG_DEBUG("HAL-RT-NH",
-                   "NH: vrf_id: %d, ip_addr: %s, if_index: 0x%x, "
-                   "status_flag: 0x%x, owner_flag: 0x%x, "
-                   "NH Dep DR: vrf_id: %d, prefix: %s, prefix_len: %d",
-                    p_nh->vrf_id,
-                   FIB_IP_ADDR_TO_STR (&p_nh->key.ip_addr), p_nh->key.if_index,
-                   p_nh->status_flag, p_nh->owner_flag, p_nh_dep_dr->key.vrf_id,
-                   FIB_IP_ADDR_TO_STR (&p_nh_dep_dr->key.dr_key.prefix),
-                   p_nh_dep_dr->prefix_len);
-
-        if ((p_nh->p_arp_info) && (p_nh->p_arp_info->state == FIB_ARP_RESOLVED) &&
-            !(p_nh->status_flag & FIB_NH_STATUS_DEAD)) {
-            p_nh_dep_dr->p_dr->is_nh_resolved = true;
-        } else {
-            p_nh_dep_dr->p_dr->is_nh_resolved = false;
+            if (!FIB_IS_DR_REQ_RESOLVE (p_nh_dep_dr->p_dr))
+                fib_mark_dr_for_resolution (p_nh_dep_dr->p_dr);
         }
 
         p_nh_dep_dr =

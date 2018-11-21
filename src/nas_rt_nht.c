@@ -331,7 +331,7 @@ int nas_rt_find_next_best_dr_for_nht(t_fib_nht *p_fib_nht, int vrf_id, t_fib_ip_
                          p_best_dr->prefix_len, FIB_IP_ADDR_TO_STR(dest_addr), prefix_len, p_best_dr->nh_handle,
                          p_best_dr->is_nh_resolved, is_multiple_nht);
         if (p_best_dr->is_mgmt_route) {
-            p_best_dr = fib_get_next_best_fit_dr(vrf_id, &p_best_dr->key.prefix);
+            p_best_dr = fib_get_next_best_fit_dr(vrf_id, &p_best_dr->key.prefix, p_best_dr->prefix_len);
             continue;
         }
         if ((is_multiple_nht == false) &&
@@ -347,7 +347,7 @@ int nas_rt_find_next_best_dr_for_nht(t_fib_nht *p_fib_nht, int vrf_id, t_fib_ip_
             *is_next_best_rt_found = true;
             break;
         }
-        p_best_dr = fib_get_next_best_fit_dr(vrf_id, &p_best_dr->key.prefix);
+        p_best_dr = fib_get_next_best_fit_dr(vrf_id, &p_best_dr->key.prefix, p_best_dr->prefix_len);
     }
     if (*is_next_best_rt_found == false) {
         if (is_conn_route_found) {

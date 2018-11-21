@@ -162,10 +162,40 @@ public:
         return nbr_list.empty();
     }
 
+    void set_mac_learnt_flag(bool val) noexcept {
+        m_mac_learnt = val;
+    }
+
+    bool get_mac_learnt_flag() noexcept {
+        return m_mac_learnt;
+    }
+
     void set_fdb_type(FDB_TYPE ft) noexcept {
         m_fdb_type = ft;
     }
 
+    void fdb_msg_cnt(bool is_add) noexcept {
+        if (is_add) {
+            m_fdb_add_cnt++;
+        } else {
+            m_fdb_del_cnt++;
+        }
+    }
+
+    void fdb_add_msg_no_mbr_cnt() noexcept {
+        m_fdb_add_no_mbr_cnt++;
+    }
+
+    uint32_t fdb_get_msg_no_mbr_cnt() noexcept {
+        return m_fdb_add_no_mbr_cnt;
+    }
+
+    uint32_t fdb_get_msg_cnt(bool is_add) noexcept {
+        if (is_add) {
+            return m_fdb_add_cnt;
+        }
+        return m_fdb_del_cnt;
+    }
     void display() const;
 
     void for_each_nbr_list(std::function <void (nbr_data const *, std::string)> fn) {
@@ -189,6 +219,12 @@ private:
     hal_ifindex_t   m_if_index;
     hal_ifindex_t   m_mbr_index; /* VLAN member port - physical/LAG */
     FDB_TYPE        m_fdb_type = FDB_TYPE::FDB_INCOMPLETE;
+    bool            m_mac_learnt = false; /* If the MAC is learnt in the kernel first time,
+                                             it will be set to true after that
+                                             it will not be re-set on MAC delete. */
+    uint32_t        m_fdb_add_cnt = 0;
+    uint32_t        m_fdb_add_no_mbr_cnt = 0;
+    uint32_t        m_fdb_del_cnt = 0;
 
     //List of associated neighbor entries. Any change in mac info can trigger a walk of this list
     nbr_data_list   nbr_list;
@@ -332,6 +368,7 @@ private:
     mutable uint32_t m_flags = 0;
     mutable bool   m_published = false;
     mutable uint8_t m_last_status_published = 0;
+    mutable bool   m_del_published = false;
     uint8_t        m_failed_cnt = 0; /* This helps to resolve
                                         the nbr atleast few times
                                         before give up */

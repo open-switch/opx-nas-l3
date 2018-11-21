@@ -566,11 +566,9 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
             p_nh->status_flag |= FIB_NH_STATUS_DEAD;
             fib_proc_nh_dead (p_nh);
             p_nh->status_flag &= ~FIB_NH_STATUS_DEAD;
-            if (p_nh->vrf_id == p_nh->parent_vrf_id) {
-                cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_nh, cps_api_oper_DELETE);
-                if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
-                    HAL_RT_LOG_ERR("HAL-RT-DR","Failed to publish neighbor delete");
-                }
+            cps_api_object_t obj = nas_route_nh_to_arp_cps_object(p_nh, cps_api_oper_DELETE);
+            if(obj && (nas_route_publish_object(obj)!= STD_ERR_OK)){
+                HAL_RT_LOG_ERR("HAL-RT-DR","Failed to publish neighbor delete");
             }
         }
         if (dr_msg_info.rt_type == RT_CACHE) {
@@ -2797,7 +2795,7 @@ t_fib_dr *fib_get_best_fit_dr (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr)
  * for which tracking is on, then we need to find out
  * next best DR (with different route prefix length) and use that for NHT
  */
-t_fib_dr *fib_get_next_best_fit_dr (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr)
+t_fib_dr *fib_get_next_best_fit_dr (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr, uint8_t prefix_len)
 {
     t_fib_dr       *p_best_fit_dr = NULL;
     uint8_t     af_index = 0;
@@ -2812,8 +2810,7 @@ t_fib_dr *fib_get_next_best_fit_dr (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr)
     p_best_fit_dr = (t_fib_dr *)
         std_radix_getnextbest (hal_rt_access_fib_vrf_dr_tree(vrf_id, af_index),
                          (uint8_t *)p_ip_addr,
-                         FIB_GET_RDX_DR_KEY_LEN (p_ip_addr,
-                         FIB_AFINDEX_TO_PREFIX_LEN (af_index)));
+                         FIB_GET_RDX_DR_KEY_LEN (p_ip_addr, prefix_len));
 
     return p_best_fit_dr;
 }

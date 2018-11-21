@@ -1,3 +1,11 @@
+opx-nas-l3 (3.10.1+opx1) unstable; urgency=medium
+
+  * Bugfix: L3 ARP MAC relearning fails after the port-channel is flapped and
+            switch is reloaded.
+  * Bugfix: Fix for finding next best DR with different route prefix length
+
+ -- Dell EMC <ops-dev@lists.openswitch.net>  Sun, 18 Nov 2018 15:00:00 -0800
+
 opx-nas-l3 (3.10.1) unstable; urgency=medium
 
   * Feature: Static L2 VxLAN Support

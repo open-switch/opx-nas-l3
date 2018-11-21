@@ -138,8 +138,9 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
         cps_api_object_attr_get(obj, BASE_IF_LINUX_IF_INTERFACES_INTERFACE_DELL_TYPE);
     if (intf_type) {
         type = cps_api_object_attr_data_u32(intf_type);
-        NBR_MGR_LOG_INFO("CPS-INTF","Intf:%d is_del:%d flags:0x%x status:%s type:%d",
-                         index, is_op_del, p_intf->flags, (is_admin_up ? "Up" : "Down"), type);
+        NBR_MGR_LOG_INFO("CPS-INTF","Intf:%d is_del:%d admin:%s oper:%s type:%d", index, is_op_del,
+                         ((p_intf->flags & NBR_MGR_INTF_ADMIN_MSG) ? (is_admin_up ? "Up" : "Down") : "NA"),
+                         ((p_intf->flags & NBR_MGR_INTF_OPER_MSG) ? (is_oper_up ? "Up" : "Down") : "NA"), type);
         /* Allow only the L2 (bridge) and L3 ports for L3 operations */
         if ((type != BASE_CMN_INTERFACE_TYPE_BRIDGE) && (type != BASE_CMN_INTERFACE_TYPE_L3_PORT) &&
             (type != BASE_CMN_INTERFACE_TYPE_LAG) && (type != BASE_CMN_INTERFACE_TYPE_L2_PORT) &&
@@ -148,18 +149,22 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
         }
         /* Incase of LAG/VLAN member delete, ignore it,
          * allow only LAG/VLAN intf admin down/up and delete */
-        if (is_op_del) {
-            if (type == BASE_CMN_INTERFACE_TYPE_LAG) {
-                cps_api_object_attr_t intf_member_port =
-                    cps_api_object_attr_get(obj, DELL_IF_IF_INTERFACES_INTERFACE_MEMBER_PORTS_NAME);
-                if (intf_member_port) {
-                    NBR_MGR_LOG_INFO("CPS-INTF","LAG member del Intf:%d flags:0x%x status:%s type:%d mbr-port:%p",
-                                     index, p_intf->flags, (is_admin_up ? "Up" : "Down"), type, intf_member_port);
-                    return false;
-                }
-            } else if (type == BASE_CMN_INTERFACE_TYPE_L2_PORT) {
-                NBR_MGR_LOG_INFO("CPS-INTF","VLAN member del Intf:%d flags:0x%x status:%s type:%d",
-                                 index, p_intf->flags, (is_admin_up ? "Up" : "Down"), type);
+        if (type == BASE_CMN_INTERFACE_TYPE_LAG) {
+            cps_api_object_attr_t intf_member_port =
+                cps_api_object_attr_get(obj, DELL_IF_IF_INTERFACES_INTERFACE_MEMBER_PORTS_NAME);
+            if (intf_member_port) {
+                NBR_MGR_LOG_INFO("CPS-INTF","LAG member Intf:%d is_del:%d admin:%s oper:%s type:%d mbr:%s", index, is_op_del,
+                                 ((p_intf->flags & NBR_MGR_INTF_ADMIN_MSG) ? (is_admin_up ? "Up" : "Down") : "NA"),
+                                 ((p_intf->flags & NBR_MGR_INTF_OPER_MSG) ? (is_oper_up ? "Up" : "Down") : "NA"), type,
+                                 ((char*)cps_api_object_attr_data_bin(intf_member_port)));
+                return false;
+            }
+        }
+        if (type == BASE_CMN_INTERFACE_TYPE_L2_PORT) {
+            NBR_MGR_LOG_INFO("CPS-INTF","VLAN member Intf:%d is_del:%d admin:%s oper:%s type:%d", index, is_op_del,
+                             ((p_intf->flags & NBR_MGR_INTF_ADMIN_MSG) ? (is_admin_up ? "Up" : "Down") : "NA"),
+                             ((p_intf->flags & NBR_MGR_INTF_OPER_MSG) ? (is_oper_up ? "Up" : "Down") : "NA"), type);
+            if (is_op_del) {
                 return false;
             }
         }
@@ -191,8 +196,9 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
     NBR_MGR_LOG_INFO("CPS-INTF","msg:%s VRF-id:%lu Intf:%d(%s) flags:0x%x status admin:%s oper:%s type:%d "
                      "bridge:%d is_op_del:%d vlan-id:%d", nbr_mgr_nl_intf_msg_to_str(p_intf->flags),
                      p_intf->vrfid, index, (if_name ? p_intf->if_name : ""), p_intf->flags,
-                     (is_admin_up ? "Up" : "Down"), (is_oper_up ? "Up" : "Down"), type, is_bridge,
-                     is_op_del, vlan_id);
+                     ((p_intf->flags & NBR_MGR_INTF_ADMIN_MSG) ? (is_admin_up ? "Up" : "Down") : "NA"),
+                     ((p_intf->flags & NBR_MGR_INTF_OPER_MSG) ? (is_oper_up ? "Up" : "Down") : "NA"),
+                     type, is_bridge, is_op_del, vlan_id);
     return true;
 }
 

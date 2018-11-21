@@ -31,14 +31,15 @@ extern char *nbr_mgr_nl_neigh_state_to_str (int state);
 void nbr_process::nbr_mgr_dump_process_stats() {
     NBR_MGR_LOG_ERR("DUMP", " NBR_MGR Stats INTF add:%d,del:%d,NBR add:%d,incomplete:%d,reachable:%d,stale:%d,"
                     "delay:%d,probe:%d,failed:%d,permanent:%d,del:%d, RESOLVE add:%d del%d FDB add:%d del:%d"
-                    " FLUSH:%d trig_refresh:%d,dup_trig_nbr:%d",
+                    " FLUSH:%d trig_refresh:%d,dup_trig_nbr:%d Q netlink:%s burst:%s delay:%s instant:%s",
                     stats.intf_add_msg_cnt,  stats.intf_del_msg_cnt, stats.nbr_add_msg_cnt,
                     stats.nbr_add_incomplete_msg_cnt, stats.nbr_add_reachable_msg_cnt, stats.nbr_add_stale_msg_cnt,
                     stats.nbr_add_delay_msg_cnt, stats.nbr_add_probe_msg_cnt, stats.nbr_add_failed_msg_cnt,
                     stats.nbr_add_permanaent_cnt, stats.nbr_del_msg_cnt,
                     stats.nbr_rslv_add_msg_cnt, stats.nbr_rslv_del_msg_cnt,
                     stats.fdb_add_msg_cnt, stats.fdb_del_msg_cnt, stats.flush_msg_cnt,
-                    stats.flush_trig_refresh_cnt, stats.flush_nbr_cnt);
+                    stats.flush_trig_refresh_cnt, stats.flush_nbr_cnt, nbr_mgr_netlink_q_stats().c_str(),
+                    nbr_mgr_burst_q_stats().c_str(), nbr_mgr_delay_q_stats().c_str(), nbr_mgr_instant_q_stats().c_str());
 }
 
 static void _nbr_mgr_dump_nbr_data_stats(nbr_data const * ptr) {
@@ -124,9 +125,12 @@ void _nbr_mgr_dump_all_nbr_stats_clear(nbr_data const * ptr) {
 }
 
 void nbr_mgr_dump_mac_data(mac_data_ptr ptr) {
-    NBR_MGR_LOG_ERR("DUMP", "MAC entry MAC:%s, ifindex:%d, mbr_if_index:%d, FDB type:%d",
+    NBR_MGR_LOG_ERR("DUMP", "MAC entry MAC:%s, ifindex:%d, mbr_if_index:%d, FDB type:%d valid:%d learnt-first:%d "
+                    " add-cnt:%d add-no-mbr-cnt:%d del-cnt:%d",
                     ptr->get_mac_addr().c_str(), ptr->get_mac_intf(),
-                    ptr->get_mac_phy_if(), static_cast<int>(ptr->get_fdb_type()));
+                    ptr->get_mac_phy_if(), static_cast<int>(ptr->get_fdb_type()), ptr->is_valid(),
+                    ptr->get_mac_learnt_flag(), ptr->fdb_get_msg_cnt(true), ptr->fdb_get_msg_no_mbr_cnt(),
+                    ptr->fdb_get_msg_cnt(false));
 }
 
 
@@ -219,6 +223,7 @@ static void _nbr_mgr_dump_nbr_data(nbr_data const * ptr) {
         } catch(std::invalid_argument& e) {
             NBR_MGR_LOG_ERR("DUMP", "MAC is not present");
         }
+        p_nbr_process_hdl->nbr_mgr_dump_process_stats();
     }
 }
 
@@ -246,7 +251,17 @@ static void _nbr_mgr_dump_nbr_ref(nbr_data_ptr &ptr) {
         } catch(std::invalid_argument& e) {
             NBR_MGR_LOG_ERR("DUMP", "MAC is not present");
         }
+        p_nbr_process_hdl->nbr_mgr_dump_process_stats();
     }
+}
+
+void nbr_mgr_dump_all() {
+    if (p_nbr_process_hdl == nullptr) return;
+
+    p_nbr_process_hdl->nbr_db_walk(_nbr_mgr_dump_nbr_data);
+    p_nbr_process_hdl->nbr_mgr_dump_process_stats();
+    _nbr_mgr_dump_all_nbr_stats();
+    p_nbr_process_hdl->nbr_db_walk(_nbr_mgr_dump_nbr_data_stats);
 }
 
 /* ARP/Neighbor dump, pass if-index 0 to dump all neighbors */
