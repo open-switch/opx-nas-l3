@@ -1736,17 +1736,20 @@ void fib_dump_mp_info_per_vrf_per_af (uint32_t vrf_id, uint32_t af_index)
     memset(&key, 0, sizeof(key));
 
     p_rt_head = std_radix_getnext (hal_rt_access_fib_vrf_mp_md5_tree(vrf_id,
-                                    af_index), (uint8_t *) &key,
-                                    HAL_RT_MP_MD5_NODE_TREE_KEY_SIZE);
+                af_index), (uint8_t *) &key,
+            HAL_RT_MP_MD5_NODE_TREE_KEY_SIZE);
 
-    if (p_rt_head == NULL)
-    {
-        return;
+    while(p_rt_head) {
+        p_mp_md5_node = (t_fib_mp_md5_node *) p_rt_head;
+
+        fib_dump_mp_md5_node (p_mp_md5_node, true);
+
+        memcpy(&key, &(p_mp_md5_node->key), sizeof(t_fib_mp_md5_node_key));
+        p_rt_head = std_radix_getnext (hal_rt_access_fib_vrf_mp_md5_tree(vrf_id,
+                    af_index), (uint8_t *) &key,
+                HAL_RT_MP_MD5_NODE_TREE_KEY_SIZE);
     }
 
-    p_mp_md5_node = (t_fib_mp_md5_node *) p_rt_head;
-
-    fib_dump_mp_md5_node (p_mp_md5_node, true);
     return;
 }
 

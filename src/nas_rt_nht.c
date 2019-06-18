@@ -350,18 +350,18 @@ int nas_rt_find_next_best_dr_for_nht(t_fib_nht *p_fib_nht, int vrf_id, t_fib_ip_
         p_best_dr = fib_get_next_best_fit_dr(vrf_id, &p_best_dr->key.prefix, p_best_dr->prefix_len);
     }
     if (*is_next_best_rt_found == false) {
-        if (is_conn_route_found) {
+        if (p_nh && is_conn_route_found) {
             /* There is a connected route to reach the NHT nexthop, resolve the NH thru Nbr-Mgr */
             if (p_nh->vrf_id != p_nh->parent_vrf_id) {
                 t_fib_nh *p_parent_nh = fib_get_nh (p_nh->parent_vrf_id, dest_addr, p_nh->key.if_index);
                 if (p_parent_nh == NULL) {
                     /* If parent NH is not present, create it before creating the leaked NH */
                     fib_proc_nh_add (p_nh->parent_vrf_id, dest_addr, p_nh->key.if_index,
-                                     FIB_NH_OWNER_TYPE_CLIENT, 0, false, p_nh->parent_vrf_id);
+                                     FIB_NH_OWNER_TYPE_CLIENT, 0, false, p_nh->parent_vrf_id, 0);
                 }
             }
             fib_proc_nh_add (vrf_id, dest_addr, p_nh->key.if_index,
-                             FIB_NH_OWNER_TYPE_CLIENT, 0, false, parent_vrf_id);
+                             FIB_NH_OWNER_TYPE_CLIENT, 0, false, parent_vrf_id, 0);
         }
         return STD_ERR_OK;
     }
@@ -684,12 +684,12 @@ int nas_rt_handle_dest_change(t_fib_dr *p_dr, t_fib_nh *p_nh, bool is_add) {
                         if (p_parent_nh == NULL) {
                             /* If parent NH is not present, create it before creating the leaked NH */
                             fib_proc_nh_add (p_fh->parent_vrf_id, &p_fib_nht->key.dest_addr, p_fh->key.if_index,
-                                             FIB_NH_OWNER_TYPE_CLIENT, 0, false, p_fh->parent_vrf_id);
+                                             FIB_NH_OWNER_TYPE_CLIENT, 0, false, p_fh->parent_vrf_id, 0);
                         }
                     }
 
                     fib_proc_nh_add (p_fib_nht->vrf_id, &p_fib_nht->key.dest_addr,
-                                     p_fh->key.if_index, FIB_NH_OWNER_TYPE_CLIENT, 0, false, parent_vrf_id);
+                                     p_fh->key.if_index, FIB_NH_OWNER_TYPE_CLIENT, 0, false, parent_vrf_id, 0);
                     /* Check if this Route is better match for NHT(s) */
                 } else if ((!(FIB_IS_AFINDEX_VALID (p_fib_nht->fib_match_dest_addr.af_index)) &&
                             (STD_IP_IS_ADDR_ZERO(&p_fib_nht->fib_match_dest_addr))) ||
@@ -944,12 +944,12 @@ int nas_rt_handle_nht (t_fib_nht *p_nht_info, bool is_add, bool is_force_del) {
             if (p_parent_nh == NULL) {
                 /* If parent NH is not present, create it before creating the leaked NH */
                 fib_proc_nh_add (p_nh->parent_vrf_id, &p_nht_info->key.dest_addr, p_nh->key.if_index,
-                                 FIB_NH_OWNER_TYPE_CLIENT, 0, false, p_nh->parent_vrf_id);
+                                 FIB_NH_OWNER_TYPE_CLIENT, 0, false, p_nh->parent_vrf_id, 0);
             }
         }
 
         fib_proc_nh_add (p_nht_info->vrf_id, &p_nht_info->key.dest_addr,
-                         p_nh->key.if_index, FIB_NH_OWNER_TYPE_CLIENT, 0, false, p_nh->parent_vrf_id);
+                         p_nh->key.if_index, FIB_NH_OWNER_TYPE_CLIENT, 0, false, p_nh->parent_vrf_id, 0);
         if (p_nh->p_arp_info->state != FIB_ARP_RESOLVED) {
             return STD_ERR_OK;
         }

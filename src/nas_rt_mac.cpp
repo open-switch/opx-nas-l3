@@ -97,10 +97,10 @@ bool nas_rt_peer_mac_db_add (nas_rt_peer_mac_config_t* mac_info)
     nas_rt_mac_uptr_t mac_uptr (new nas_rt_peer_mac_config_t (*mac_info));
     nas_rt_db_add_peer_mac_list (mac_uptr);
 
-    HAL_RT_LOG_INFO("HAL-RT", "Vrf:%d if-name:%s peer-mac:%s vrf obj:0x%lx rif obj:0x%lx "
+    HAL_RT_LOG_INFO("HAL-RT", "Vrf:%d if-name:%s peer-mac:%s ingres-only:%d vrf obj:0x%lx rif obj:0x%lx "
                     "added successfully", mac_info->vrf_id, mac_info->if_name,
                     hal_rt_mac_to_str(&mac_info->mac, p_buf, MAC_STR_LEN),
-                    mac_info->vrf_obj_id, mac_info->rif_obj_id);
+                    mac_info->ingress_only, mac_info->vrf_obj_id, mac_info->rif_obj_id);
     return true;
 }
 
@@ -160,6 +160,7 @@ void fib_dump_peer_mac_db_get_all_with_vrf(hal_vrf_id_t vrf_id)
 }
 
 t_std_error nas_route_get_all_peer_routing_config(bool is_specific_vrf_get, hal_vrf_id_t filter_vrf_id,
+                                                  char *if_name, hal_mac_addr_t *mac_addr,
                                                   cps_api_object_list_t list){
 
     t_fib_vrf      *p_vrf = NULL;
@@ -188,6 +189,16 @@ t_std_error nas_route_get_all_peer_routing_config(bool is_specific_vrf_get, hal_
 
         for(auto& x: mac_list){
             nas_rt_peer_mac_config_t *ptr = x.second.get();
+            if ((if_name) &&
+                (memcmp(if_name, ptr->if_name, sizeof(ptr->if_name)))) {
+                continue;
+            }
+
+            if ((mac_addr) &&
+                (memcmp(*mac_addr, ptr->mac, sizeof(ptr->mac)))) {
+                continue;
+            }
+
             cps_api_object_t obj = nas_route_peer_routing_config_to_cps_object(vrf_id, ptr);
             if(obj == NULL) {
                 continue;

@@ -78,7 +78,7 @@ def exec_shell(cmd):
 def get_sw_mode():
     global mode
     mode = 'OPX'
-    ret = exec_shell('opx-show-version | grep \"OS_NAME.*Enterprise\"')
+    ret = exec_shell('os10-show-version | grep \"OS_NAME.*Enterprise\"')
     if ret:
         mode = 'DoD'
 

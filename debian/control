@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: Dell EMC <ops-dev@lists.openswitch.net>
 Build-Depends: debhelper (>= 9),dh-autoreconf,dh-systemd,autotools-dev,libopx-common-dev (>= 1.4.0),
                libopx-nas-common-dev (>= 6.1.0),libopx-cps-dev (>= 3.6.2),libopx-logging-dev (>= 2.1.0),
-               libopx-nas-linux-dev (>= 5.11.0),libopx-nas-ndi-dev (>= 4.6.0),opx-ndi-api-dev (>= 7.5.0),
+               libopx-nas-linux-dev (>= 5.11.0),libopx-nas-ndi-dev, opx-ndi-api-dev (>= 7.5.0),
                libssl-dev,libsystemd-dev
 Standards-Version: 3.9.3
 Vcs-Browser: https://github.com/open-switch/opx-nas-l3
@@ -20,7 +20,7 @@ Package: libopx-nas-l3-dev
 Architecture: any
 Depends: ${misc:Depends},libopx-common-dev (>= 1.4.0),libopx-nas-common-dev (>= 6.1.0),
          libopx-cps-dev (>= 3.6.2),libopx-logging-dev (>= 2.1.0),libopx-nas-linux-dev (>= 5.11.0),
-         libopx-nas-ndi-dev (>= 4.6.0),opx-ndi-api-dev (>= 7.5.0),libopx-nas-l3-1 (=${binary:Version}),
+         libopx-nas-ndi-dev, opx-ndi-api-dev (>= 7.5.0),libopx-nas-l3-1 (=${binary:Version}),
          libopx-base-model-dev (>= 3.109.0)
 Description: This package contains base layer 3 functionality for the Openswitch software.
 

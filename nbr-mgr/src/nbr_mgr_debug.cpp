@@ -126,11 +126,13 @@ void _nbr_mgr_dump_all_nbr_stats_clear(nbr_data const * ptr) {
 
 void nbr_mgr_dump_mac_data(mac_data_ptr ptr) {
     NBR_MGR_LOG_ERR("DUMP", "MAC entry MAC:%s, ifindex:%d, mbr_if_index:%d, FDB type:%d valid:%d learnt-first:%d "
-                    " add-cnt:%d add-no-mbr-cnt:%d del-cnt:%d",
+                    " add-cnt:%d add-no-mbr-cnt:%d del-cnt:%d IP:%s",
                     ptr->get_mac_addr().c_str(), ptr->get_mac_intf(),
                     ptr->get_mac_phy_if(), static_cast<int>(ptr->get_fdb_type()), ptr->is_valid(),
                     ptr->get_mac_learnt_flag(), ptr->fdb_get_msg_cnt(true), ptr->fdb_get_msg_no_mbr_cnt(),
-                    ptr->fdb_get_msg_cnt(false));
+                    ptr->fdb_get_msg_cnt(false),
+                    ((ptr->get_mac_remote_ip().af_index == HAL_INET4_FAMILY) ?
+                     nbr_ip_addr_string (ptr->get_mac_remote_ip()).c_str() : ""));
 }
 
 

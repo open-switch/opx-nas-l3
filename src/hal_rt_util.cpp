@@ -48,6 +48,8 @@ extern "C" {
 #include <condition_variable>
 #include <algorithm>
 #include "nas_ndi_obj_id_table.h"
+#include "nas_ndi_common.h"
+#include "nas_ndi_1d_bridge.h"
 #include "dell-base-switch-element.h"
 #include "std_utils.h"
 #include "nas_vrf_utils.h"
@@ -308,7 +310,7 @@ uint32_t hal_rt_rif_ref_inc(hal_vrf_id_t vrf_id, hal_ifindex_t if_index)
 
     if (p_intf->rif_info.rif_id != 0) {
         ref_cnt = ++(p_intf->rif_info.ref_count);
-        HAL_RT_LOG_INFO("RT-RIF-INCR", "Incr Ref count for RIF id (0x%lx) VRF-id:%d if_index (%d)"
+        HAL_RT_LOG_INFO("RT-RIF-INCR", "Current Ref count for RIF id (0x%lx) VRF-id:%d if_index (%d)"
                         "is %d", p_intf->rif_info.rif_id, vrf_id, if_index, ref_cnt);
     } else {
         HAL_RT_LOG_INFO("RT-RIF-INCR", "Incr RIF not found for VRF-id:%d if_index (%d)", vrf_id, if_index);
@@ -326,11 +328,17 @@ bool hal_rt_rif_ref_dec(hal_vrf_id_t vrf_id, hal_ifindex_t if_index)
     }
 
     if (p_intf->rif_info.rif_id != 0) {
-        ref_cnt = --(p_intf->rif_info.ref_count);
-        HAL_RT_LOG_INFO("RT-RIF-DECR", "Decr Ref count for RIF id (0x%lx) VRF-id:%d if_index (%d)"
-                        "is %d", p_intf->rif_info.rif_id, vrf_id, if_index, ref_cnt);
+        if (p_intf->rif_info.ref_count == 0) {
+            HAL_RT_LOG_ERR("RT-RIF-DECR", "Ref count reached zero already for RIF id (0x%lx)"
+                           "VRF-id:%d if_index (%d)", p_intf->rif_info.rif_id, vrf_id, if_index);
+        } else {
+            ref_cnt = --(p_intf->rif_info.ref_count);
+            HAL_RT_LOG_INFO("RT-RIF-DECR", "Current Ref count for RIF id (0x%lx) VRF-id:%d if_index (%d)"
+                            "is %d", p_intf->rif_info.rif_id, vrf_id, if_index, ref_cnt);
+        }
     } else {
-        HAL_RT_LOG_INFO("RT-RIF-DECR", "Decr RIF not found for VRF-id:%d if_index (%d)", vrf_id, if_index);
+        HAL_RT_LOG_INFO("RT-RIF-DECR", "Decr RIF not found for VRF-id:%d if_index (%d) ref-cnt:%d",
+                        vrf_id, if_index, p_intf->rif_info.ref_count);
     }
     return ((ref_cnt == 0) ? false : true);
 }
@@ -674,7 +682,12 @@ t_std_error hal_rif_index_get_or_create (npu_id_t npu_id, hal_vrf_id_t vrf_id,
     } else if(intf_ctrl.int_type == nas_int_type_VLAN) {
         rif_entry.rif_type = NDI_RIF_TYPE_VLAN;
         rif_entry.attachment.vlan_id = intf_ctrl.vlan_id;
-    } else if(intf_ctrl.int_type == nas_int_type_LPBK) {
+    } else if(intf_ctrl.int_type == nas_int_type_DOT1D_BRIDGE) {
+        rif_entry.rif_type = NDI_RIF_TYPE_DOT1D_BRIDGE;
+        rif_entry.attachment.bridge_id = intf_ctrl.bridge_id;
+        HAL_RT_LOG_INFO("RT-RIF-ADD", "1D bridge RIF entry creation for intf:%s(%d) type:%d bridge:%lu",
+                       intf_ctrl.if_name, intf_ctrl.if_index, intf_ctrl.int_type, intf_ctrl.bridge_id);
+    }  else if(intf_ctrl.int_type == nas_int_type_LPBK) {
         /* Loopback intf - valid L3 interface but RIF creation is not required as we dont use
          * the loopback MAC to lift the loopback address destined packets in the NPU */
         return STD_ERR_OK;
@@ -736,7 +749,7 @@ t_std_error hal_rif_index_get_or_create (npu_id_t npu_id, hal_vrf_id_t vrf_id,
     }
     if (ndi_rif_create(&rif_entry, rif_id)!= STD_ERR_OK) {
         HAL_RT_LOG_ERR("NAS-RT-RIF", "RIF id creation "
-                       " failed for if_index = %d", if_index);
+                       " failed for if_index = %d bridge-id:%lu", if_index, intf_ctrl.bridge_id);
         return STD_ERR(ROUTE,FAIL,0);
     }
     /*
@@ -968,6 +981,10 @@ t_fib_msg *hal_rt_alloc_mem_msg() {
 t_fib_msg *hal_rt_alloc_route_mem_msg(uint32_t buf_size) {
     char *p_msg = new (std::nothrow) char[buf_size];
     return (t_fib_msg *)p_msg;
+}
+
+void hal_rt_free_route_mem_msg(t_fib_msg *pmsg) {
+    delete pmsg;
 }
 
 std::string hal_rt_queue_stats ()

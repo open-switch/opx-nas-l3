@@ -1462,10 +1462,218 @@ void nas_route_dump_peer_routing_object_content(cps_api_object_t obj){
             }
             break;
 
+        case BASE_ROUTE_PEER_ROUTING_CONFIG_INGRESS_ONLY:
+            std::cout<<"Ingress-Only: "<<cps_api_object_attr_data_u32(it.attr)<<std::endl;
+            break;
+
         default:
             break;
         }
     }
+}
+
+cps_api_return_code_t nas_ut_peer_routing_config (bool is_add, const char *vrf_name,
+                                                  const char *mac, const char *ifname, bool *ingress_only)
+{
+    cps_api_return_code_t rc = cps_api_ret_code_OK;
+    cps_api_object_t obj;
+    cps_api_transaction_params_t tr;
+
+    obj = cps_api_object_create();
+
+    cps_api_key_from_attr_with_qual(cps_api_object_key(obj),
+                                    BASE_ROUTE_PEER_ROUTING_CONFIG_OBJ,cps_api_qualifier_TARGET);
+
+    if (vrf_name != NULL)
+        cps_api_object_attr_add(obj,BASE_ROUTE_PEER_ROUTING_CONFIG_VRF_NAME, vrf_name, strlen(vrf_name)+1);
+    if (ifname != NULL)
+        cps_api_object_attr_add(obj,BASE_ROUTE_PEER_ROUTING_CONFIG_IFNAME, ifname, strlen(ifname)+1);
+    cps_api_object_attr_add(obj, BASE_ROUTE_PEER_ROUTING_CONFIG_PEER_MAC_ADDR, mac, strlen(mac)+1);
+
+    if (ingress_only != NULL)
+        cps_api_object_attr_add_u32(obj, BASE_ROUTE_PEER_ROUTING_CONFIG_INGRESS_ONLY, *ingress_only);
+
+    rc = cps_api_transaction_init(&tr);
+    if (rc != cps_api_ret_code_OK)
+        return rc;
+    if (is_add)
+        cps_api_create(&tr,obj);
+    else
+        cps_api_delete(&tr,obj);
+    rc = cps_api_commit(&tr);
+    cps_api_transaction_close(&tr);
+
+    return rc;
+}
+
+bool nas_ut_peer_routing_config_validate (const char *vrf_name,const char *mac, const char *ifname, bool *ingress_only)
+{
+    cps_api_object_t obj;
+    cps_api_get_params_t gp;
+    cps_api_get_request_init(&gp);
+
+    obj = cps_api_object_list_create_obj_and_append(gp.filters);
+    cps_api_key_from_attr_with_qual(cps_api_object_key(obj),BASE_ROUTE_PEER_ROUTING_CONFIG_OBJ,
+            cps_api_qualifier_TARGET);
+
+    if (vrf_name != NULL)
+        cps_api_object_attr_add(obj,BASE_ROUTE_PEER_ROUTING_CONFIG_VRF_NAME, vrf_name, strlen(vrf_name)+1);
+
+    if (ifname != NULL)
+        cps_api_object_attr_add(obj,BASE_ROUTE_PEER_ROUTING_CONFIG_IFNAME, ifname, strlen(ifname)+1);
+
+    if (mac != NULL)
+        cps_api_object_attr_add(obj, BASE_ROUTE_PEER_ROUTING_CONFIG_PEER_MAC_ADDR, mac, strlen(mac)+1);
+
+    bool entry_found = false;
+    if (cps_api_get(&gp)==cps_api_ret_code_OK) {
+        size_t mx = cps_api_object_list_size(gp.list);
+
+        for ( size_t ix = 0 ; ix < mx ; ++ix ) {
+            obj = cps_api_object_list_get(gp.list,ix);
+            std::cout<<"Peer Routing Status"<<std::endl;
+            std::cout<<"==================="<<std::endl;
+            nas_route_dump_peer_routing_object_content(obj);
+            std::cout<<std::endl;
+
+            cps_api_object_attr_t ingress_only_attr = cps_api_object_attr_get(obj, BASE_ROUTE_PEER_ROUTING_CONFIG_INGRESS_ONLY);
+
+            if (ingress_only) {
+                if (ingress_only_attr) {
+                    bool val = (bool) cps_api_object_attr_data_u32(ingress_only_attr);
+                    if (val == *ingress_only)
+                        entry_found = true;
+                }
+            } else {
+                entry_found = true;
+            }
+        }
+        if (vrf_name && ifname && mac && (mx > 1))
+            entry_found = false;
+    }
+
+    cps_api_get_request_close(&gp);
+    return entry_found;
+}
+
+TEST(std_nas_route_test, nas_peer_routing_validate_virtual_rif_ut)
+{
+    cps_api_return_code_t ret_code;
+
+    //PHY RIF
+    const char *ifname = "e101-001-0";
+    const char *mac= "00:00:01:11:22:33";
+    ret_code = nas_ut_peer_routing_config (1, NAS_DEFAULT_VRF_NAME, mac, ifname, NULL);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+    bool entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, mac, ifname, NULL);
+    ASSERT_TRUE(entry_found);
+
+    //VLAN RIF
+    const char *vlan_ifname = "br100";
+    const char *vlan_mac= "00:00:02:11:22:33";
+    ret_code = nas_ut_peer_routing_config (1, NAS_DEFAULT_VRF_NAME, vlan_mac, vlan_ifname, NULL);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, vlan_mac, vlan_ifname, NULL);
+    ASSERT_TRUE(entry_found);
+
+    const char *mac1= "00:00:5E:00:01:01";
+    ret_code = nas_ut_peer_routing_config (1, NAS_DEFAULT_VRF_NAME, mac1, ifname, NULL);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, mac1, ifname, NULL);
+    ASSERT_TRUE(entry_found);
+
+    const char *mac2= "00:00:5E:00:02:01";
+    ret_code = nas_ut_peer_routing_config (1, NAS_DEFAULT_VRF_NAME, mac2, ifname, NULL);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, mac2, ifname, NULL);
+    ASSERT_TRUE(entry_found);
+
+    ret_code = nas_ut_peer_routing_config (1, NAS_DEFAULT_VRF_NAME, mac1, vlan_ifname, NULL);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, mac1, vlan_ifname, NULL);
+    ASSERT_TRUE(entry_found);
+
+    ret_code = nas_ut_peer_routing_config (1, NAS_DEFAULT_VRF_NAME, mac2, vlan_ifname, NULL);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, mac2, vlan_ifname, NULL);
+    ASSERT_TRUE(entry_found);
+
+    //PHY RIF
+    bool ingress_only = 1;
+    const char *virt_mac1= "00:00:01:11:22:34";
+    ret_code = nas_ut_peer_routing_config (1, NAS_DEFAULT_VRF_NAME, virt_mac1, ifname, &ingress_only);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, virt_mac1, ifname, &ingress_only);
+    ASSERT_TRUE(entry_found);
+
+    const char *virt_mac2= "00:00:5E:00:01:02";
+    ret_code = nas_ut_peer_routing_config (1, NAS_DEFAULT_VRF_NAME, virt_mac2, ifname, &ingress_only);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, virt_mac2, ifname, &ingress_only);
+    ASSERT_TRUE(entry_found);
+
+
+    //VLAN RIF
+    const char *virt_vlan_mac1= "00:00:02:11:22:34";
+    ret_code = nas_ut_peer_routing_config (1, NAS_DEFAULT_VRF_NAME, virt_vlan_mac1, vlan_ifname, &ingress_only);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, virt_vlan_mac1, vlan_ifname, &ingress_only);
+    ASSERT_TRUE(entry_found);
+
+    const char *virt_vlan_mac2= "00:00:5E:00:02:02";
+    ret_code = nas_ut_peer_routing_config (1, NAS_DEFAULT_VRF_NAME, virt_vlan_mac2, vlan_ifname, &ingress_only);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, virt_vlan_mac2, vlan_ifname, &ingress_only);
+    ASSERT_TRUE(entry_found);
+
+    //clean-up
+    ret_code = nas_ut_peer_routing_config (0, NAS_DEFAULT_VRF_NAME, mac, ifname, NULL);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+
+    ret_code = nas_ut_peer_routing_config (0, NAS_DEFAULT_VRF_NAME, vlan_mac, vlan_ifname, NULL);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+
+    ret_code = nas_ut_peer_routing_config (0, NAS_DEFAULT_VRF_NAME, mac1, ifname, NULL);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+    ret_code = nas_ut_peer_routing_config (0, NAS_DEFAULT_VRF_NAME, mac2, ifname, NULL);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+
+    ret_code = nas_ut_peer_routing_config (0, NAS_DEFAULT_VRF_NAME, mac1, vlan_ifname, NULL);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+    ret_code = nas_ut_peer_routing_config (0, NAS_DEFAULT_VRF_NAME, mac2, vlan_ifname, NULL);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+
+    ret_code = nas_ut_peer_routing_config (0, NAS_DEFAULT_VRF_NAME, virt_mac1, ifname, &ingress_only);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+    ret_code = nas_ut_peer_routing_config (0, NAS_DEFAULT_VRF_NAME, virt_mac2, ifname, &ingress_only);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+
+    ret_code = nas_ut_peer_routing_config (0, NAS_DEFAULT_VRF_NAME, virt_vlan_mac1, vlan_ifname, &ingress_only);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+    ret_code = nas_ut_peer_routing_config (0, NAS_DEFAULT_VRF_NAME, virt_vlan_mac2, vlan_ifname, &ingress_only);
+    ASSERT_TRUE(ret_code == cps_api_ret_code_OK);
+
+
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, mac, ifname, NULL);
+    ASSERT_TRUE(!entry_found);
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, vlan_mac, vlan_ifname, NULL);
+    ASSERT_TRUE(!entry_found);
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, mac1, ifname, NULL);
+    ASSERT_TRUE(!entry_found);
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, mac2, ifname, NULL);
+    ASSERT_TRUE(!entry_found);
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, mac1, vlan_ifname, NULL);
+    ASSERT_TRUE(!entry_found);
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, mac2, vlan_ifname, NULL);
+    ASSERT_TRUE(!entry_found);
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, virt_mac1, ifname, NULL);
+    ASSERT_TRUE(!entry_found);
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, virt_mac2, ifname, NULL);
+    ASSERT_TRUE(!entry_found);
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, virt_vlan_mac1, vlan_ifname, NULL);
+    ASSERT_TRUE(!entry_found);
+    entry_found = nas_ut_peer_routing_config_validate (NAS_DEFAULT_VRF_NAME, virt_vlan_mac2, vlan_ifname, NULL);
+    ASSERT_TRUE(!entry_found);
 }
 
 void nas_peer_routing_get() {
@@ -2125,29 +2333,29 @@ int main(int argc, char **argv) {
 
 
   printf("___________________________________________\n");
-  if(system("ip address add 6.6.6.1/24  dev e101-005-0"));
-  if(system("ifconfig e101-005-0"));
+  (void)system("ip address add 6.6.6.1/24  dev e101-005-0");
+  (void)system("ifconfig e101-005-0");
   /* Incase of premium package, all the ports are part of default bridge,
    * remove it from the bridge to operate as the router intf. */
 
-  if(system("brctl addbr br100 up"));
-  if(system("ip link add link e101-003-0 name e101-003-0.100 type vlan id 100"));
-  if(system("ifconfig e101-003-0 up"));
-  if(system("ip link set dev e101-003-0.100 up"));
-  if(system("brctl addif br100 e101-003-0.100"));
-  if(system("ip addr add 100.1.1.2/24 dev br100"));
-  if(system("ip neigh add 100.1.1.10 lladdr 00:00:00:00:11:22"));
-  if(system("ifconfig br100 up"));
-  if(system("brctl stp br100 on"));
+  (void)system("brctl addbr br100 up");
+  (void)system("ip link add link e101-003-0 name e101-003-0.100 type vlan id 100");
+  (void)system("ifconfig e101-003-0 up");
+  (void)system("ip link set dev e101-003-0.100 up");
+  (void)system("brctl addif br100 e101-003-0.100");
+  (void)system("ip addr add 100.1.1.2/24 dev br100");
+  (void)system("ip neigh add 100.1.1.10 lladdr 00:00:00:00:11:22");
+  (void)system("ifconfig br100 up");
+  (void)system("brctl stp br100 on");
 
-  if(system("brctl addbr br200 up"));
-  if(system("ip link add link e101-003-0 name e101-003-0.200 type vlan id 200"));
-  if(system("ifconfig e101-003-0 up"));
-  if(system("ip link set dev e101-003-0.200 up"));
-  if(system("brctl addif br200 e101-003-0.200"));
-  if(system("ip addr add 200.1.1.2/24 dev br200"));
-  if(system("ifconfig br200 up"));
-  if(system("brctl stp br200 on"));
+  (void)system("brctl addbr br200 up");
+  (void)system("ip link add link e101-003-0 name e101-003-0.200 type vlan id 200");
+  (void)system("ifconfig e101-003-0 up");
+  (void)system("ip link set dev e101-003-0.200 up");
+  (void)system("brctl addif br200 e101-003-0.200");
+  (void)system("ip addr add 200.1.1.2/24 dev br200");
+  (void)system("ifconfig br200 up");
+  (void)system("brctl stp br200 on");
 
   printf("___________________________________________\n");
   printf("Run the NAS CPS routing test cases the below order: "

@@ -36,20 +36,20 @@
 
 #include <ctime>
 #include <chrono>
-#include <iomanip>
 
 #include <gtest/gtest.h>
 #include <iostream>
+#include <iomanip>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <net/if.h>
 #include "nas_ndi_obj_id_table.h"
 
-const char *p_dut_intf1 = "e101-001-0";
-const char *p_dut_intf2 = "e101-004-0";
-const char *p_tr_intf1 = "e101-001-0";
-const char *p_tr_intf2 = "e101-004-0";
+static const char *p_dut_intf1 = "e101-001-0";
+static const char *p_dut_intf2 = "e101-004-0";
+//const char *p_tr_intf1 = "e101-001-0";
+//const char *p_tr_intf2 = "e101-004-0";
 
 /* Constants for IPv4 NHT */
 const char *p_dut_ip_intf1 = "20.0.0.1";
@@ -69,16 +69,16 @@ int pref_len1 = 8, pref_len2 = 16, pref_len3 = 24, pref_len4 = 32, pref_len5 = 2
 int af = AF_INET;
 
 /* Constants for IPv6 NHT */
-const char *p_dut_ip6_intf1 = "2::1";
-const char *p_dut_ip6_intf2 = "3::1";
-const char *p_tr_ip6_intf1 = "2::2";
-const char *p_tr_ip6_2_intf1 = "2::3";
-const char *p_tr_ip6_3_intf1 = "2::4";
-const char *p_tr_ip6_intf2 = "3::2";
-const char *p_tr_ip6_2_intf2 = "3::2";
-const char *p_tr_ip6_3_intf2 = "3::2";
-const char *p_tr_mpath_ip6_intf1 = "2::";
-const char *p_tr_mpath_ip6_intf2 = "3::";
+static const char *p_dut_ip6_intf1 = "2::1";
+static const char *p_dut_ip6_intf2 = "3::1";
+static const char *p_tr_ip6_intf1 = "2::2";
+static const char *p_tr_ip6_2_intf1 = "2::3";
+static const char *p_tr_ip6_3_intf1 = "2::4";
+static const char *p_tr_ip6_intf2 = "3::2";
+static const char *p_tr_ip6_2_intf2 = "3::2";
+static const char *p_tr_ip6_3_intf2 = "3::2";
+static const char *p_tr_mpath_ip6_intf1 = "2::";
+static const char *p_tr_mpath_ip6_intf2 = "3::";
 
 const char *nht6_1 = "4::1", *nht6_2 = "4:1:1::1", *nht6_3 = "4:1:1::2", *nht6_4 = "4:1:2::1",
       *nht6_5 = "4:2::1", *nht6_6= "4::3", *rt6_1="4::", *rt6_2 = "4:1::", *rt6_3 = "4:1:1::", *rt6_4 = "4:1:1::1", *rt6_5 = "::";
@@ -171,7 +171,8 @@ void nht_config_scale_with_prefix (const char *ip_str, uint32_t af_family, bool 
     if (af_family == AF_INET6) {
         char route_str[INET6_ADDRSTRLEN];
         inet_pton(AF_INET6, ip_str, &a6);
-        memcpy (route_str, ip_str, INET6_ADDRSTRLEN);
+        int len = strlen(ip_str);
+        memcpy (route_str, ip_str, ((len > INET6_ADDRSTRLEN)?(INET6_ADDRSTRLEN):len));
         for (; cnt < num_entries; cnt++) {
             //printf ("nht_config_scale_with_prefix %s\r\n", route_str);
             nht_add_del ((void *) &a6, af_family, is_add);
@@ -203,7 +204,7 @@ void nht_add_route_2nh (const char *route_prefix, int pref_len, const char *next
     memset(cmd, '\0', sizeof(cmd));
     snprintf(cmd, 511, "ip route add %s/%d scope global nexthop via %s nexthop via %s",
             route_prefix, pref_len, next_hop_ip1, next_hop_ip2);
-    if(system(cmd));
+    (void)system(cmd);
 
     if (g_scaled_test == false) sleep(2);
 }
@@ -214,7 +215,7 @@ void nht_replace_route_2nh (const char *route_prefix, int pref_len, const char *
     memset(cmd, '\0', sizeof(cmd));
     snprintf(cmd, 511, "ip route replace %s/%d scope global nexthop via %s nexthop via %s",
             route_prefix, pref_len, next_hop_ip1, next_hop_ip2);
-    if(system(cmd));
+    (void)system(cmd);
     sleep(2);
 }
 
@@ -224,7 +225,7 @@ void nht_del_route_2nh (const char *route_prefix, int pref_len, const char *next
     memset(cmd, '\0', sizeof(cmd));
     snprintf(cmd, 511, "ip route del %s/%d scope global nexthop via %s nexthop via %s",
             route_prefix, pref_len, next_hop_ip1, next_hop_ip2);
-    if(system(cmd));
+    (void)system(cmd);
     if (g_scaled_test == false) sleep(2);
 }
 
@@ -237,7 +238,7 @@ void nht_add_route (const char *route_prefix, int pref_len, const char *next_hop
     } else {
         snprintf(cmd, 511, "ip -6 route add %s/%d via %s",route_prefix, pref_len, next_hop_ip);
     }
-    if(system(cmd));
+    (void)system(cmd);
     if (g_scaled_test == false) sleep(1);
 }
 
@@ -250,7 +251,8 @@ void nht_add_route_scale (const char *route_prefix_str, int pref_len, const char
         struct in6_addr a;
 
         inet_pton(AF_INET6, route_prefix_str, &a);
-        memcpy (route_str, route_prefix_str, INET6_ADDRSTRLEN);
+        int len = strlen(route_prefix_str);
+        memcpy (route_str, route_prefix_str, ((len > INET6_ADDRSTRLEN)?(INET6_ADDRSTRLEN):len));
         for (; cnt < num_routes; cnt++) {
             //printf ("add_route scale %s\r\n", route_str);
             nht_add_route (route_str, pref_len, next_hop_ip);
@@ -263,7 +265,8 @@ void nht_add_route_scale (const char *route_prefix_str, int pref_len, const char
         struct in_addr a;
 
         inet_aton(route_prefix_str,&a);
-        memcpy (route_str, route_prefix_str, INET_ADDRSTRLEN);
+        int len = strlen(route_prefix_str);
+        memcpy (route_str, route_prefix_str, ((len > INET_ADDRSTRLEN)?(INET_ADDRSTRLEN):len));
         for (; cnt < num_routes; cnt++) {
             //printf ("add_route scale %s\r\n", route_str);
             nht_add_route (route_str, pref_len, next_hop_ip);
@@ -285,7 +288,7 @@ void nht_del_route (const char *route_prefix, int pref_len, const char *next_hop
     } else {
         snprintf(cmd, 511, "ip -6 route del %s/%d via %s",route_prefix, pref_len, next_hop_ip);
     }
-    if(system(cmd));
+    (void)system(cmd);
     if (g_scaled_test == false) sleep(1);
 }
 
@@ -297,7 +300,8 @@ void nht_del_route_scale (const char *route_prefix_str, int pref_len, const char
         struct in6_addr a;
 
         inet_pton(AF_INET6, route_prefix_str, &a);
-        memcpy (route_str, route_prefix_str, INET6_ADDRSTRLEN);
+        int len = strlen(route_prefix_str);
+        memcpy (route_str, route_prefix_str, ((len > INET6_ADDRSTRLEN)?(INET6_ADDRSTRLEN):len));
         for (; cnt < num_routes; cnt++) {
             printf ("del_route scale %s\r\n", route_str);
             nht_add_route (route_str, pref_len, next_hop_ip);
@@ -311,7 +315,8 @@ void nht_del_route_scale (const char *route_prefix_str, int pref_len, const char
         char route_str[INET_ADDRSTRLEN];
 
         inet_aton(route_prefix_str,&a);
-        memcpy (route_str, route_prefix_str, INET_ADDRSTRLEN);
+        int len = strlen(route_prefix_str);
+        memcpy (route_str, route_prefix_str, ((len > INET_ADDRSTRLEN)?(INET_ADDRSTRLEN):len));
         for (; cnt < num_routes; cnt++) {
             //            printf ("del_route scale %s\r\n", route_str);
             nht_del_route (route_str, pref_len, next_hop_ip);
@@ -333,10 +338,10 @@ void nht_replace_route (const char *route_prefix, int pref_len, const char *next
         snprintf(cmd, 511, "ip route replace %s/%d via %s",route_prefix, pref_len, next_hop_ip);
     } else {
         snprintf(cmd, 511, "ip -6 route del %s/%d",route_prefix, pref_len);
-        if(system(cmd));
+        (void)system(cmd);
         snprintf(cmd, 511, "ip -6 route add %s/%d via %s",route_prefix, pref_len, next_hop_ip);
     }
-    if(system(cmd));
+    (void)system(cmd);
     sleep(2);
 }
 
@@ -350,7 +355,7 @@ void nht_add_static_arp (const char *ip, const char *mac, const char *intf)
     } else {
         snprintf(cmd, 511, "ip -6 neigh add %s lladdr %s dev %s",ip, mac, intf);
     }
-    if(system(cmd));
+    (void)system(cmd);
     sleep(2);
 }
 
@@ -364,14 +369,12 @@ void nht_del_static_arp (const char *ip, const char *intf)
     else {
         snprintf(cmd, 511, "ip -6 neigh del %s dev %s",ip, intf);
     }
-    if(system(cmd));
+    (void)system(cmd);
     sleep(2);
 }
 
 void nht_resolve_nh(const char *ip)
 {
-    return;
-
     char cmd[512];
     memset(cmd, '\0', sizeof(cmd));
     if (af == AF_INET) {
@@ -379,8 +382,9 @@ void nht_resolve_nh(const char *ip)
     } else {
         snprintf(cmd, 511, "ping6 -c 1 %s",ip);
     }
-    if(system(cmd));
+    (void)system(cmd);
     sleep(2);
+    return;
 }
 
 void nht_intf_admin_set(const char *p_b2b_intf, bool is_up)
@@ -390,14 +394,14 @@ void nht_intf_admin_set(const char *p_b2b_intf, bool is_up)
     memset(cmd, '\0', sizeof(cmd));
     snprintf(cmd, 511, "ifconfig %s %s",p_b2b_intf,
             ((is_up) ? "up" : "down"));
-    if(system(cmd));
+    (void)system(cmd);
     if ((af == AF_INET6) && is_up) {
         /* Incase of IPv6, admin down clears the ipv6 address on interface,
          * need to reconfigure on admin up again */
         snprintf(cmd, 511, "ifconfig %s inet6 add %s/64 up",p_dut_intf1, p_dut_ip_intf1);
-        if(system(cmd));
+        (void)system(cmd);
         snprintf(cmd, 511, "ifconfig %s inet6 add %s/64 up",p_dut_intf2, p_dut_ip_intf2);
-        if(system(cmd));
+        (void)system(cmd);
     }
     if (g_scaled_test == false) sleep(2);
 }
@@ -1908,7 +1912,7 @@ int nas_rt_nht_ut_9_1 (bool is_prereq) {
         snprintf(nh_mac, NAS_UT_NH_STR_LEN-1, "00:20:00:00:02:%x", cnt);
         nht_add_static_arp(nh_ip, nh_mac, p_dut_intf1);
         snprintf(rt_nh, NAS_UT_NH_STR_LEN-1, "nexthop via %s ", nh_ip);
-        strcat(p_nh, rt_nh);
+        strncat(p_nh, rt_nh, 2048);
         if (af == AF_INET) {
             snprintf(nh_ip, NAS_UT_NH_STR_LEN-1, "%s%d", p_tr_mpath_intf2, cnt);
         } else {
@@ -1917,7 +1921,7 @@ int nas_rt_nht_ut_9_1 (bool is_prereq) {
         snprintf(nh_mac, NAS_UT_NH_STR_LEN-1, "00:30:00:00:02:%x", cnt);
         nht_add_static_arp(nh_ip, nh_mac, p_dut_intf2);
         snprintf(rt_nh, NAS_UT_NH_STR_LEN-1, "nexthop via %s ", nh_ip);
-        strcat(p_nh, rt_nh);
+        strncat(p_nh, rt_nh, 2048);
     }
     memset(p_cmd, '\0', sizeof(2048));
     if (af == AF_INET) {
@@ -1926,7 +1930,7 @@ int nas_rt_nht_ut_9_1 (bool is_prereq) {
         snprintf(p_cmd, 2047, "ip -6 route add %s/%d %s",rt1, pref_len1, p_nh);
     }
     printf("\r\n %s \r\n",p_cmd);
-    if(system(p_cmd));
+    (void)system(p_cmd);
     nht_config(nht1, af, 1);
     ret = nas_rt_nht_validate_util (nht1, num_nh_entries, rt1, pref_len1);
     nas_rt_nht_print_result ( "TC_9_1: multipath route for NHT", ret);
@@ -1958,7 +1962,7 @@ int nas_rt_nht_ut_9_1 (bool is_prereq) {
     } else {
         snprintf(p_cmd, 2047, "ip -6 route del %s/%d %s",rt1, pref_len1, p_nh);
     }
-    if(system(p_cmd));
+    (void)system(p_cmd);
 
     nht_intf_admin_set(p_dut_intf1,0);
     nht_intf_admin_set(p_dut_intf1,1);
@@ -2065,7 +2069,7 @@ void nas_route_dump_nht_object_content(cps_api_object_t obj){
             auto it = nh_opaque_data_table.begin();
             std::cout<<"NPU-id/NH-id:\t";
             std::cout<<it->first<<"/0x" <<std::hex<<it->second;
-            std::cout<<'\n';
+            std::cout << std::resetiosflags(std::ios_base::basefield) << '\n' << std::endl;
         }
     }
 
@@ -2313,11 +2317,11 @@ TEST(std_nas_route_test, nas_nht_ut_9_1) {
 void nas_rt_nht_route_info() {
 
     if (af == AF_INET) {
-        if(system("ip route show"));
-        if(system("ip neigh show"));
+        (void)system("ip route show");
+        (void)system("ip neigh show");
     } else {
-        if(system("ip -6 route show"));
-        if(system("ip -6 neigh show"));
+        (void)system("ip -6 route show");
+        (void)system("ip -6 neigh show");
     }
 }
 
@@ -2456,18 +2460,18 @@ int main(int argc, char **argv) {
   char cmd[512];
   memset(cmd, '\0', sizeof(cmd));
   snprintf(cmd, 511, "brctl delif br1 %s",p_dut_intf1);
-  if(system(cmd));
+  (void)system(cmd);
   snprintf(cmd, 511, "brctl delif br1 %s",p_dut_intf2);
-  if(system(cmd));
+  (void)system(cmd);
   memset(cmd, '\0', sizeof(cmd));
   printf("\r\n argv[0]:%s argv[1]:%s argv[2]:%s\r\n", argv[0], argv[1], argv[2]);
   if ((argv[1] == NULL) || (strncmp(argv[1], "ipv4",4) == 0)){
       /* Default execution mode is IPv4 */
       printf("\r\n NHT for af-IPv4 execution started! \r\n");
       snprintf(cmd, 511, "ifconfig %s %s/16 up",p_dut_intf1, p_dut_ip_intf1);
-      if(system(cmd));
+      (void)system(cmd);
       snprintf(cmd, 511, "ifconfig %s %s/16 up",p_dut_intf2, p_dut_ip_intf2);
-      if(system(cmd));
+      (void)system(cmd);
   } else if ((argv[1]) && (strncmp(argv[1], "ipv6",4) == 0)) {
       printf("\r\n NHT for af-IPv6 execution started! \r\n");
       p_dut_ip_intf1 = p_dut_ip6_intf1; p_dut_ip_intf2 = p_dut_ip6_intf2;
@@ -2480,9 +2484,9 @@ int main(int argc, char **argv) {
       pref_len4 = pref_len6_4; p_tr_mpath_intf1 = p_tr_mpath_ip6_intf1; p_tr_mpath_intf2 = p_tr_mpath_ip6_intf2;
       af = af6;
       snprintf(cmd, 511, "ifconfig %s inet6 add %s/64 up",p_dut_intf1, p_dut_ip_intf1);
-      if(system(cmd));
+      (void)system(cmd);
       snprintf(cmd, 511, "ifconfig %s inet6 add %s/64 up",p_dut_intf2, p_dut_ip_intf2);
-      if(system(cmd));
+      (void)system(cmd);
   }
   printf("___________________________________________\n");
 
@@ -2494,13 +2498,13 @@ int main(int argc, char **argv) {
    * #RateLimitInterval=30s      ==> RateLimitBurst=0
    * SystemMaxUse=50M         ==> SystemMaxUse=250M
    */
-  if(system("sed -i '/SystemMaxUse=50M/c SystemMaxUse=250M' /etc/systemd/journald.conf"));
-  if(system("sed -i '/#RateLimitInterval=30s/c RateLimitInterval=0s' /etc/systemd/journald.conf"));
-  if(system("sed -i '/#RateLimitBurst=1000/c RateLimitBurst=0' /etc/systemd/journald.conf"));
-  if(system("service systemd-journald restart"));
+  (void)system("sed -i '/SystemMaxUse=50M/c SystemMaxUse=250M' /etc/systemd/journald.conf");
+  (void)system("sed -i '/#RateLimitInterval=30s/c RateLimitInterval=0s' /etc/systemd/journald.conf");
+  (void)system("sed -i '/#RateLimitBurst=1000/c RateLimitBurst=0' /etc/systemd/journald.conf");
+  (void)system("service systemd-journald restart");
 
-  if(system("opx-logging enable ROUTE INFO"));
-  if(system("kill -USR1 `pidof base_nas`"));
+  (void)system("os10-logging enable ROUTE INFO");
+  (void)system("kill -USR1 `pidof base_nas`");
 
   if (RUN_ALL_TESTS())
   {
@@ -2510,12 +2514,12 @@ int main(int argc, char **argv) {
   printf ("\r\n !!! Test Completed !!! \r\n");
 
   /* revert back logging related changes done for executing the UT */
-  if(system("opx-logging disable ROUTE INFO"));
-  if(system("kill -USR1 `pidof base_nas`"));
+  (void)system("os10-logging disable ROUTE INFO");
+  (void)system("kill -USR1 `pidof base_nas`");
 
-  if(system("sed -i '/SystemMaxUse=250M/c SystemMaxUse=50M' /etc/systemd/journald.conf"));
-  if(system("sed -i '/RateLimitInterval=0s/c #RateLimitInterval=30s' /etc/systemd/journald.conf"));
-  if(system("sed -i '/RateLimitBurst=0/c #RateLimitBurst=1000' /etc/systemd/journald.conf"));
-  if(system("service systemd-journald restart"));
+  (void)system("sed -i '/SystemMaxUse=250M/c SystemMaxUse=50M' /etc/systemd/journald.conf");
+  (void)system("sed -i '/RateLimitInterval=0s/c #RateLimitInterval=30s' /etc/systemd/journald.conf");
+  (void)system("sed -i '/RateLimitBurst=0/c #RateLimitBurst=1000' /etc/systemd/journald.conf");
+  (void)system("service systemd-journald restart");
   return 0;
 }

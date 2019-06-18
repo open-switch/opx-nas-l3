@@ -374,7 +374,7 @@ t_std_error hal_rt_leaked_nbr_prg(hal_vrf_id_t vrf_id, t_fib_nh *p_fh, bool is_a
 
     if (is_add) {
         p_nh = fib_proc_nh_add (vrf_id, &p_fh->key.ip_addr,
-                                p_fh->key.if_index, FIB_NH_OWNER_TYPE_ARP, 0, false, p_fh->vrf_id);
+                                p_fh->key.if_index, FIB_NH_OWNER_TYPE_ARP, 0, false, p_fh->vrf_id, 0);
         if (p_nh == NULL) {
             HAL_RT_LOG_ERR("LEAK-NBR-PRG", "NH addition failed. "
                            "Leaked VRF:%d parent VRF:%d, ip_addr:%s, if_index: %d",

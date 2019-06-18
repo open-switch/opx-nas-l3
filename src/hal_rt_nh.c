@@ -238,7 +238,7 @@ int fib_destroy_intf_tree (void)
 
 t_fib_nh *fib_proc_nh_add (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr,
                       uint32_t if_index, t_fib_nh_owner_type owner_type, uint32_t owner_value,
-                      bool is_mgmt_nh, uint32_t parent_vrf_id)
+                      bool is_mgmt_nh, uint32_t parent_vrf_id, uint32_t flags)
 {
     t_fib_nh    *p_nh = NULL;
     bool   resolve_nh = false;
@@ -280,6 +280,7 @@ t_fib_nh *fib_proc_nh_add (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr,
         p_nh->vrf_id = vrf_id;
         p_nh->parent_vrf_id = parent_vrf_id;
         p_nh->is_mgmt_nh = is_mgmt_nh;
+        p_nh->flags = flags;
 
         fib_create_nh_dep_dr_tree (p_nh);
         if (vrf_id != parent_vrf_id) {
@@ -396,7 +397,8 @@ t_fib_nh *fib_proc_nh_add (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr,
         fib_resolve_connected_tunnel_nh (vrf_id, p_nh);
     }
 
-    if ((is_mgmt_nh== false) && (!(STD_IP_IS_ADDR_ZERO(&p_nh->key.ip_addr))) &&
+    if ((is_mgmt_nh== false) && (flags != FIB_RT_NH_FLAGS_ONLINK) &&
+        (!(STD_IP_IS_ADDR_ZERO(&p_nh->key.ip_addr))) &&
         (((owner_type == FIB_NH_OWNER_TYPE_RTM) && (!FIB_IS_NH_OWNER_CLIENT(p_nh))
           && (p_nh->rtm_ref_count == 1)) ||
          ((owner_type == FIB_NH_OWNER_TYPE_CLIENT) && (p_nh->rtm_ref_count == 0))))
@@ -493,7 +495,8 @@ int fib_proc_nh_delete (t_fib_nh *p_nh, t_fib_nh_owner_type owner_type,
         FIB_RESET_NH_OWNER (p_nh, owner_type, owner_value);
     }
 
-    if ((p_nh->is_mgmt_nh == false) && (!(STD_IP_IS_ADDR_ZERO(&p_nh->key.ip_addr))) &&
+    if ((p_nh->is_mgmt_nh == false) && (p_nh->flags != FIB_RT_NH_FLAGS_ONLINK) &&
+        (!(STD_IP_IS_ADDR_ZERO(&p_nh->key.ip_addr))) &&
         (((owner_type == FIB_NH_OWNER_TYPE_RTM) && (!FIB_IS_NH_OWNER_CLIENT(p_nh))
           && (p_nh->rtm_ref_count == 0)) ||
          ((owner_type == FIB_NH_OWNER_TYPE_CLIENT) && (p_nh->rtm_ref_count == 0))))

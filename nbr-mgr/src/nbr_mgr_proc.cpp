@@ -104,6 +104,17 @@ bool nbr_get_if_data(hal_vrf_id_t vrfid, hal_ifindex_t idx, nbr_mgr_intf_entry_t
     return true;
 }
 
+//Return the overall admin & oper. status of interface
+//and child interface flag - true if up and not child intf and false otherwise.
+// This helps to refresh/resolve the nbrs learnt only on the non-child interfaces.
+static bool nbr_check_intf_up_on_parent_intf(hal_vrf_id_t vrfid, hal_ifindex_t idx) {
+    nbr_mgr_intf_entry_t intf;
+    if(nbr_get_if_data(vrfid, idx, intf))
+        return ((intf.is_admin_up) && (intf.is_oper_up) && (!intf.is_child_intf));
+
+    return false;
+}
+
 //Return the overall admin & oper. status of interface - true if up, false if down
 static bool nbr_check_intf_up(hal_vrf_id_t vrfid, hal_ifindex_t idx) {
     nbr_mgr_intf_entry_t intf;
@@ -253,27 +264,59 @@ bool nbr_process::nbr_proc_fdb_msg(const nbr_mgr_nbr_entry_t& entry) {
 
     std::string mac = nbr_mac_addr_string (entry.nbr_hwaddr);
     NBR_MGR_EXT_LOG_INFO("PROC", "FDB msg_type:%s, vrf-id:%lu, family:%s(%d), MAC:%s, "
-                         "ifindex:%d/phy_idx:%d, expire:%lu, flags:0x%lx, status:%s",
+                         "ifindex:%d/phy_idx:%d, expire:%lu, flags:0x%lx, status:%s IP:%s",
                          ((entry.msg_type == NBR_MGR_NBR_ADD) ? "Add" : "Del"), entry.vrfid,
                          "Bridge", entry.family, mac.c_str(), entry.if_index, entry.mbr_if_index,
-                         entry.expire, entry.flags, nbr_mgr_nl_neigh_state_to_str (entry.status));
+                         entry.expire, entry.flags, nbr_mgr_nl_neigh_state_to_str (entry.status),
+                         ((entry.nbr_addr.af_index == HAL_INET4_FAMILY) ?
+                          nbr_ip_addr_string (entry.nbr_addr).c_str() : ""));
 
     mac_data_ptr ptr;
+    bool is_mac_moved = false;
     try {
         if(entry.msg_type == NBR_MGR_NBR_ADD) {
+            stats.fdb_add_msg_cnt++;
+            if (memcmp (&entry.nbr_hwaddr, &g_zero_mac, sizeof (hal_mac_addr_t)) == 0) {
+                return true;
+            }
+            nbr_mgr_intf_entry_t intf;
+            bool is_vxlan_intf = false;
+            if(nbr_get_if_data(entry.vrfid, entry.mbr_if_index, intf) &&
+               (intf.type == NBR_MGR_INTF_TYPE_VXLAN)) {
+                if (entry.nbr_addr.af_index != HAL_INET4_FAMILY) {
+                    /* The MAC that learns on the VXLAN interface should always have remote IP address. */
+                    return true;
+                }
+                is_vxlan_intf = true;
+            }
+
             ptr = mac_db_get_w_create(entry.if_index, entry.nbr_hwaddr);
             /* Publish the nbr data to NAS-L3 only if the ARP dependent
                new MAC is learnt or member port changed */
-            stats.fdb_add_msg_cnt++;
             if ((ptr->get_fdb_type() == FDB_TYPE::FDB_LEARNED) &&
-                (ptr->get_mac_phy_if() == entry.mbr_if_index)) {
+                (ptr->get_mac_phy_if() == entry.mbr_if_index) &&
+                ((is_vxlan_intf == false) || ((memcmp(&(ptr->get_mac_remote_ip()), &entry.nbr_addr,
+                                                      sizeof(entry.nbr_addr)) == 0)))) {
                 NBR_MGR_LOG_INFO("PROC", "FDB already learnt or refreshed!");
                 return true;
             }
             ptr->fdb_msg_cnt(true);
             if(entry.mbr_if_index) {
+                if ((ptr->get_mac_phy_if() != 0) &&
+                    ((ptr->get_mac_phy_if() != entry.mbr_if_index) ||
+                     (is_vxlan_intf && (memcmp(&(ptr->get_mac_remote_ip()), &entry.nbr_addr, sizeof(entry.nbr_addr)))))) {
+                    is_mac_moved = true;
+                }
+                ptr->update_mac_remote_ip(entry.nbr_addr);
                 ptr->update_mac_if(entry.mbr_if_index);
                 ptr->set_fdb_type(FDB_TYPE::FDB_LEARNED);
+
+                if (is_vxlan_intf) {
+                    NBR_MGR_LOG_INFO("PROC", "Fdb %s mbr:%d VXLAN remote MAC set", mac.c_str(), entry.mbr_if_index);
+                    ptr->fdb_set_1d_remote_mac_status(true);
+                } else {
+                    ptr->fdb_set_1d_remote_mac_status(false);
+                }
                 if (ptr->get_mac_learnt_flag() == false) {
                     ptr->set_mac_learnt_flag(true);
                 }
@@ -295,8 +338,8 @@ bool nbr_process::nbr_proc_fdb_msg(const nbr_mgr_nbr_entry_t& entry) {
             NBR_MGR_LOG_DEBUG("PROC", "Fdb entry Updated");
         }
         //Invoking observer handlers
-        ptr->for_each_nbr_list([&entry](const nbr_data *n_ptr, std::string mac) {
-                               n_ptr->handle_fdb_change(entry.msg_type, entry.status);
+        ptr->for_each_nbr_list([&entry, is_mac_moved](const nbr_data *n_ptr, std::string mac) {
+                               n_ptr->handle_fdb_change(entry.msg_type, entry.status, is_mac_moved);
                                });
         ptr->display();
     } catch(std::invalid_argument& e) {
@@ -422,6 +465,7 @@ nbr_data_ptr& nbr_process::nbr_db_update(nbr_ip_db_type& nbr_db, hal_vrf_id_t vr
 
 bool nbr_process::nbr_proc_nbr_msg(nbr_mgr_nbr_entry_t& entry) {
 
+    hal_ifindex_t child_if_index = 0;
     std::string ip = nbr_ip_addr_string (entry.nbr_addr);
     std::string mac = nbr_mac_addr_string (entry.nbr_hwaddr);
     std::string key = nbr_get_key(entry.if_index, ip);
@@ -503,11 +547,144 @@ bool nbr_process::nbr_proc_nbr_msg(nbr_mgr_nbr_entry_t& entry) {
                                   entry.vrfid, entry.parent_if, entry.if_index);
                 return false;
             }
+
+            nbr_ip_db_type& nbr_db = neighbor_db(entry.family);
+            /* Update the parent to child intf. mapping */
+            if (entry.flags & NBR_MGR_NBR_UPDATE_PARENT_IF) {
+                /* If the parent intf is unknown due to route update delay,
+                 * set the nbr state on child intf to failed, just to overcome the timing issue,
+                 * for now, set the nbr learnt on the child intf to failed state so that any new update
+                 * on the nbr on child intf, will populate the parent-child intf mapping, in future,
+                 * once we get the parent-child mapping in intf-events, this work-around should be removed. */
+                if (entry.parent_if == 0) {
+                    NBR_MGR_LOG_INFO("PROC", "Nbr VRF:%d if_index %d router-intf %d parent is not present!",
+                                     entry.vrfid, entry.parent_if, entry.if_index);
+                    try {
+                        std::string child_key = nbr_get_key(entry.if_index, ip);
+                        auto& ptr = nbr_db_get(nbr_db, entry.vrfid, child_key);
+                        ptr->trigger_set_nbr_state(NBR_MGR_NUD_FAILED);
+                    } catch (std::invalid_argument& e){
+                        /* If the nbr is not present on the child intf, no handling is required. */
+                    }
+                    return true;
+                }
+                nbr_mgr_intf_entry_t parent_intf;
+                if(nbr_get_if_data(entry.vrfid, entry.parent_if, parent_intf) == false) {
+                    NBR_MGR_LOG_ERR("PROC", "Nbr VRF:%d if_index %d router-intf %d not present in the cache",
+                                    entry.vrfid, entry.parent_if, entry.if_index);
+                    return false;
+                }
+                NBR_MGR_LOG_INFO("PROC", "Nbr VRF:%d parent intf:%d child intf:%d updated!",
+                                 entry.vrfid, entry.parent_if, entry.if_index);
+                parent_intf.parent_or_child_if_index = entry.if_index;
+                intf.parent_or_child_if_index = entry.parent_if;
+
+                intf.is_parent_and_child_in_same_vrf = true;
+                intf.is_child_intf = true;
+                neighbor_if_db[intf.vrfid][intf.if_index] = intf;
+
+                parent_intf.is_parent_and_child_in_same_vrf = true;
+                neighbor_if_db[parent_intf.vrfid][parent_intf.if_index] = parent_intf;
+                return true;
+            }
+
+            /* We program the nbr with the parent intf. into the HW, when the same nbr is learnt on
+             * the child intf/MAC change detected on the child intf.,
+             * the associated nbr in the parent intf will also be created/updated. */
+            if (intf.is_parent_and_child_in_same_vrf) {
+                NBR_MGR_LOG_INFO("PROC", "Neighbor msg_type:%s, vrf %lu(%s), family:%s, Nbr:%s, MAC:%s, "
+                                 "ifindex:%d, phy_idx:%d, expire:%lu, flags:0x%lx, status:%s child-intf:%d if-index:%d",
+                                 (entry.msg_type == NBR_MGR_NBR_ADD) ? "Add" : "Del", entry.vrfid, entry.vrf_name,
+                                 ((entry.family == HAL_INET4_FAMILY) ? "IPv4" :
+                                  ((entry.family == HAL_INET6_FAMILY) ? "IPv6" : "Bridge")),
+                                 ip.c_str(), mac.c_str(), entry.if_index, entry.mbr_if_index,
+                                 entry.expire, entry.flags,
+                                 nbr_mgr_nl_neigh_state_to_str (entry.status), intf.is_child_intf, intf.parent_or_child_if_index);
+
+                if (intf.is_child_intf) {
+                    /* Is the update on anycast/virutual intf, update the nbr learnt on the parent intf for 2 sceanrios,
+                     * 1) Nbr does not exist with parent intf, resolve the nbr.
+                     * 2) Nbr exists but MAC mis-match, change the MAC on the parent intf. and program the HW,
+                     *    trigger the refresh to make sure that the MAC changes on nbr learnt
+                     *    on the parent intf. in the kernel. */
+                    try {
+                        std::string parent_key = nbr_get_key(intf.parent_or_child_if_index, ip);
+                        auto& ptr = nbr_db_get(nbr_db, entry.vrfid, parent_key);
+                        if (((entry.status & NBR_MGR_NUD_STALE) ||
+                             (entry.status & NBR_MGR_NUD_REACHABLE)) &&
+                            (ptr->get_status() & NBR_MGR_NUD_FAILED)) {
+                            /* Program the nbr into HW immediately and trigger resolve
+                             * on the parent intf to learn the nbr again in the kernel. */
+                            child_if_index = entry.if_index;
+                            entry.if_index = intf.parent_or_child_if_index;
+                            l_fn(entry, ptr);
+                            /* Set the refresh flag so that nbr programmed into the
+                             * HW wont be affect by incomplete state during resolve. */
+                            ptr->set_flags(NBR_MGR_NBR_REFRESH);
+                            ptr->trigger_resolve();
+                            entry.if_index = child_if_index;
+                        } else if ((ptr->get_mac_ptr()) && (ptr->get_mac_ptr()->is_valid())) {
+                            /* Check for MAC mis-match */
+                            hal_mac_addr_t mac_addr;
+                            std_string_to_mac(&mac_addr, ptr->get_mac_ptr()->get_mac_addr().c_str(),
+                                              sizeof(hal_mac_addr_t));
+
+                            if ((memcmp (&entry.nbr_hwaddr, &g_zero_mac, sizeof (hal_mac_addr_t))) &&
+                                (memcmp (&entry.nbr_hwaddr, &mac_addr, sizeof (hal_mac_addr_t)))) {
+                                NBR_MGR_LOG_INFO("PROC", "Neighbor MAC change on child:%d parent:%d",
+                                                 entry.if_index, intf.parent_or_child_if_index);
+                                child_if_index = entry.if_index;
+                                entry.if_index = intf.parent_or_child_if_index;
+                                /* Send refresh and set the refresh in progress flag. */
+                                l_fn(entry, ptr);
+                                /* We dont need the explicit refresh here, since the above function does the refresh,
+                                 * the below refresh is helpful only when the MAC is changed with reachable state. */
+                                if (!(entry.status & NBR_MGR_NUD_STALE)) {
+                                    ptr->trigger_refresh();
+                                }
+                                entry.if_index = child_if_index;
+                            }
+                        }
+                    } catch (std::invalid_argument& e) {
+                        /* The neighbor is not present on the parent interface,
+                         * trigger resolve to learn on parent intf. */
+                        NBR_MGR_LOG_INFO("PROC", "Neighbor not present on parent intf - change on child:%d parent:%d",
+                                         entry.if_index, intf.parent_or_child_if_index);
+                        child_if_index = entry.if_index;
+                        entry.if_index = intf.parent_or_child_if_index;
+                        /* VN/virtual intf - admin down case, we would get entry delete,
+                         * resolve the nbr with refresh in progress flag. */
+                        if ((entry.status == NBR_MGR_NUD_INCOMPLETE) && !nbr_check_intf_up(entry.vrfid, entry.if_index))
+                            return false;
+                        auto &ptr = nbr_db_get_w_create(entry);
+                        l_fn(entry, ptr);
+                        /* Set the refresh flag so that nbr programmed into the
+                         * HW wont be affect by incomplete state during resolve. */
+                        ptr->set_flags(NBR_MGR_NBR_REFRESH);
+                        ptr->trigger_resolve();
+                        entry.if_index = child_if_index;
+                    }
+                } else {
+                    /* Is the update on parent intf and nbr state failure,
+                     * move the state of the nbr learnt on anycast/virtual intf to failed. */
+                    if (entry.status & NBR_MGR_NUD_FAILED) {
+                        NBR_MGR_LOG_INFO("PROC", "Nbr on parent intf failed, set the nbr learnt on child state to failed - child:%d parent:%d",
+                                         entry.if_index, intf.parent_or_child_if_index);
+                        try {
+                            std::string parent_key = nbr_get_key(intf.parent_or_child_if_index, ip);
+                            auto& ptr = nbr_db_get(nbr_db, entry.vrfid, parent_key);
+                            ptr->trigger_set_nbr_state(NBR_MGR_NUD_FAILED);
+                        } catch (std::invalid_argument& e){
+                            /* If the nbr is not present on the parent intf, no handling is required. */
+                        }
+                    }
+                }
+            }
+
             //Do not create the entry with DELAY/PROBE/FAILED if not already present
             if((entry.status & NBR_MGR_NUD_DELAY) ||
                (entry.status & NBR_MGR_NUD_PROBE) ||
                (entry.status & NBR_MGR_NUD_FAILED)) {
-                nbr_ip_db_type& nbr_db = neighbor_db(entry.family);
                 auto &ptr = nbr_db_get(nbr_db, entry.vrfid, key);
                 l_fn(entry, ptr);
             } else {
@@ -533,6 +710,35 @@ bool nbr_process::nbr_proc_nbr_msg(nbr_mgr_nbr_entry_t& entry) {
         stats.nbr_del_msg_cnt++;
     }
 
+    /* Ignore the neighbors with invalid interface */
+    nbr_mgr_intf_entry_t intf;
+    if(nbr_get_if_data(entry.vrfid, entry.if_index, intf) == false) {
+        NBR_MGR_LOG_INFO("PROC", "Nbr VRF:%d if_index %d router-intf %d not present in the cache",
+                         entry.vrfid, entry.parent_if, entry.if_index);
+        return false;
+    }
+
+    if ((intf.is_parent_and_child_in_same_vrf) && (intf.is_child_intf == false)) {
+        try {
+            std::string parent_key = nbr_get_key(intf.parent_or_child_if_index, ip);
+            nbr_ip_db_type& nbr_db = neighbor_db(entry.family);
+            auto& ptr = nbr_db_get(nbr_db, entry.vrfid, parent_key);
+            NBR_MGR_LOG_INFO("PROC", "Neighbor del on parent intf, set nbr on child to failed, "
+                             "vrf %lu(%s), family:%s, Nbr:%s, MAC:%s, "
+                             "ifindex:%d, child:%d phy_idx:%d, expire:%lu, flags:0x%lx, status:%s",
+                             entry.vrfid, entry.vrf_name,
+                             ((entry.family == HAL_INET4_FAMILY) ? "IPv4" :
+                              ((entry.family == HAL_INET6_FAMILY) ? "IPv6" : "Bridge")),
+                             ip.c_str(), mac.c_str(), entry.if_index,
+                             intf.parent_or_child_if_index, entry.mbr_if_index,
+                             entry.expire, entry.flags,
+                             nbr_mgr_nl_neigh_state_to_str (entry.status));
+
+            ptr->trigger_set_nbr_state(NBR_MGR_NUD_FAILED);
+        } catch (std::invalid_argument& e){
+            /* If the nbr is not present on the parent intf, no handling is required. */
+        }
+    }
     /* Neighbor delete case handling */
     try {
         nbr_ip_db_type& nbr_db = neighbor_db(entry.family);
@@ -541,7 +747,7 @@ bool nbr_process::nbr_proc_nbr_msg(nbr_mgr_nbr_entry_t& entry) {
         if (ptr->process_nbr_data(entry))
             nbr_db_remove(nbr_db, entry.vrfid, key);
     } catch (std::invalid_argument& e){
-        NBR_MGR_LOG_ERR("PROC", "Nbr does not exist! %s", e.what());
+        NBR_MGR_LOG_INFO("PROC", "Nbr does not exist! %s", e.what());
         return false;
     }
 
@@ -581,11 +787,12 @@ bool nbr_process::nbr_update_intf_info(nbr_mgr_intf_entry_t& intf) {
 bool nbr_process::nbr_proc_intf_msg(nbr_mgr_intf_entry_t& intf) {
     NBR_MGR_LOG_INFO("PROC", "Intf VRF-id:%lu(%s) is-del:%d, if_index:%d(%s), msg-type:%s "
                     "update msg flags:%d is_admin_up:%d is_oper_up:%d,"
-                    "is_bridge:%d vlan-id:%d", intf.vrfid, intf.vrf_name, intf.is_op_del, intf.if_index,
-                    intf.if_name,
+                    "is_bridge:%d vlan-id:%d mbr:%d type:%d", intf.vrfid, intf.vrf_name,
+                    intf.is_op_del, intf.if_index, intf.if_name,
                     ((intf.flags == NBR_MGR_INTF_VLAN_MSG) ? "VLAN" :
                      ((intf.flags == NBR_MGR_INTF_ADMIN_MSG) ? "Admin" : "Oper")),
-                    intf.flags, intf.is_admin_up, intf.is_oper_up, intf.is_bridge, intf.vlan_id);
+                    intf.flags, intf.is_admin_up, intf.is_oper_up, intf.is_bridge, intf.vlan_id,
+                    intf.mbr_if_index, intf.type);
 
     if(!intf.is_op_del) {
         bool intf_update_req = true;
@@ -600,9 +807,20 @@ bool nbr_process::nbr_proc_intf_msg(nbr_mgr_intf_entry_t& intf) {
                 auto& intf_db = itr->second;
 
                 NBR_MGR_LOG_INFO("PROC-INTF-DB", "Current info - Intf VRF-id:%lu if_index:%d, "
-                                 "is_admin_up:%d is_oper_up:%d, is_bridge:%d vlan-id:%d",
+                                 "is_admin_up:%d is_oper_up:%d, is_bridge:%d vlan-id:%d mbr:%d type:%d",
                                  intf_db.vrfid, intf_db.if_index, intf_db.is_admin_up, intf_db.is_oper_up,
-                                 intf_db.is_bridge, intf_db.vlan_id);
+                                 intf_db.is_bridge, intf_db.vlan_id, intf.mbr_if_index, intf_db.type);
+                if (intf.mbr_if_index && (intf_db.type == NBR_MGR_INTF_TYPE_1Q_BRIDGE) &&
+                    (intf.type == NBR_MGR_INTF_TYPE_1Q_BRIDGE)) {
+                    nbr_mgr_intf_entry_t intf_mbr;
+                    if(nbr_get_if_data(intf.vrfid, intf.mbr_if_index, intf_mbr) &&
+                       (intf_mbr.type == NBR_MGR_INTF_TYPE_VXLAN)) {
+
+                        intf_db.type = NBR_MGR_INTF_TYPE_1D_BRIDGE;
+                    }
+                    NBR_MGR_LOG_INFO("PROC-INTF-DB", "if_index:%d type:%d", intf_mbr.if_index,
+                                     intf_mbr.type);
+                }
 
                 if (intf.flags & NBR_MGR_INTF_VLAN_MSG) {
                     if (intf_db.vlan_id == intf.vlan_id) {
@@ -661,6 +879,7 @@ bool nbr_process::nbr_proc_intf_msg(nbr_mgr_intf_entry_t& intf) {
                                          intf_db.parent_or_child_if_index);
                         dep_intf.parent_or_child_vrfid = 0;
                         dep_intf.parent_or_child_if_index = 0;
+                        dep_intf.is_parent_and_child_in_same_vrf = false;
                         neighbor_if_db[dep_intf.vrfid][dep_intf.if_index] = dep_intf;
                     }
                     intf_list.erase(itr);
@@ -757,6 +976,7 @@ bool nbr_process::nbr_proc_flush_msg(nbr_mgr_flush_entry_t& flush) {
     auto ln_f = [&](nbr_data const * n_ptr) mutable {
         if (!(n_ptr->get_status() & NBR_MGR_NUD_PERMANENT)) {
             if (((n_ptr->get_flags()) & NBR_MGR_NBR_REFRESH) ||
+                ((n_ptr->get_flags()) & NBR_MGR_NBR_RESOLUTION_IN_PRGS) ||
                 (n_ptr->get_status() & NBR_MGR_NUD_INCOMPLETE)) {
                 /* Neighbor is being refreshed now, increment the refresh count
                  * so as to refresh further once the current
@@ -768,11 +988,13 @@ bool nbr_process::nbr_proc_flush_msg(nbr_mgr_flush_entry_t& flush) {
                 /* If the neighbor is already in the failed state while refreshing,
                  * resolve the neighbor i.e send broadcast ARP request */
                 this->stats.flush_trig_refresh_cnt++;
+                const_cast<nbr_data *>(n_ptr)->set_flags(NBR_MGR_NBR_RESOLUTION_IN_PRGS);
                 const_cast<nbr_data *>(n_ptr)->trigger_resolve();
                 const_cast<nbr_data *>(n_ptr)->nbr_stats.flush_failed_resolve++;
             } else {
                 /* Refresh the neighbor by sending the unicast ARP request */
                 this->stats.flush_trig_refresh_cnt++;
+                const_cast<nbr_data *>(n_ptr)->set_flags(NBR_MGR_NBR_RESOLUTION_IN_PRGS);
                 const_cast<nbr_data *>(n_ptr)->trigger_refresh();
                 const_cast<nbr_data *>(n_ptr)->nbr_stats.flush_refresh++;
             }
@@ -784,11 +1006,16 @@ bool nbr_process::nbr_proc_flush_msg(nbr_mgr_flush_entry_t& flush) {
          * associated with that interface */
         hal_vrf_id_t flush_vrf_id = NBR_MGR_DEFAULT_VRF_ID;
         hal_ifindex_t flush_if_index = flush.if_index;
-        nbr_mgr_intf_entry_t llayer_intf;
+        nbr_mgr_intf_entry_t llayer_intf, hlayer_intf;
         if (nbr_get_if_data(NBR_MGR_DEFAULT_VRF_ID, flush.if_index, llayer_intf)) {
+            /* Exclude the virtual/anycast child interface since
+             * the below handling is required for L3 interfaces in non-default VRF context. */
             if (llayer_intf.parent_or_child_if_index != 0) {
-                flush_vrf_id = llayer_intf.parent_or_child_vrfid;
-                flush_if_index = llayer_intf.parent_or_child_if_index;
+                if (nbr_get_if_data(llayer_intf.parent_or_child_vrfid, llayer_intf.parent_or_child_if_index, hlayer_intf)
+                    && (hlayer_intf.is_child_intf == false)) {
+                    flush_vrf_id = llayer_intf.parent_or_child_vrfid;
+                    flush_if_index = llayer_intf.parent_or_child_if_index;
+                }
             }
         }
         NBR_MGR_LOG_INFO("PROC", "FLUSH Intf:%d hlayer info VRF:%d if-index:%d",
@@ -917,6 +1144,7 @@ mac_data::mac_data(const nbr_mgr_nbr_entry_t& mac_entry) {
     m_mac_addr = nbr_mac_addr_string(mac_entry.nbr_hwaddr);
     m_if_index = mac_entry.if_index;
     m_mbr_index = mac_entry.mbr_if_index;
+    memcpy(&m_ip_addr, &mac_entry.nbr_addr, sizeof(mac_entry.nbr_addr));
     display();
 }
 
@@ -924,11 +1152,16 @@ mac_data::mac_data(const hal_mac_addr_t& mac_addr, hal_ifindex_t ifidx) {
     m_mac_addr = nbr_mac_addr_string(mac_addr);
     m_if_index = ifidx;
     m_mbr_index = 0;
+    memset(&m_ip_addr, 0, sizeof(m_ip_addr));
     display();
 }
 
 void mac_data::update_mac_if(hal_ifindex_t port) noexcept {
     m_mbr_index = port;
+}
+
+void mac_data::update_mac_remote_ip(const hal_ip_addr_t& ip) noexcept {
+    memcpy(&m_ip_addr, &ip, sizeof(hal_ip_addr_t));
 }
 
 void mac_data::display() const {
@@ -982,10 +1215,25 @@ bool nbr_data::process_nbr_data(nbr_mgr_nbr_entry_t& entry) {
      * 5. If Nbr add and status stale, refresh the neighbor
      *    by sending the message to kernel.
      */
+    m_flags &= ~NBR_MGR_NBR_RESOLUTION_IN_PRGS;
     if(entry.msg_type == NBR_MGR_NBR_ADD) {
         /* Pro-active resolution desired by the NAS-L3, trigger resolution
          * 1. m_status 0(default) indicates that resolution is not triggered yet
          * 2. Resolution failed, trigger resolution again. */
+        if (entry.flags & NBR_MGR_NBR_TRIGGER_RESOLVE) {
+            if ((m_status == NBR_MGR_NUD_NONE) ||
+                (m_status == NBR_MGR_NUD_FAILED)) {
+                rc = trigger_resolve();
+            }
+            return rc;
+        } else if (entry.flags & NBR_MGR_NBR_DISABLE_AGE_OUT_1D_REMOTE_MAC) {
+            m_flags |= NBR_MGR_NBR_DISABLE_AGE_OUT_1D_REMOTE_MAC;
+            return rc;
+        } else if (entry.flags & NBR_MGR_NBR_ENABLE_AGE_OUT) {
+            m_flags &= ~NBR_MGR_NBR_DISABLE_AGE_OUT_1D_REMOTE_MAC;
+            return rc;
+        }
+
         if (entry.flags & NBR_MGR_NBR_RESOLVE) {
             m_flags |= NBR_MGR_NBR_RESOLVE;
             if ((m_status == NBR_MGR_NUD_NONE) || (m_status & NBR_MGR_NUD_FAILED))
@@ -1150,7 +1398,7 @@ bool nbr_data::process_nbr_data(nbr_mgr_nbr_entry_t& entry) {
                  * program the host in the NPU
                  */
                 nbr_stats.retry_cnt++;
-                if (m_retry_cnt == NBR_MGR_MAX_NBR_RETRY_CNT) {
+                if (m_retry_cnt == NBR_MGR_MAX_NBR_REFRESH_OS_MAC_LEARN_RETRY_CNT) {
                     m_flags &= ~NBR_MGR_NBR_REFRESH;
                     NBR_MGR_LOG_INFO("PROC", "MAC not learnt with the ARP refresh, vrf-id:%d(%s),"
                                      " family:%d, Nbr:%s, if_index:%d (ll-intf:%d), phy_idx:%d, status:%d,"
@@ -1207,7 +1455,7 @@ bool nbr_data::process_nbr_data(nbr_mgr_nbr_entry_t& entry) {
                  * if fails, remove the nbr entry in the NPU to lift
                  * the packets for ARP resolution */
                 nbr_stats.failed_trig_resolve_cnt++;
-                if (m_failed_cnt > NBR_MGR_MAX_NBR_RETRY_CNT) {
+                if (m_failed_cnt > NBR_MGR_MAX_NBR_FAILED_RETRY_CNT) {
                     NBR_MGR_LOG_INFO("PROC", " Not resolved even after multiple re-tries vrf:%d(%s),"
                                      " family:%d,Nbr:%s, intf:%d, phy_idx:%d, status:%d,"
                                      "flags %d entry type:%d status:%lu flags:%lu m_refresh_cnt:%d",
@@ -1224,7 +1472,7 @@ bool nbr_data::process_nbr_data(nbr_mgr_nbr_entry_t& entry) {
                      * while the refresh in progress, we could have received more flushes,
                      * refresh again */
                     /* Reset the refresh count during trigger resolve on failure case */
-                    if (m_failed_cnt <= NBR_MGR_MIN_NBR_RETRY_CNT) {
+                    if (m_failed_cnt <= NBR_MGR_MIN_NBR_FAILED_RETRY_CNT) {
                         rc = trigger_resolve();
                     } else {
                         rc = trigger_delay_resolve();
@@ -1251,7 +1499,10 @@ bool nbr_data::process_nbr_data(nbr_mgr_nbr_entry_t& entry) {
         }
         if (entry.status & NBR_MGR_NUD_STALE) {
             /* Check whether the auto refresh is enabled for the neighbor */
-            if (entry.auto_refresh_on_stale_enabled) {
+            if ((m_flags & NBR_MGR_NBR_DISABLE_AGE_OUT_1D_REMOTE_MAC) && m_mac_data_ptr
+                && m_mac_data_ptr->fdb_get_1d_remote_mac_status()) {
+                trigger_set_nbr_state(NBR_MGR_NUD_REACHABLE);
+            } else if (entry.auto_refresh_on_stale_enabled) {
                 /* If the current is incomplete, dont set for refresh */
                 if (!(m_status & NBR_MGR_NUD_INCOMPLETE)) {
                     m_flags |= NBR_MGR_NBR_REFRESH;
@@ -1327,15 +1578,15 @@ void nbr_data::populate_nbr_entry(nbr_mgr_nbr_entry_t& entry) const {
     }
 }
 
-bool nbr_data::handle_fdb_change(nbr_mgr_evt_type_t evt, unsigned long status) const {
+bool nbr_data::handle_fdb_change(nbr_mgr_evt_type_t evt, unsigned long status, bool is_mac_moved) const {
     std::string ip = nbr_ip_addr_string (m_ip_addr);
-    NBR_MGR_LOG_DEBUG("PROC-NL-MSG", "Handle FDB change for %s if-index:%d evt:%d status:%d",
-                      ip.c_str(), m_ifindex, evt, status);
+    NBR_MGR_LOG_DEBUG("PROC-NL-MSG", "Handle FDB change for %s if-index:%d evt:%d status:%d mac-move:%d",
+                      ip.c_str(), m_ifindex, evt, status, is_mac_moved);
 
     /* On FDB del (may be because of STP topology change), refresh the ARPs/Nbrs
      * to re-learn on correct port using ARP/NA reply incase of uni-directional
      * traffic case */
-    if ((evt == NBR_MGR_NBR_DEL) || (status & NBR_MGR_NUD_STALE)) {
+    if ((evt == NBR_MGR_NBR_DEL) || (status & NBR_MGR_NUD_STALE) || is_mac_moved) {
         /* If the neighbor is dynamic, refresh the nbr on MAC delete
          * On MAC entry status STALE, refresh the nbr in order to refresh the MAC.
          * If nbr is already in INCOMPLETE/FAILED state, then no need to refresh nbr when MAC
@@ -1348,9 +1599,17 @@ bool nbr_data::handle_fdb_change(nbr_mgr_evt_type_t evt, unsigned long status) c
                 /* Oper. down case, dont refresh the ARP/Nbr. */
                 return true;
             }
-            m_flags |= NBR_MGR_NBR_REFRESH;
+            /* If MAC moved, just refresh once and dont track it */
+            if (is_mac_moved == false) {
+                m_flags |= NBR_MGR_NBR_REFRESH;
+            }
             nbr_stats.mac_trig_refresh++;
-            return trigger_refresh();
+            if (get_flags() & NBR_MGR_NBR_RESOLUTION_IN_PRGS) {
+                const_cast<nbr_data *>(this)->set_refresh_cnt();
+            } else {
+                trigger_refresh();
+            }
+            return true;
         }
         /* @@TODO need to take some action on MAC delete for the static Nbr entry? */
         return true;
@@ -1360,7 +1619,9 @@ bool nbr_data::handle_fdb_change(nbr_mgr_evt_type_t evt, unsigned long status) c
                (!(m_flags & NBR_MGR_NBR_REFRESH))) {
         /* If the MAC learnt when the nbr is in failed state, refresh the nbr. */
         m_flags |= NBR_MGR_NBR_REFRESH;
-        if (m_status & NBR_MGR_NUD_FAILED) {
+        if (get_flags() & NBR_MGR_NBR_RESOLUTION_IN_PRGS) {
+            const_cast<nbr_data *>(this)->set_refresh_cnt();
+        } else if (m_status & NBR_MGR_NUD_FAILED) {
             nbr_stats.mac_add_trig_resolve++;
             trigger_resolve();
         } else {
@@ -1415,7 +1676,8 @@ bool nbr_data::handle_if_state_change(nbr_mgr_intf_entry_t& intf) {
     }
     /* If the oper. status changes to up, resolve the failed neighbors. */
     if ((intf.flags & NBR_MGR_INTF_OPER_MSG) && (intf.is_oper_up) && !(m_status & NBR_MGR_NUD_PERMANENT)) {
-        if ((m_status & NBR_MGR_NUD_FAILED) || (m_status == NBR_MGR_NUD_NONE)) {
+        if ((m_status & NBR_MGR_NUD_INCOMPLETE) ||
+            (m_status & NBR_MGR_NUD_FAILED) || (m_status == NBR_MGR_NUD_NONE)) {
             trigger_resolve();
         } else {
             trigger_refresh();
@@ -1453,7 +1715,7 @@ bool nbr_data::handle_mac_change(nbr_mgr_nbr_entry_t& entry) {
     return true;;
 }
 
-bool nbr_data::trigger_resolve() const {
+bool nbr_data::trigger_set_nbr_state(uint32_t state) const {
     nbr_mgr_nbr_entry_t nbr;
     std::string ip = nbr_ip_addr_string (m_ip_addr);
     NBR_MGR_LOG_DEBUG("PROC-NL-MSG", "Resolve the neighbor %s if-index:%d",
@@ -1464,6 +1726,26 @@ bool nbr_data::trigger_resolve() const {
 
     //Skip resolve if the interface is admin down/not exist
     if(!nbr_check_intf_up(nbr.vrfid, nbr.if_index))
+        return false;
+
+    nbr_stats.set_state_cnt++;
+    nbr.status = state;
+    /* Resolve the neighbor */
+    return nbr_mgr_nbr_resolve(NBR_MGR_NL_SET_NBR_STATE_MSG, &nbr);
+}
+
+
+bool nbr_data::trigger_resolve() const {
+    nbr_mgr_nbr_entry_t nbr;
+    std::string ip = nbr_ip_addr_string (m_ip_addr);
+    NBR_MGR_LOG_DEBUG("PROC-NL-MSG", "Resolve the neighbor %s if-index:%d",
+                     ip.c_str(), m_ifindex);
+
+    memset(&nbr, 0, sizeof(nbr));
+    populate_nbr_entry(nbr);
+
+    //Skip resolve if the interface is admin down/not exist or on child intf.
+    if(!nbr_check_intf_up_on_parent_intf(nbr.vrfid, nbr.if_index))
         return false;
 
     nbr_stats.resolve_cnt++;
@@ -1480,8 +1762,8 @@ bool nbr_data::trigger_delay_resolve() const {
     memset(&nbr, 0, sizeof(nbr));
     populate_nbr_entry(nbr);
 
-    //Skip resolve if the interface is admin down/not exist
-    if(!nbr_check_intf_up(nbr.vrfid, nbr.if_index))
+    //Skip resolve if the interface is admin down/not exist or on child intf.
+    if(!nbr_check_intf_up_on_parent_intf(nbr.vrfid, nbr.if_index))
         return false;
 
     nbr_stats.delay_resolve_cnt++;
@@ -1509,8 +1791,8 @@ bool nbr_data::trigger_refresh(bool track_refresh) const {
     populate_nbr_entry(nbr);
     nbr_stats.refresh_cnt++;
     if (track_refresh) {
-        //Skip refresh if the interface is admin down/not exist
-        if(!nbr_check_intf_up(nbr.vrfid, nbr.if_index))
+        //Skip refresh if the interface is admin down/not exist or on child intf.
+        if(!nbr_check_intf_up_on_parent_intf(nbr.vrfid, nbr.if_index))
             return false;
 
         if (!(m_flags & NBR_MGR_MAC_NOT_PRESENT))
@@ -1542,8 +1824,8 @@ bool nbr_data::trigger_delay_refresh() const {
     memset(&nbr, 0, sizeof(nbr));
     populate_nbr_entry(nbr);
 
-    //Skip refresh if the interface is admin down/not exist
-    if(!nbr_check_intf_up(nbr.vrfid, nbr.if_index))
+    //Skip refresh if the interface is admin down/not exist or on child intf.
+    if(!nbr_check_intf_up_on_parent_intf(nbr.vrfid, nbr.if_index))
         return false;
 
     if (!(m_flags & NBR_MGR_MAC_NOT_PRESENT))
@@ -1572,8 +1854,8 @@ bool nbr_data::trigger_refresh_for_mac_learn() const {
     memset(&nbr, 0, sizeof(nbr));
     populate_nbr_entry(nbr);
 
-    //Skip refresh if the interface is admin down/not exist
-    if(!nbr_check_intf_up(nbr.vrfid, nbr.if_index))
+    //Skip refresh if the interface is admin down/not exist or on child intf.
+    if(!nbr_check_intf_up_on_parent_intf(nbr.vrfid, nbr.if_index))
         return false;
 
     m_flags |= NBR_MGR_NBR_REFRESH_FOR_MAC_LEARN;
@@ -1612,6 +1894,24 @@ bool nbr_data::trigger_instant_refresh() const {
 
 bool nbr_data::publish_entry(nbr_mgr_op_t op, const nbr_mgr_nbr_entry_t& entry) const {
 
+    nbr_mgr_intf_entry_t intf;
+    std::string ip = nbr_ip_addr_string (entry.nbr_addr);
+    std::string mac = nbr_mac_addr_string (entry.nbr_hwaddr);
+
+    if ((nbr_get_if_data(entry.vrfid, entry.if_index, intf)) &&
+        (intf.is_parent_and_child_in_same_vrf) && (intf.is_child_intf)) {
+        NBR_MGR_LOG_INFO("PROC", "Publish ignored for child-intf OP:%s msg_type:%s, vrf %lu(%s), family:%s, Nbr:%s, MAC:%s, "
+                         "ifindex:%d, lower-layer-if:%d phy_idx:%d, expire:%lx, flags:0x%lx, status:%s nbr-vrf %d(%s) published:%d",
+                         ((op == NBR_MGR_OP_CREATE) ? "Create" : ((op == NBR_MGR_OP_UPDATE)?
+                                                                  "Update" : "Del")),
+                         (entry.msg_type == NBR_MGR_NBR_ADD) ? "Add" : "Del", entry.vrfid, entry.vrf_name,
+                         ((entry.family == HAL_INET4_FAMILY) ? "IPv4" :
+                          ((entry.family == HAL_INET6_FAMILY) ? "IPv6" : "Bridge")),
+                         ip.c_str(), mac.c_str(), entry.if_index, entry.parent_if, entry.mbr_if_index,
+                         entry.expire, entry.flags,
+                         nbr_mgr_nl_neigh_state_to_str (entry.status), m_vrf_id, m_vrf_name.c_str(), m_published);
+        return true;
+    }
     //If already published, modify operation to UPDATE
     if(m_published && op == NBR_MGR_OP_CREATE) op = NBR_MGR_OP_UPDATE;
 
@@ -1626,8 +1926,6 @@ bool nbr_data::publish_entry(nbr_mgr_op_t op, const nbr_mgr_nbr_entry_t& entry) 
     if(nbr_mgr_program_npu(op, entry)) m_published = true;
 
     nbr_stats.npu_prg_msg_cnt++;
-    std::string ip = nbr_ip_addr_string (entry.nbr_addr);
-    std::string mac = nbr_mac_addr_string (entry.nbr_hwaddr);
     m_last_status_published = entry.status;
     NBR_MGR_LOG_INFO("PROC", "Publish OP:%s msg_type:%s, vrf %lu(%s), family:%s, Nbr:%s, MAC:%s, "
                      "ifindex:%d, lower-layer-if:%d phy_idx:%d, expire:%lx, flags:0x%lx, status:%s nbr-vrf %d(%s) published:%d",

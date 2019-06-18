@@ -50,9 +50,10 @@ pthread_mutex_t fib_dr_mutex;
 pthread_cond_t  fib_dr_cond;
 static bool     is_dr_pending_for_processing = 0; //initialize the predicate for signal
 
-void hal_rt_cps_obj_nh_list_to_route_nh_list(cps_api_object_it_t nhit, t_fib_route_entry *r) {
+bool hal_rt_cps_obj_nh_list_to_route_nh_list(cps_api_object_it_t nhit, t_fib_route_entry *r) {
 
     size_t hop = 0;
+    cps_api_object_attr_t gw_if_name = CPS_API_ATTR_NULL;
     for (cps_api_object_it_inside(&nhit); cps_api_object_it_valid(&nhit);
          cps_api_object_it_next(&nhit), ++hop) {
         cps_api_object_it_t node = nhit;
@@ -63,6 +64,9 @@ void hal_rt_cps_obj_nh_list_to_route_nh_list(cps_api_object_it_t nhit, t_fib_rou
                 case BASE_ROUTE_OBJ_ENTRY_NH_LIST_IFINDEX:
                     r->nh_list[hop].nh_if_index = cps_api_object_attr_data_u32(node.attr);
                     break;
+                case BASE_ROUTE_OBJ_ENTRY_NH_LIST_IFNAME:
+                    gw_if_name = node.attr;
+                    break;
                 case BASE_ROUTE_OBJ_ENTRY_NH_LIST_NH_ADDR:
                     memcpy(&r->nh_list[hop].nh_addr.u, cps_api_object_attr_data_bin(node.attr),
                            cps_api_object_attr_len (node.attr));
@@ -70,18 +74,37 @@ void hal_rt_cps_obj_nh_list_to_route_nh_list(cps_api_object_it_t nhit, t_fib_rou
                 case BASE_ROUTE_OBJ_ENTRY_NH_LIST_WEIGHT:
                     r->nh_list[hop].nh_weight = cps_api_object_attr_data_u32(node.attr);
                     break;
+                case BASE_ROUTE_OBJ_ENTRY_NH_LIST_FLAGS:
+                    r->nh_list[hop].nh_flags = cps_api_object_attr_data_u32(node.attr);
+                    break;
                 default:
                     break;
             }
+        }
+        if ((r->nh_list[hop].nh_if_index == 0) && (gw_if_name != CPS_API_ATTR_NULL)) {
+            interface_ctrl_t intf_ctrl;
+            t_std_error rc = STD_ERR_OK;
+            memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
+            intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF_NAME;
+            safestrncpy(intf_ctrl.if_name, (const char *)cps_api_object_attr_data_bin(gw_if_name),
+                        cps_api_object_attr_len(gw_if_name));
 
+            if((rc= dn_hal_get_interface_info(&intf_ctrl)) != STD_ERR_OK) {
+                HAL_RT_LOG_ERR("ROUTE-UPD", "Interface %s to if_index returned error %d",
+                               intf_ctrl.if_name, rc);
+                /* Ignore nexthop if the associated intf is not present in the cache. */
+                continue;
+            }
+            r->nh_list[hop].nh_if_index = intf_ctrl.if_index;
         }
     }
+    return true;
 }
 
-bool hal_rt_cps_obj_to_route(cps_api_object_t obj, t_fib_msg **p_msg_ret) {
+bool hal_rt_cps_obj_to_route(cps_api_object_t obj, t_fib_msg **p_msg_ret, bool is_app_flow) {
     t_fib_msg *p_msg = NULL;
     cps_api_object_attr_t nh_count_attr = CPS_API_ATTR_NULL;
-    uint32_t nh_count = 1;
+    uint32_t nh_count = 1, rt_type = 0;
 
     *p_msg_ret = NULL;
     nh_count_attr = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_ENTRY_NH_COUNT);
@@ -128,6 +151,7 @@ bool hal_rt_cps_obj_to_route(cps_api_object_t obj, t_fib_msg **p_msg_ret) {
     cps_api_attr_id_t id = 0;
     cps_api_object_it_begin(obj,&it);
 
+    bool is_rt_vrf_name_present = false, is_nh_vrf_name_present = false;
     for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it) ) {
         id = cps_api_object_attr_id(it.attr);
 
@@ -143,9 +167,12 @@ bool hal_rt_cps_obj_to_route(cps_api_object_t obj, t_fib_msg **p_msg_ret) {
                        cps_api_object_attr_len (it.attr));
                 break;
             case BASE_ROUTE_OBJ_VRF_ID:
-                r->vrfid = cps_api_object_attr_data_uint(it.attr);
+                if (is_app_flow == false) {
+                    r->vrfid = cps_api_object_attr_data_uint(it.attr);
+                }
                 break;
             case BASE_ROUTE_OBJ_VRF_NAME:
+                is_rt_vrf_name_present = true;
                 safestrncpy((char*)r->vrf_name, (const char *)cps_api_object_attr_data_bin(it.attr),
                             sizeof(r->vrf_name));
                 break;
@@ -153,25 +180,231 @@ bool hal_rt_cps_obj_to_route(cps_api_object_t obj, t_fib_msg **p_msg_ret) {
                 r->prefix_masklen = cps_api_object_attr_data_uint(it.attr);
                 break;
             case BASE_ROUTE_OBJ_ENTRY_SPECIAL_NEXT_HOP:
-                r->rt_type = cps_api_object_attr_data_uint(it.attr);
+                rt_type = cps_api_object_attr_data_uint(it.attr);
+                if (is_app_flow) {
+                    if (rt_type == BASE_ROUTE_SPECIAL_NEXT_HOP_BLACKHOLE) {
+                        r->rt_type = RT_BLACKHOLE;
+                    } else if (rt_type == BASE_ROUTE_SPECIAL_NEXT_HOP_UNREACHABLE) {
+                        r->rt_type = RT_UNREACHABLE;
+                    } else if (rt_type == BASE_ROUTE_SPECIAL_NEXT_HOP_PROHIBIT) {
+                        r->rt_type = RT_PROHIBIT;
+                    } else if (rt_type == BASE_ROUTE_SPECIAL_NEXT_HOP_RECEIVE) {
+                        r->rt_type = RT_LOCAL;
+                    }
+                } else {
+                    r->rt_type = rt_type;
+                }
                 break;
             case BASE_ROUTE_OBJ_ENTRY_NH_COUNT:
                 r->hop_count = cps_api_object_attr_data_uint(it.attr);
                 break;
             case BASE_ROUTE_OBJ_ENTRY_VRF_ID:
-                r->nh_vrfid = cps_api_object_attr_data_uint(it.attr);
+                if (is_app_flow == false) {
+                    r->nh_vrfid = cps_api_object_attr_data_uint(it.attr);
+                }
+                r->is_nh_vrf_present = true;
                 break;
             case BASE_ROUTE_OBJ_ENTRY_NH_VRF_NAME:
+                is_nh_vrf_name_present = true;
                 safestrncpy((char*)r->nh_vrf_name, (const char *)cps_api_object_attr_data_bin(it.attr),
                             sizeof(r->nh_vrf_name));
                 break;
             case BASE_ROUTE_OBJ_ENTRY_NH_LIST:
-                hal_rt_cps_obj_nh_list_to_route_nh_list(it, r);
+                if (hal_rt_cps_obj_nh_list_to_route_nh_list(it, r) == false) {
+                    hal_rt_free_route_mem_msg(*p_msg_ret);
+                    *p_msg_ret = NULL;
+                    return false;
+                }
                 break;
+        }
+    }
+
+    if (is_app_flow) {
+        if (is_rt_vrf_name_present) {
+            if (hal_rt_get_vrf_id((const char *)r->vrf_name,
+                                  (hal_vrf_id_t *)&(r->vrfid)) == false) {
+                hal_rt_free_route_mem_msg(*p_msg_ret);
+                *p_msg_ret = NULL;
+                return false;
+            }
+        }
+        if (is_nh_vrf_name_present) {
+            if (hal_rt_get_vrf_id((const char *)r->nh_vrf_name,
+                                  (hal_vrf_id_t *)&(r->nh_vrfid)) == false) {
+                hal_rt_free_route_mem_msg(*p_msg_ret);
+                *p_msg_ret = NULL;
+                return false;
+            }
+            r->is_nh_vrf_present = true;
+        } else if (is_rt_vrf_name_present) {
+            /* If NH vrf name is not set, assume route VRF name is same as NH VRF name */
+            r->nh_vrfid = r->vrfid;
         }
     }
     return true;
 }
+
+bool hal_rt_cps_obj_nh_list_to_route_nexthop_nh_list(cps_api_object_it_t nhit, t_fib_route_entry *r) {
+
+    size_t hop = 0;
+    cps_api_object_attr_t gw_if_name = CPS_API_ATTR_NULL;
+    for (cps_api_object_it_inside(&nhit); cps_api_object_it_valid(&nhit);
+         cps_api_object_it_next(&nhit), ++hop) {
+        cps_api_object_it_t node = nhit;
+        for (cps_api_object_it_inside(&node); cps_api_object_it_valid(&node);
+             cps_api_object_it_next(&node)) {
+
+            switch(cps_api_object_attr_id(node.attr)) {
+                case BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_NH_LIST_IFINDEX:
+                    r->nh_list[hop].nh_if_index = cps_api_object_attr_data_u32(node.attr);
+                    break;
+                case BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_NH_LIST_IFNAME:
+                    gw_if_name = node.attr;
+                    break;
+                case BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_NH_LIST_NH_ADDR:
+                    memcpy(&r->nh_list[hop].nh_addr.u, cps_api_object_attr_data_bin(node.attr),
+                           cps_api_object_attr_len (node.attr));
+                    break;
+                case BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_NH_LIST_WEIGHT:
+                    r->nh_list[hop].nh_weight = cps_api_object_attr_data_u32(node.attr);
+                    break;
+                default:
+                    break;
+            }
+        }
+        if ((r->nh_list[hop].nh_if_index == 0) && (gw_if_name != CPS_API_ATTR_NULL)) {
+            interface_ctrl_t intf_ctrl;
+            t_std_error rc = STD_ERR_OK;
+            memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
+            intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF_NAME;
+            safestrncpy(intf_ctrl.if_name, (const char *)cps_api_object_attr_data_bin(gw_if_name),
+                        cps_api_object_attr_len(gw_if_name));
+
+            if((rc= dn_hal_get_interface_info(&intf_ctrl)) != STD_ERR_OK) {
+                HAL_RT_LOG_ERR("ROUTE-UPD", "Interface %s to if_index returned error %d",
+                               intf_ctrl.if_name, rc);
+                continue;
+            }
+            r->nh_list[hop].nh_if_index = intf_ctrl.if_index;
+        }
+    }
+    return true;
+}
+
+bool hal_rt_cps_obj_to_route_nexthop(cps_api_object_t obj, t_fib_msg **p_msg_ret) {
+    t_fib_msg *p_msg = NULL;
+    cps_api_object_attr_t nh_count_attr = CPS_API_ATTR_NULL;
+    uint32_t nh_count = 1;
+
+    *p_msg_ret = NULL;
+    nh_count_attr = cps_api_object_attr_get(obj, BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_NH_COUNT);
+
+    if (nh_count_attr)
+        nh_count = cps_api_object_attr_data_u32(nh_count_attr);
+
+    /* allocate the memory for the route msg based on the nexthop count
+     * in the received event.
+     */
+    uint32_t buf_size = sizeof(t_fib_msg) + (sizeof (t_fib_nh_info) * nh_count);
+    p_msg = hal_rt_alloc_route_mem_msg(buf_size);
+
+    if (!p_msg) {
+        HAL_RT_LOG_ERR("HAL-RT", "Memory alloc failed for route msg");
+        return false;
+    }
+
+    HAL_RT_LOG_DEBUG("HAL-RT", " allocated buffer for route message:%p"
+                     " bytes:%d nh_count:%d", p_msg, buf_size, nh_count);
+
+    *p_msg_ret = p_msg;
+
+    memset(p_msg, 0, buf_size);
+    p_msg->type = FIB_MSG_TYPE_NL_ROUTE;
+    t_fib_route_entry *r = &(p_msg->route);
+
+    cps_api_object_attr_t op_attr  = cps_api_object_attr_get(obj, BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_OPERATION);
+    if (op_attr == NULL) {
+        hal_rt_free_route_mem_msg(*p_msg_ret);
+        *p_msg_ret = NULL;
+        return false;
+    }
+    uint32_t op = cps_api_object_attr_data_u32(op_attr);
+    switch (op) {
+        case BASE_ROUTE_RT_OPERATION_TYPE_APPEND:
+            r->msg_type = FIB_RT_MSG_ADD;
+            break;
+        case BASE_ROUTE_RT_OPERATION_TYPE_DELETE:
+            r->msg_type = FIB_RT_MSG_DEL;
+            break;
+        default:
+            break;
+    }
+    cps_api_object_it_t it;
+    cps_api_attr_id_t id = 0;
+    cps_api_object_it_begin(obj,&it);
+
+    bool is_rt_vrf_name_present = false, is_nh_vrf_name_present = false;
+    for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it) ) {
+        id = cps_api_object_attr_id(it.attr);
+
+        switch (id) {
+            case BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_AF:
+                r->prefix.af_index = cps_api_object_attr_data_uint(it.attr);
+                break;
+            case BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_ROUTE_PREFIX:
+                memcpy(&r->prefix.u, cps_api_object_attr_data_bin(it.attr),
+                       cps_api_object_attr_len (it.attr));
+                break;
+            case BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_VRF_NAME:
+                is_rt_vrf_name_present = true;
+                safestrncpy((char*)r->vrf_name, (const char *)cps_api_object_attr_data_bin(it.attr),
+                            sizeof(r->vrf_name));
+                break;
+            case BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_PREFIX_LEN:
+                r->prefix_masklen = cps_api_object_attr_data_uint(it.attr);
+                break;
+            case BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_NH_COUNT:
+                r->hop_count = cps_api_object_attr_data_uint(it.attr);
+                break;
+            case BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_NH_VRF_NAME:
+                is_nh_vrf_name_present = true;
+                safestrncpy((char*)r->nh_vrf_name, (const char *)cps_api_object_attr_data_bin(it.attr),
+                            sizeof(r->nh_vrf_name));
+                break;
+            case BASE_ROUTE_ROUTE_NH_OPERATION_INPUT_NH_LIST:
+                if (hal_rt_cps_obj_nh_list_to_route_nexthop_nh_list(it, r) == false) {
+                    hal_rt_free_route_mem_msg(*p_msg_ret);
+                    *p_msg_ret = NULL;
+                    return false;
+                }
+                break;
+        }
+    }
+
+    if (is_rt_vrf_name_present) {
+        if (hal_rt_get_vrf_id((const char *)r->vrf_name,
+                              (hal_vrf_id_t *)&(r->vrfid)) == false) {
+            hal_rt_free_route_mem_msg(*p_msg_ret);
+            *p_msg_ret = NULL;
+            return false;
+        }
+    }
+    if (is_nh_vrf_name_present) {
+        if (hal_rt_get_vrf_id((const char *)r->nh_vrf_name,
+                              (hal_vrf_id_t *)&(r->nh_vrfid)) == false) {
+            hal_rt_free_route_mem_msg(*p_msg_ret);
+            *p_msg_ret = NULL;
+            return false;
+        }
+        r->is_nh_vrf_present = true;
+    } else if (is_rt_vrf_name_present) {
+        /* If NH vrf name is not set, assume route VRF name is same as NH VRF name */
+        r->nh_vrfid = r->vrfid;
+    }
+
+    return true;
+}
+
 
 int fib_create_dr_tree (t_fib_vrf_info *p_vrf_info)
 {
@@ -308,6 +541,9 @@ int fib_proc_dr_download (t_fib_route_entry *p_rt_entry, uint32_t nas_num_route_
         (!(STD_IP_IS_ADDR_LINK_LOCAL(&p_rt_entry->prefix)))) {
         for (ix=0; ix<p_rt_entry->hop_count; ix++) {
             nh_if_index = p_rt_entry->nh_list[ix].nh_if_index;
+            if (nh_if_index == 0) {
+                continue;
+            }
             if(hal_rt_validate_intf(p_rt_entry->nh_vrfid, nh_if_index, &is_mgmt_intf) != STD_ERR_OK) {
                 HAL_RT_LOG_INFO("HAL-RT", "Invalid interface, so skipping route add. msg_type: %d rt-vrf_id %d, af-index %d"
                                 " nh-vrf-id:%lu nh_count %lu addr:%s on if_index %d",
@@ -319,6 +555,9 @@ int fib_proc_dr_download (t_fib_route_entry *p_rt_entry, uint32_t nas_num_route_
     } else if (STD_IP_IS_ADDR_LINK_LOCAL(&p_rt_entry->prefix)) {
         for (ix=0; ix<p_rt_entry->hop_count; ix++) {
             nh_if_index = p_rt_entry->nh_list[ix].nh_if_index;
+            if (nh_if_index == 0) {
+                continue;
+            }
             if ((hal_rt_is_intf_lpbk(p_rt_entry->nh_vrfid, nh_if_index)) ||
                 (hal_rt_is_intf_mgmt(p_rt_entry->nh_vrfid, nh_if_index))) {
                 HAL_RT_LOG_INFO("HAL-RT", "skipping link local route with loopback/mgmt intf msg_type: %d"
@@ -773,6 +1012,23 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
                 HAL_RT_LOG_INFO("HAL-RT-DUP", "vrf_id: %d, prefix: %s/%d dup route update ignored ",
                                 p_dr->vrf_id, FIB_IP_ADDR_TO_STR (&p_dr->key.prefix), p_dr->prefix_len);
                 return STD_ERR_OK;
+            } else if ((STD_IP_IS_ADDR_ZERO(&nh_msg_info.ip_addr)) && (FIB_IS_DR_WRITTEN(p_dr))) {
+                /* Route replace case, increment the RIF here for new NH since the RIF wont be incremented
+                 * in the HW route update flow. */
+                if (hal_rif_index_get_or_create(0, nh_msg_info.vrf_id, nh_msg_info.if_index, &rif_id) == STD_ERR_OK) {
+                    hal_rt_rif_ref_inc(nh_msg_info.vrf_id, nh_msg_info.if_index);
+                }
+            }
+
+            /* On route replace from a connected route to a protocol route,
+             * since the NH if-index for the connected route will be lost after
+             * route entry update to NH-IP without decrementing the
+             * route to RIF usage reference.
+             * So before deleting dr nh, update RIF reference for NH if-index.
+             */
+            if (FIB_IS_DR_WRITTEN(p_dr)) {
+                if(!hal_rt_rif_ref_dec(p_fh->vrf_id, p_fh->key.if_index))
+                    hal_rif_index_remove(0, p_fh->vrf_id, p_fh->key.if_index);
             }
         }
 
@@ -789,6 +1045,12 @@ int fib_proc_dr_add_msg (uint8_t af_index, void *p_rtm_fib_cmd, int *p_nh_info_s
                 t_fib_nh *p_nh = fib_get_nh (nh_msg_info.vrf_id, &nh_msg_info.ip_addr, nh_msg_info.if_index);
                 if ((p_nh != NULL) && (fib_get_dr_nh(p_dr, p_nh))) {
                     return STD_ERR_OK;
+                } else if (FIB_IS_DR_WRITTEN(p_dr)) {
+                    /* Route replace case, increment the RIF here for new NH since the RIF wont be incremented
+                     * in the HW route update flow. */
+                    if (hal_rif_index_get_or_create(0, nh_msg_info.vrf_id, nh_msg_info.if_index, &rif_id) == STD_ERR_OK) {
+                        hal_rt_rif_ref_inc(nh_msg_info.vrf_id, nh_msg_info.if_index);
+                    }
                 }
             }
             /* If the route is currently connected route and may be the nexthop is via different VRF and
@@ -1043,6 +1305,28 @@ int fib_proc_dr_del_msg (uint8_t af_index, void *p_rtm_fib_cmd)
             return STD_ERR_OK;
         }
     } else {
+        if ((((t_fib_route_entry  *)p_rtm_fib_cmd)->hop_count == 0) &&
+            (p_dr->num_nh == 1) && (!(STD_IP_IS_ADDR_LINK_LOCAL(&dr_msg_info.prefix)))) {
+            /* During route leak scenario, if the following sequence happens,
+             * the RIF ref cnt is decremented for the wrong RIF.
+             * Let's say, the same IP is configured on both parent and leaked VRFs on different intfs respectively,
+             * and the host is reachable only via parent VRF,
+             * so, the route is leaked from parent VRF to leaked VRF and the traffic is being sent via both the VRFs.
+             * if the intf on which the IP is configured is shut in the leaked VRF, the leaked route will be effective and
+             * if it is "no shut", the connected route will be effective for forwarding the traffic in the HW.
+             * During "no shut" operation in leaked VRF, looks like due to sequencing issues between CPS and netlink events,
+             * the connected route for leaked route is received first before receiving the leaked route del and
+             * then connected route add from RTM i.e while processing RTM downloaded leaked route del,
+             * the RIF is decremented for the connected route because netlink route add received first),
+             * now the following change has been introduced,
+             * if the NH present in route del msg is not matching the current NH present in the route, ignore route del msg. */
+            t_fib_nh_msg_info  nh_msg_info;
+            fib_form_nh_msg_info (p_dr->key.prefix.af_index, p_rtm_fib_cmd, &nh_msg_info, 0);
+            t_fib_nh *p_nh = FIB_GET_FIRST_NH_FROM_DR(p_dr, nh_holder);
+            if (p_nh && (p_nh->vrf_id != nh_msg_info.vrf_id) && FIB_IS_NH_ZERO(p_nh)) {
+                return STD_ERR_OK;
+            }
+        }
         /* during interface admin down or delete scenarios,
          * Kernel will send route delete notifications for IPv6,
          * but not for IPv4. So in such cases, for IPv6 route delete
@@ -1333,6 +1617,9 @@ int fib_proc_dr_nh_add (t_fib_dr *p_dr, void *p_rtm_fib_cmd, int *p_nh_info_size
         fib_form_nh_msg_info (af_index, p_rtm_fib_cmd, &nh_msg_info, i);
 
         nh_if_index = nh_msg_info.if_index;
+        if (nh_if_index == 0) {
+            continue;
+        }
 
         is_dup = false;
         /* Check if this NH is already created and also associated with IPv6 route,
@@ -1345,7 +1632,7 @@ int fib_proc_dr_nh_add (t_fib_dr *p_dr, void *p_rtm_fib_cmd, int *p_nh_info_size
 
         p_nh = fib_proc_nh_add (nh_msg_info.vrf_id, &nh_msg_info.ip_addr,
                                 nh_msg_info.if_index, FIB_NH_OWNER_TYPE_RTM, 0, p_dr->is_mgmt_route,
-                                nh_msg_info.vrf_id);
+                                nh_msg_info.vrf_id, nh_msg_info.flags);
 
         HAL_RT_LOG_DEBUG("HAL-RT-DR",
                          "vrf_id: %d, ip_addr: %s, nh_loop_idx %lu if_index: %d",
@@ -1462,6 +1749,10 @@ int fib_proc_dr_nh_del (t_fib_dr *p_dr, void *p_rtm_fib_cmd)
         fib_form_nh_msg_info (af_index, p_rtm_fib_cmd, &nh_msg_info, i);
 
         nh_if_index = nh_msg_info.if_index;
+
+        if (nh_if_index == 0) {
+            continue;
+        }
         p_nh = fib_get_nh (nh_msg_info.vrf_id, &nh_msg_info.ip_addr, nh_msg_info.if_index);
         if (p_nh == NULL) {
             continue;
@@ -1612,6 +1903,8 @@ int fib_form_nh_msg_info (uint8_t af_index, void *p_rtm_nh_key, t_fib_nh_msg_inf
          * implemented with Linux namespace or other vrf implementations
          */
         p_fib_nh_msg_info->vrf_id   = p_rtm_v4NHKey->nh_vrfid;
+        p_fib_nh_msg_info->is_nh_vrf_present = p_rtm_v4NHKey->is_nh_vrf_present;
+        p_fib_nh_msg_info->flags = p_rtm_v4NHKey->nh_list[nh_index].nh_flags;
     }
     else if (FIB_IS_AFINDEX_V6 (af_index))
     {
@@ -1630,6 +1923,8 @@ int fib_form_nh_msg_info (uint8_t af_index, void *p_rtm_nh_key, t_fib_nh_msg_inf
          * implemented with Linux namespace or other vrf implementations
          */
         p_fib_nh_msg_info->vrf_id   = p_rtm_v6NHKey->nh_vrfid;
+        p_fib_nh_msg_info->is_nh_vrf_present = p_rtm_v6NHKey->is_nh_vrf_present;
+        p_fib_nh_msg_info->flags = p_rtm_v6NHKey->nh_list[nh_index].nh_flags;
     }
 
     if (p_fib_nh_msg_info->if_index == 0)

@@ -42,6 +42,7 @@
 #include "dell-base-neighbor.h"
 #include "dell-interface.h"
 #include "vrf-mgmt.h"
+#include "os-routing-events.h"
 
 #include "event_log.h"
 #include "std_ip_utils.h"
@@ -103,6 +104,9 @@ void hal_rt_cps_obj_to_neigh(cps_api_object_t obj,t_fib_neighbour_entry *p_nbr_m
             case BASE_ROUTE_OBJ_NBR_IFINDEX:
                 p_nbr_msg->if_index = cps_api_object_attr_data_uint(it.attr);
                 break;
+            case OS_RE_BASE_ROUTE_OBJ_NBR_LOWER_LAYER_IF:
+                p_nbr_msg->parent_if = cps_api_object_attr_data_uint(it.attr);
+                break;
             case BASE_ROUTE_OBJ_NBR_IFNAME:
                 //ip_ifname = (char*) cps_api_object_attr_data_bin(it.attr);
                 break;
@@ -124,7 +128,7 @@ void hal_rt_cps_obj_to_neigh(cps_api_object_t obj,t_fib_neighbour_entry *p_nbr_m
 t_std_error fib_proc_nbr_download (t_fib_neighbour_entry *p_arp_info_msg)
 {
     uint32_t           vrf_id = 0;
-    uint32_t           sub_cmd = 0;
+    uint32_t           sub_cmd = 0, parent_if = 0;
     uint8_t            af_index = 0;
     bool               nbr_change = false;
     char               p_buf[HAL_RT_MAX_BUFSZ];
@@ -135,7 +139,7 @@ t_std_error fib_proc_nbr_download (t_fib_neighbour_entry *p_arp_info_msg)
     }
 
     HAL_RT_LOG_INFO("HAL-RT-ARP_OStoNAS", "cmd:%s(%d) vrf:%s(%lu), family:%d state:0x%lx ip_addr:%s, "
-                    "mac_addr:%s, out_if_index:%d mbr:%d expire:%lu status:0x%lx",
+                    "mac_addr:%s, out_if_index:%d mbr:%d expire:%lu status:0x%lx parent-if:%d",
                     ((p_arp_info_msg->msg_type == FIB_RT_MSG_ADD) ? "Nbr-Add" :
                      ((p_arp_info_msg->msg_type == FIB_RT_MSG_DEL) ?
                       "Nbr-Del" : "Unknown")),
@@ -144,7 +148,7 @@ t_std_error fib_proc_nbr_download (t_fib_neighbour_entry *p_arp_info_msg)
                     FIB_IP_ADDR_TO_STR (&p_arp_info_msg->nbr_addr),
                   hal_rt_mac_to_str (&p_arp_info_msg->nbr_hwaddr, p_buf, HAL_RT_MAX_BUFSZ),
                   p_arp_info_msg->if_index,
-                  p_arp_info_msg->mbr_if_index, p_arp_info_msg->expire, p_arp_info_msg->status);
+                  p_arp_info_msg->mbr_if_index, p_arp_info_msg->expire, p_arp_info_msg->status, p_arp_info_msg->parent_if);
 
     vrf_id = p_arp_info_msg->vrfid;
     if (!(FIB_IS_VRF_ID_VALID (vrf_id))) {
@@ -156,12 +160,92 @@ t_std_error fib_proc_nbr_download (t_fib_neighbour_entry *p_arp_info_msg)
     if (hal_rt_is_vrf_valid(vrf_id) == false) {
         return STD_ERR_OK;
     }
+    sub_cmd  = p_arp_info_msg->msg_type;
     bool is_mgmt_intf = false;
+
+    t_fib_dr *p_best_dr = fib_get_best_fit_dr(vrf_id, &p_arp_info_msg->nbr_addr);
+    while (p_best_dr && (!(STD_IP_IS_ADDR_ZERO(&p_best_dr->key.prefix)))) {
+        t_fib_nh_holder nh_holder;
+        t_fib_nh *p_nh = NULL;
+        if (((p_nh = FIB_GET_FIRST_NH_FROM_DR(p_best_dr, nh_holder)) != NULL) &&
+            (FIB_IS_NH_ZERO(p_nh))) {
+            if (p_best_dr->vrf_id != p_nh->vrf_id) {
+                /* If the nbr dependent route is reachable via different VRF, ignore the nbr update,
+                 * since we program the nbr based on parent VRF nbr updates. */
+                return STD_ERR_OK;
+            }
+        }
+        break;
+    }
+    /* If this Nbr is learnt on MAC-VLAN intf which does not have any parent intf,
+     * trigger the ARP resolution on the parent interface after getting the subnet from route based on this neighbor. */
+    if ((sub_cmd == FIB_RT_MSG_ADD) && (p_arp_info_msg->parent_if == p_arp_info_msg->if_index) &&
+        (hal_rt_is_intf_mac_vlan(p_arp_info_msg->vrfid, p_arp_info_msg->if_index))) {
+
+        /* Avoid the LLA neighbor handling since the host is expected to use global unicast address. */
+        if (STD_IP_IS_ADDR_LINK_LOCAL(&p_arp_info_msg->nbr_addr)) {
+            return STD_ERR_OK;
+        }
+        HAL_RT_LOG_INFO("HAL-RT-ARP_OStoNAS", "Anycast Nbr cmd:%s(%d) vrf:%s(%lu), family:%d state:0x%lx ip_addr:%s, "
+                        "mac_addr:%s, out_if_index:%d mbr:%d expire:%lu status:0x%lx",
+                        ((p_arp_info_msg->msg_type == FIB_RT_MSG_ADD) ? "Nbr-Add" :
+                         ((p_arp_info_msg->msg_type == FIB_RT_MSG_DEL) ?
+                          "Nbr-Del" : "Unknown")),
+                        p_arp_info_msg->msg_type, p_arp_info_msg->vrf_name, p_arp_info_msg->vrfid,
+                        p_arp_info_msg->family, p_arp_info_msg->status,
+                        FIB_IP_ADDR_TO_STR (&p_arp_info_msg->nbr_addr),
+                        hal_rt_mac_to_str (&p_arp_info_msg->nbr_hwaddr, p_buf, HAL_RT_MAX_BUFSZ),
+                        p_arp_info_msg->if_index,
+                        p_arp_info_msg->mbr_if_index, p_arp_info_msg->expire, p_arp_info_msg->status);
+
+        bool is_route_found = false;
+        t_fib_dr *p_best_dr = fib_get_best_fit_dr(vrf_id, &p_arp_info_msg->nbr_addr);
+        while (p_best_dr && (!(STD_IP_IS_ADDR_ZERO(&p_best_dr->key.prefix)))) {
+            t_fib_nh_holder nh_holder;
+            t_fib_nh *p_nh = NULL;
+            if ((p_best_dr->rt_type != RT_CACHE) && ((p_nh = FIB_GET_FIRST_NH_FROM_DR(p_best_dr, nh_holder)) != NULL) &&
+                (FIB_IS_NH_ZERO(p_nh)) && (p_nh->key.if_index)) {
+
+                parent_if = p_nh->key.if_index;
+                p_nh = fib_get_nh (p_arp_info_msg->vrfid, &p_arp_info_msg->nbr_addr,
+                                   p_nh->key.if_index);
+                /* 3 cases are handled below, when the nbr is learnt on the anycast interface,
+                 * we should trigger the resolution on the parent intf as well.
+                 * 1. The nbr does not exist on the parent intf, resolve the nbr on the parent intf.
+                 * 2. The nbr exists on the parent intf but in unresolved state, resolve the nbr.
+                 * 3. The nbr exists but with different MAC, resolve the nbr to correct the MAC. */
+                is_route_found = true;
+                p_arp_info_msg->parent_if = parent_if;
+                nas_route_nbr_entry_to_nbr_cps_object(p_arp_info_msg, cps_api_oper_CREATE,
+                                                      NAS_RT_NBR_FLAGS_UPDATE_PARENT_IF);
+                if ((p_nh == NULL) ||
+                    ((p_nh->p_arp_info) &&
+                     ((p_nh->p_arp_info->state == FIB_ARP_UNRESOLVED) ||
+                      ((p_nh->p_arp_info->state == FIB_ARP_RESOLVED) &&
+                       (memcmp(&p_nh->p_arp_info->mac_addr, &p_arp_info_msg->nbr_hwaddr,
+                               sizeof(hal_mac_addr_t))))))) {
+                    /* Trigger the proactive resolution to learn
+                     * the neigbor on the parent interface. */
+                    p_arp_info_msg->if_index = parent_if;
+                    nas_route_nbr_entry_to_nbr_cps_object(p_arp_info_msg, cps_api_oper_CREATE,
+                                                          NAS_RT_NBR_FLAGS_TRIGGER_RESOLVE);
+                }
+                break;
+            }
+            p_best_dr = fib_get_next_best_fit_dr(vrf_id, &p_best_dr->key.prefix, p_best_dr->prefix_len);
+        }
+        if (is_route_found == false) {
+            p_arp_info_msg->parent_if = 0;
+            nas_route_nbr_entry_to_nbr_cps_object(p_arp_info_msg, cps_api_oper_CREATE,
+                                                  NAS_RT_NBR_FLAGS_UPDATE_PARENT_IF);
+        }
+        /* Since this is not valid a valid neighbor, no further handling is required. */
+        return STD_ERR_OK;
+    }
     if(hal_rt_validate_intf(p_arp_info_msg->vrfid, p_arp_info_msg->if_index, &is_mgmt_intf) != STD_ERR_OK) {
         return STD_ERR_OK;
     }
 
-    sub_cmd  = p_arp_info_msg->msg_type;
     af_index = HAL_RT_ADDR_FAM_TO_AFINDEX(p_arp_info_msg->family);
 
      p_arp_info_msg->nbr_addr.af_index = af_index;
@@ -323,7 +407,7 @@ t_std_error fib_proc_arp_add (uint8_t af_index, void *p_arp_info, bool is_mgmt_i
 
     p_nh = fib_proc_nh_add (fib_arp_msg_info.vrf_id, &fib_arp_msg_info.ip_addr,
                             fib_arp_msg_info.if_index, FIB_NH_OWNER_TYPE_ARP, 0, is_mgmt_intf,
-                            fib_arp_msg_info.vrf_id);
+                            fib_arp_msg_info.vrf_id, 0);
     if (p_nh == NULL) {
         HAL_RT_LOG_ERR("HAL-RT-ARP", "%s (): NH addition failed. "
                     "vrf_id: %d, ip_addr: %s, if_index: 0x%x", __FUNCTION__,

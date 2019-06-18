@@ -565,8 +565,23 @@ static cps_api_return_code_t nas_route_cps_peer_routing_get_func (void *ctx,
         is_specific_vrf_get = true;
     }
 
+    const char     *p_if_name = cps_api_object_get_data(filt, BASE_ROUTE_PEER_ROUTING_CONFIG_IFNAME);
+    const char     *p_mac_addr = cps_api_object_get_data(filt, BASE_ROUTE_PEER_ROUTING_CONFIG_PEER_MAC_ADDR);
+    char            if_name[HAL_IF_NAME_SZ];
+    hal_mac_addr_t  mac_addr;
+
+    if (p_if_name) {
+        memset(if_name, 0, sizeof (if_name));
+        memcpy(if_name, p_if_name, strlen(p_if_name)+1);
+    }
+
+    if (p_mac_addr)
+        std_string_to_mac(&mac_addr, (const char *)p_mac_addr, sizeof(mac_addr));
+
     nas_l3_lock();
-    if(nas_route_get_all_peer_routing_config(is_specific_vrf_get, vrf_id, param->list) != STD_ERR_OK){
+    if(nas_route_get_all_peer_routing_config(is_specific_vrf_get, vrf_id,
+                ((p_if_name) ? if_name:NULL),
+                ((p_mac_addr)? &mac_addr:NULL), param->list) != STD_ERR_OK){
         rc = cps_api_ret_code_ERR;
     }
     nas_l3_unlock();
@@ -1529,6 +1544,150 @@ static t_std_error nas_route_object_entry_init(cps_api_operation_handle_t nas_ro
     return STD_ERR_OK;
 }
 
+
+/* route global container (resilient hash) */
+static cps_api_return_code_t nas_route_cps_route_globals_get_func(void *ctx,
+                                                                  cps_api_get_params_t *param,
+                                                                  size_t ix) {
+    cps_api_return_code_t rc = cps_api_ret_code_OK;
+    cps_api_object_t      obj = cps_api_object_create();
+    t_fib_gbl_info       *gbl_info;
+    bool                  hash_enabled;
+
+    // retrieve object
+    cps_api_object_t filt = cps_api_object_list_get(param->filters, ix);
+    if (filt == NULL) {
+        cps_api_object_delete(obj);
+        HAL_RT_LOG_ERR("NAS-RT-CPS", "global object is not present");
+        return cps_api_ret_code_ERR;
+    }
+
+    nas_l3_lock();
+    gbl_info = hal_rt_access_fib_gbl_info();
+    hash_enabled = gbl_info->resilient_hash;
+    nas_l3_unlock();
+
+    cps_api_object_attr_add_u32(obj, BASE_ROUTE_ROUTING_GLOBALS_RESILIENT_HASH_ENABLE, hash_enabled);
+    if (!cps_api_object_list_append(param->list, obj)) {
+        cps_api_object_delete(obj);
+        HAL_RT_LOG_ERR("HAL-RT-CPS", "Failed to append object to object list");
+        return cps_api_ret_code_ERR;
+    }
+
+    return rc;
+}
+
+static cps_api_return_code_t nas_route_cps_route_globals_set_func(void *ctx,
+                                                                 cps_api_transaction_params_t *param,
+                                                                 size_t ix) {
+    cps_api_return_code_t rc = cps_api_ret_code_OK;
+    cps_api_object_t      obj;
+    t_fib_gbl_info        *gbl_info;
+    bool                  current_setting;
+    cps_api_object_it_t   it;
+    uint32_t              new_setting = 0;
+
+    if (param == NULL) {
+        HAL_RT_LOG_ERR("HAL-RT-CPS", "global-config set with no parameters");
+        return cps_api_ret_code_ERR;
+    }
+
+    obj = cps_api_object_list_get(param->change_list, ix);
+    if (obj == NULL) {
+        HAL_RT_LOG_ERR("HAL-RT-CPS", "global-config missing parameters");
+        return cps_api_ret_code_ERR;
+    }
+
+    /*  switch across create, set, delete */
+    cps_api_operation_types_t op = cps_api_object_type_operation(cps_api_object_key(obj));
+    switch (op) {
+        case cps_api_oper_CREATE:
+        case cps_api_oper_SET:
+            break;
+        case cps_api_oper_DELETE:
+            break;
+        default:
+            break;
+    }
+
+    switch (cps_api_key_get_subcat(cps_api_object_key (obj))) {
+        case BASE_ROUTE_ROUTING_GLOBALS:
+            break;
+        default:
+            return cps_api_ret_code_ERR;
+    }
+
+    cps_api_object_it_begin(obj,&it);
+
+    for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it) ) {
+        cps_api_attr_id_t id = cps_api_object_attr_id(it.attr);
+
+        switch (id) {
+            case BASE_ROUTE_ROUTING_GLOBALS_RESILIENT_HASH_ENABLE:
+                new_setting = cps_api_object_attr_data_u32(it.attr);
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    nas_l3_lock();
+    gbl_info = hal_rt_access_fib_gbl_info();
+    current_setting = gbl_info->resilient_hash;
+
+    if (current_setting == new_setting) {
+        HAL_RT_LOG_DEBUG("HAL-RT-CPS", "resilient hash, no change (%d)", new_setting);
+    } else {
+        gbl_info->resilient_hash = new_setting;
+
+        /* update all existing routes */
+        hal_rt_mpath_update_rh_all();
+    }
+
+    nas_l3_unlock();
+    return rc;
+}
+
+static cps_api_return_code_t nas_route_cps_route_globals_rollback_func(void * ctx,
+                              cps_api_transaction_params_t * param, size_t ix){
+
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS", "Routing Globals rollback function");
+    return cps_api_ret_code_OK;
+}
+
+/*
+ * CPS registration for routing globals container
+ */
+static t_std_error nas_route_object_route_globals_init(cps_api_operation_handle_t nas_route_cps_handle) {
+
+    cps_api_registration_functions_t f;
+    char buff[CPS_API_KEY_STR_MAX];
+
+    memset(&f,0,sizeof(f));
+
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS", "Registering for %s",
+            cps_api_key_print(&f.key,buff,sizeof(buff)-1));
+
+    f.handle             = nas_route_cps_handle;
+    f._read_function     = nas_route_cps_route_globals_get_func;
+    f._write_function    = nas_route_cps_route_globals_set_func;
+    f._rollback_function = nas_route_cps_route_globals_rollback_func;
+
+   if (!cps_api_key_from_attr_with_qual(&f.key, BASE_ROUTE_ROUTING_GLOBALS_OBJ, cps_api_qualifier_TARGET)) {
+        HAL_RT_LOG_ERR("NAS-RT-CPS","Could not translate %d to key %s",
+            (int)(BASE_ROUTE_ROUTING_GLOBALS_OBJ),
+            cps_api_key_print(&f.key, buff, sizeof(buff)-1));
+        return STD_ERR(ROUTE, FAIL, 0);
+    }
+
+    if (cps_api_register(&f) != cps_api_ret_code_OK) {
+        return STD_ERR(ROUTE,FAIL,0);
+    }
+
+    return STD_ERR_OK;
+}
+
 static t_std_error nas_route_object_route_init(cps_api_operation_handle_t nas_route_cps_handle ) {
 
     cps_api_registration_functions_t f;
@@ -1951,6 +2110,11 @@ t_std_error nas_routing_cps_init(cps_api_operation_handle_t nas_route_cps_handle
     if((ret = nas_route_object_neigh_flush_init(nas_route_cps_handle)) != STD_ERR_OK){
         return ret;
     }
+
+    if((ret = nas_route_object_route_globals_init(nas_route_cps_handle)) != STD_ERR_OK){
+        return ret;
+    }
+
     return ret;
 }
 
@@ -2000,6 +2164,7 @@ cps_api_return_code_t nas_route_process_cps_peer_routing(cps_api_transaction_par
     cps_api_return_code_t rc = cps_api_ret_code_OK;
     cps_api_object_attr_t if_name_attr;
     cps_api_object_attr_t mac_addr_attr;
+    cps_api_object_attr_t ingress_only_attr;
     nas_rt_peer_mac_config_t peer_routing_config;
     hal_mac_addr_t mac_addr;
     void *addr = NULL;
@@ -2058,9 +2223,17 @@ cps_api_return_code_t nas_route_process_cps_peer_routing(cps_api_transaction_par
     addr = cps_api_object_attr_data_bin(mac_addr_attr);
     std_string_to_mac(&peer_routing_config.mac, (const char *)addr, sizeof(mac_addr));
     peer_routing_config.vrf_id = vrf_id;
-    HAL_RT_LOG_DEBUG("NAS-RT-CPS-SET", "Peer-VRF:%d if-name:%s MAC:%s status:%d",
-                     peer_routing_config.vrf_id, peer_routing_config.if_name, hal_rt_mac_to_str (&peer_routing_config.mac,
-                                                                                                 p_buf, HAL_RT_MAX_BUFSZ), status);
+
+    ingress_only_attr = cps_api_object_attr_get(obj, BASE_ROUTE_PEER_ROUTING_CONFIG_INGRESS_ONLY);
+    peer_routing_config.ingress_only = false;
+    if (ingress_only_attr)
+        peer_routing_config.ingress_only = (bool) cps_api_object_attr_data_u32(ingress_only_attr);
+
+    HAL_RT_LOG_DEBUG("NAS-RT-CPS-SET", "Peer-VRF:%d if-name:%s MAC:%s status:%d Ingress-only:%d",
+                     peer_routing_config.vrf_id, peer_routing_config.if_name,
+                     hal_rt_mac_to_str (&peer_routing_config.mac, p_buf, HAL_RT_MAX_BUFSZ),
+                     status, peer_routing_config.ingress_only);
+
     if (hal_rt_process_peer_routing_config(vrf_id, &peer_routing_config, status) != STD_ERR_OK) {
         HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "hal_rt_process_peer_routing_config failed");
         return cps_api_ret_code_ERR;

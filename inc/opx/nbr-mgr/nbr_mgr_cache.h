@@ -126,6 +126,7 @@ typedef struct {
     uint32_t oper_down_mac_trig_instant_refresh;
     uint32_t refresh_for_more_flushes;
     uint32_t failed_handle_skip_oper_down;
+    uint32_t set_state_cnt;
 }nbr_mgr_nbr_stats;
 
 typedef struct {
@@ -142,9 +143,11 @@ public:
     bool update_mac_addr(hal_mac_addr_t& src) { return true; }
     bool update_mac_addr(std::string& src) { return true; }
     void update_mac_if(hal_ifindex_t port) noexcept;
+    void update_mac_remote_ip(const hal_ip_addr_t& ip) noexcept;
     const std::string& get_mac_addr() const { return m_mac_addr; }
     /* The member intf could be physical or port-channel in the VLAN */
     hal_ifindex_t get_mac_phy_if() noexcept { return m_mbr_index; }
+    const hal_ip_addr_t& get_mac_remote_ip() noexcept { return m_ip_addr; }
     hal_ifindex_t get_mac_intf() noexcept { return m_if_index; }
     FDB_TYPE get_fdb_type() noexcept { return m_fdb_type; }
 
@@ -196,6 +199,14 @@ public:
         }
         return m_fdb_del_cnt;
     }
+
+    void fdb_set_1d_remote_mac_status(bool val) noexcept {
+        m_is_1d_remote_mac = val;
+    }
+
+    uint32_t fdb_get_1d_remote_mac_status() noexcept {
+        return m_is_1d_remote_mac;
+    }
     void display() const;
 
     void for_each_nbr_list(std::function <void (nbr_data const *, std::string)> fn) {
@@ -225,6 +236,8 @@ private:
     uint32_t        m_fdb_add_cnt = 0;
     uint32_t        m_fdb_add_no_mbr_cnt = 0;
     uint32_t        m_fdb_del_cnt = 0;
+    bool            m_is_1d_remote_mac = false;
+    hal_ip_addr_t   m_ip_addr; /* Store the IP for VXLAN remote MAC case. */
 
     //List of associated neighbor entries. Any change in mac info can trigger a walk of this list
     nbr_data_list   nbr_list;
@@ -263,6 +276,10 @@ public:
 
     uint16_t get_family() const {
         return m_family;
+    }
+
+    void set_flags(uint32_t flags) {
+        m_flags |= flags;
     }
 
     uint32_t get_flags() const {
@@ -326,13 +343,14 @@ public:
     bool trigger_delay_resolve() const;
     bool trigger_delay_refresh() const;
     bool trigger_refresh_for_mac_learn() const;
+    bool trigger_set_nbr_state(uint32_t state) const;
     bool publish_entry(nbr_mgr_op_t op, const nbr_mgr_nbr_entry_t&) const;
     void populate_nbr_entry(nbr_mgr_nbr_entry_t& entry) const;
 
     void display() const;
     bool process_nbr_data(nbr_mgr_nbr_entry_t& entry);
 
-    bool handle_fdb_change(nbr_mgr_evt_type_t, unsigned long status) const;
+    bool handle_fdb_change(nbr_mgr_evt_type_t, unsigned long status, bool is_mac_moved) const;
     bool handle_if_state_change(nbr_mgr_intf_entry_t&);
     bool handle_mac_change(nbr_mgr_nbr_entry_t& entry);
 

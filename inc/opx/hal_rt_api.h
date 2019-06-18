@@ -103,4 +103,7 @@ dn_hal_route_err hal_fib_next_hop_add(t_fib_nh *p_nh);
 
 t_std_error _hal_rt_virtual_routing_ip_cfg(nas_rt_virtual_routing_ip_config_t *p_cfg, bool status);
 
+/* scan and update resilient hash attribute for each group */
+void hal_rt_mpath_update_rh_all(void);
+
 #endif /* __HAL_RT_API_H__ */

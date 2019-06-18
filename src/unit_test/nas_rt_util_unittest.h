@@ -32,13 +32,15 @@
 #include "cps_api_object_key.h"
 
 cps_api_return_code_t nas_ut_rt_cfg (const char *rt_vrf_name, bool is_add, const char *ip_addr, uint32_t prefix_len,
-                                     uint8_t af, const char *nh_vrf_name, const char *nh_addr, const char *if_name);
+                                     uint8_t af, const char *nh_vrf_name, const char *nh_addr, const char *if_name, bool is_onlink_nh=false,
+                                     bool is_replace=false);
 cps_api_return_code_t nas_ut_neigh_cfg (bool is_add, const char *ip_addr, uint8_t af, const char *if_name, hal_mac_addr_t *hw_addr);
 void nas_route_dump_arp_object_content(cps_api_object_t obj);
 cps_api_return_code_t nas_ut_validate_neigh_cfg (const char *vrf_name, uint32_t af, const char *ip_addr,
                                                  uint32_t state, bool should_exist_in_npu, const char *nh_vrf_name);
 cps_api_return_code_t nas_ut_validate_rt_cfg (const char *rt_vrf_name, uint32_t af, const char *ip_addr, uint32_t prefix_len,
-                                              const char *nh_vrf_name, const char *nh_addr, const char *if_name, bool should_exist_in_npu);
+                                              const char *nh_vrf_name, const char *nh_addr, const char *if_name, bool should_exist_in_npu,
+                                              bool is_onlink_nh=false);
 cps_api_return_code_t nas_ut_validate_rt_ecmp_cfg (const char *rt_vrf_name, uint32_t af, const char *ip_addr, uint32_t prefix_len,
                                               const char *nh_vrf_name, const char *nh_addr, const char *if_name, bool should_exist_in_npu,
                                               uint32_t rt_nh_cnt);

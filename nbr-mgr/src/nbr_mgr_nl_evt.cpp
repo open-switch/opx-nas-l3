@@ -85,7 +85,7 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
     bool is_oper_up = false;
     bool is_op_del = false;
     bool is_bridge = false;
-    uint32_t type = 0, vlan_id = 0;
+    uint32_t type = 0, vlan_id = 0, mbr_if_index = 0;
 
     NBR_MGR_LOG_DEBUG("CPS-INTF","Interface admin status change notification");
 
@@ -144,9 +144,11 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
         /* Allow only the L2 (bridge) and L3 ports for L3 operations */
         if ((type != BASE_CMN_INTERFACE_TYPE_BRIDGE) && (type != BASE_CMN_INTERFACE_TYPE_L3_PORT) &&
             (type != BASE_CMN_INTERFACE_TYPE_LAG) && (type != BASE_CMN_INTERFACE_TYPE_L2_PORT) &&
-            (type != BASE_CMN_INTERFACE_TYPE_MACVLAN) && (type != BASE_CMN_INTERFACE_TYPE_MANAGEMENT)) {
+            (type != BASE_CMN_INTERFACE_TYPE_MACVLAN) && (type != BASE_CMN_INTERFACE_TYPE_MANAGEMENT) &&
+            (type != BASE_CMN_INTERFACE_TYPE_VXLAN)) {
             return false;
         }
+        p_intf->type = NBR_MGR_INTF_TYPE_PHY;
         /* Incase of LAG/VLAN member delete, ignore it,
          * allow only LAG/VLAN intf admin down/up and delete */
         if (type == BASE_CMN_INTERFACE_TYPE_LAG) {
@@ -159,6 +161,7 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
                                  ((char*)cps_api_object_attr_data_bin(intf_member_port)));
                 return false;
             }
+            p_intf->type = NBR_MGR_INTF_TYPE_LAG;
         }
         if (type == BASE_CMN_INTERFACE_TYPE_L2_PORT) {
             NBR_MGR_LOG_INFO("CPS-INTF","VLAN member Intf:%d is_del:%d admin:%s oper:%s type:%d", index, is_op_del,
@@ -170,20 +173,31 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
         }
         if (type == BASE_CMN_INTERFACE_TYPE_BRIDGE) {
             is_bridge = true;
+            p_intf->type = NBR_MGR_INTF_TYPE_1Q_BRIDGE;
         } else if (type == BASE_CMN_INTERFACE_TYPE_L2_PORT) {
             /* Make sure only the VLAN flag is set since this event handled
              * only for VLAN-id update not for admin/oper status update for VLAN interface. */
             p_intf->flags = 0;
+            p_intf->type = NBR_MGR_INTF_TYPE_1Q_BRIDGE;
             cps_api_object_attr_t vlan_id_attr =
                 cps_api_object_attr_get(obj, BASE_IF_VLAN_IF_INTERFACES_INTERFACE_ID);
             if (vlan_id_attr) {
                 vlan_id = cps_api_object_attr_data_u32(vlan_id_attr);
                 p_intf->flags |= NBR_MGR_INTF_VLAN_MSG;
             }
+            cps_api_object_attr_t if_mbr_attr =
+                cps_api_object_attr_get(obj, BASE_IF_LINUX_IF_INTERFACES_INTERFACE_MBR_IFINDEX);
+            if (if_mbr_attr) {
+                mbr_if_index = cps_api_object_attr_data_u32(if_mbr_attr);
+            }
+        } else if (type == BASE_CMN_INTERFACE_TYPE_MACVLAN) {
+            p_intf->type = NBR_MGR_INTF_TYPE_MACVLAN;
+        } else if (type == BASE_CMN_INTERFACE_TYPE_VXLAN) {
+            p_intf->type = NBR_MGR_INTF_TYPE_VXLAN;
         }
     }
     /* If add/update case, if none of the flags set, return false */
-    if ((is_op_del == false) && (p_intf->flags == 0)) {
+    if ((is_op_del == false) && (p_intf->flags == 0) && (mbr_if_index == 0)) {
         return false;
     }
     p_intf->if_index = index;
@@ -192,13 +206,14 @@ bool nbr_mgr_cps_obj_to_intf(cps_api_object_t obj, nbr_mgr_intf_entry_t *p_intf)
     p_intf->is_bridge = is_bridge;
     p_intf->vlan_id = vlan_id;
     p_intf->is_op_del = is_op_del;
+    p_intf->mbr_if_index = mbr_if_index;
 
-    NBR_MGR_LOG_INFO("CPS-INTF","msg:%s VRF-id:%lu Intf:%d(%s) flags:0x%x status admin:%s oper:%s type:%d "
-                     "bridge:%d is_op_del:%d vlan-id:%d", nbr_mgr_nl_intf_msg_to_str(p_intf->flags),
-                     p_intf->vrfid, index, (if_name ? p_intf->if_name : ""), p_intf->flags,
+    NBR_MGR_LOG_INFO("CPS-INTF","msg:%s VRF-id:%lu Intf:%d(%s) type:%d flags:0x%x status admin:%s oper:%s type:%d "
+                     "bridge:%d is_op_del:%d vlan-id:%d mbr-intf:%d", nbr_mgr_nl_intf_msg_to_str(p_intf->flags),
+                     p_intf->vrfid, index, (if_name ? p_intf->if_name : ""), p_intf->type, p_intf->flags,
                      ((p_intf->flags & NBR_MGR_INTF_ADMIN_MSG) ? (is_admin_up ? "Up" : "Down") : "NA"),
                      ((p_intf->flags & NBR_MGR_INTF_OPER_MSG) ? (is_oper_up ? "Up" : "Down") : "NA"),
-                     type, is_bridge, is_op_del, vlan_id);
+                     type, is_bridge, is_op_del, vlan_id, mbr_if_index);
     return true;
 }
 
@@ -223,6 +238,7 @@ bool nbr_mgr_cps_obj_to_neigh(cps_api_object_t obj, nbr_mgr_nbr_entry_t *n) {
     cps_api_object_it_t it;
     cps_api_attr_id_t id = 0;
     cps_api_object_it_begin(obj,&it);
+    bool is_fdb_remote_ip_present = false;
 
     for ( ; cps_api_object_it_valid(&it) ; cps_api_object_it_next(&it) ) {
         id = cps_api_object_attr_id(it.attr);
@@ -243,6 +259,7 @@ bool nbr_mgr_cps_obj_to_neigh(cps_api_object_t obj, nbr_mgr_nbr_entry_t *n) {
                 n->nbr_addr.af_index = n->family;
                 break;
             case BASE_ROUTE_OBJ_NBR_ADDRESS:
+                is_fdb_remote_ip_present = true;
                 memcpy(&n->nbr_addr.u, cps_api_object_attr_data_bin(it.attr),
                        cps_api_object_attr_len (it.attr));
                 break;
@@ -264,10 +281,14 @@ bool nbr_mgr_cps_obj_to_neigh(cps_api_object_t obj, nbr_mgr_nbr_entry_t *n) {
                 break;
         }
     }
-    if (((n->family == HAL_INET4_FAMILY) || (n->family == HAL_INET6_FAMILY)) &&
-        (n->status == NBR_MGR_NUD_STALE)) {
-        n->auto_refresh_on_stale_enabled = nbr_mgr_get_auto_refresh_status((char*)n->vrf_name,
-                                                                           n->family);
+    if ((n->family == HAL_INET4_FAMILY) || (n->family == HAL_INET6_FAMILY)) {
+        if (n->status == NBR_MGR_NUD_STALE) {
+            n->auto_refresh_on_stale_enabled = nbr_mgr_get_auto_refresh_status((char*)n->vrf_name,
+                                                                               n->family);
+        }
+    } else if (is_fdb_remote_ip_present) {
+        /* Set the remote IP family */
+        n->nbr_addr.af_index = HAL_INET4_FAMILY;
     }
     return true;
 }

@@ -29,6 +29,7 @@
 #include "event_log.h"
 #include "std_mutex_lock.h"
 #include "std_utils.h"
+#include "nas_switch.h"
 
 #include "cps_class_map.h"
 #include "cps_api_object_key.h"
@@ -37,9 +38,9 @@
 #include "hal_rt_util.h"
 #include "limits.h"
 #include <stdio.h>
-#include <stdint.h>
 #include "dell-base-neighbor.h"
 #include "dell-base-acl.h"
+#include "os-routing-events.h"
 
 BASE_ROUTE_OBJ_t nas_route_check_route_key_attr(cps_api_object_t obj) {
 
@@ -135,8 +136,18 @@ static inline bool nas_route_validate_route_attr(cps_api_object_t obj, bool del)
           cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_ENTRY_SPECIAL_NEXT_HOP);
 
     if (spl_nexthop_option) {
-        /* for special next hop no other additional params required */
-        return true;
+        uint32_t spl_nh_type = cps_api_object_attr_data_u32(spl_nexthop_option);
+        switch(spl_nh_type) {
+            case BASE_ROUTE_SPECIAL_NEXT_HOP_BLACKHOLE:
+            case BASE_ROUTE_SPECIAL_NEXT_HOP_UNREACHABLE:
+            case BASE_ROUTE_SPECIAL_NEXT_HOP_PROHIBIT:
+            case BASE_ROUTE_SPECIAL_NEXT_HOP_RECEIVE:
+                /* for special next hop no other additional params required */
+                return true;
+            default:
+                HAL_RT_LOG_ERR("NAS-RT-CPS-SET", "Invalid special next-hop value");
+                return false;
+        }
     }
 
     ids[2] = BASE_ROUTE_OBJ_ENTRY_NH_LIST_IFNAME;
@@ -230,6 +241,7 @@ cps_api_return_code_t  nas_route_process_cps_route(cps_api_transaction_params_t 
 
     cps_api_object_t obj = cps_api_object_list_get(param->change_list,ix);
     cps_api_return_code_t rc = cps_api_ret_code_OK;
+    t_fib_msg *p_msg = NULL;
 
     if (obj == NULL) {
         HAL_RT_LOG_ERR("NAS-RT-CPS","Route object is not present");
@@ -289,8 +301,87 @@ cps_api_return_code_t  nas_route_process_cps_route(cps_api_transaction_params_t 
             rc = cps_api_ret_code_ERR;
         }
     }
+
+    /* Program the HW here when there is no OS route updates for HW programming. */
+    if ((nas_switch_get_os_event_flag() == false) && (rc == cps_api_ret_code_OK)) {
+        if (op == cps_api_oper_ACTION) {
+            if (hal_rt_cps_obj_to_route_nexthop(obj, &p_msg)) {
+                nas_rt_process_msg(p_msg);
+            } else {
+                rc = cps_api_ret_code_ERR;
+            }
+        } else {
+            if (hal_rt_cps_obj_to_route(obj, &p_msg, true)) {
+                nas_rt_process_msg(p_msg);
+            } else {
+                rc = cps_api_ret_code_ERR;
+            }
+        }
+    }
     return rc;
 }
+
+/* This function handles the flag setting on nbr entry for age-out enable/disable cases. */
+static t_std_error nas_route_update_flag_config(cps_api_object_t obj, cps_api_operation_types_t op) {
+    cps_api_object_attr_t flags_attr = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_NBR_FLAGS);
+    if (flags_attr == NULL) {
+        return STD_ERR_OK;
+    }
+    t_fib_neighbour_entry entry;
+
+    memset(&entry, 0, sizeof(t_fib_neighbour_entry));
+    const char *vrf_name      = cps_api_object_get_data(obj,BASE_ROUTE_OBJ_VRF_NAME);
+    if (vrf_name) {
+        if (hal_rt_get_vrf_id(vrf_name, (hal_vrf_id_t *)&entry.vrfid) == false) {
+            HAL_RT_LOG_ERR("NEIGH-FLAG-UPD", "VRF name:%s to id conversion failed", vrf_name);
+            return STD_ERR(ROUTE,FAIL,0);
+        }
+    }
+    cps_api_object_attr_t ip  = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_NBR_ADDRESS);
+    cps_api_object_attr_t af  = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_NBR_AF);
+    cps_api_object_attr_t if_index = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_NBR_IFINDEX);
+    cps_api_object_attr_t if_name = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_NBR_IFNAME);
+    if ((ip == NULL) || (af == NULL) || ((if_index == NULL) && (if_name == NULL))) {
+        HAL_RT_LOG_ERR("NEIGH-FLAG-UPD", "Mandatory attributes are missing!");
+        return STD_ERR(ROUTE,FAIL,0);
+    }
+    memcpy(&entry.nbr_addr.u, cps_api_object_attr_data_bin(ip),
+           cps_api_object_attr_len (ip));
+    entry.family = cps_api_object_attr_data_u32(af);
+
+    if (if_index) {
+        entry.if_index = cps_api_object_attr_data_u32(if_index);
+    } else {
+        interface_ctrl_t intf_ctrl;
+        t_std_error rc = STD_ERR_OK;
+
+        memset(&intf_ctrl, 0, sizeof(interface_ctrl_t));
+        intf_ctrl.q_type = HAL_INTF_INFO_FROM_IF_NAME;
+        safestrncpy(intf_ctrl.if_name, (const char *)cps_api_object_attr_data_bin(if_name),
+                    cps_api_object_attr_len(if_name));
+
+        if((rc= dn_hal_get_interface_info(&intf_ctrl)) != STD_ERR_OK) {
+            HAL_RT_LOG_ERR("NEIGH-FLAG-UPD",
+                           "Interface %s to if_index returned error %d", intf_ctrl.if_name, rc);
+            return STD_ERR(ROUTE,FAIL,0);
+        }
+
+        entry.if_index = intf_ctrl.if_index;
+    }
+
+    uint32_t flags = cps_api_object_attr_data_u32(flags_attr);
+    /* If the Nbr dependent MAC is learnt via VXLAN network port, dont refresh the Nbr upon age-out. */
+    if (flags == BASE_ROUTE_NBR_FLAGS_AGE_OUT_1D_BRIDGE_REMOTE_MAC_DISABLE) {
+        nas_route_nbr_entry_to_nbr_cps_object(&entry, op,
+                                              NAS_RT_NBR_FLAGS_DISABLE_AGE_OUT_1D_BRIDGE_REMOTE_MAC);
+    } else if (flags == BASE_ROUTE_NBR_FLAGS_AGE_OUT_ENABLE) {
+        /* Enable the age-out back again after the above setting. */
+        nas_route_nbr_entry_to_nbr_cps_object(&entry, op,
+                                              NAS_RT_NBR_FLAGS_ENABLE_AGE_OUT);
+    }
+    return STD_ERR_OK;
+}
+
 cps_api_return_code_t nas_route_process_cps_nbr(cps_api_transaction_params_t * param, size_t ix) {
 
     cps_api_object_t obj = cps_api_object_list_get(param->change_list,ix);
@@ -348,7 +439,9 @@ cps_api_return_code_t nas_route_process_cps_nbr(cps_api_transaction_params_t * p
             rc = cps_api_ret_code_ERR;
         }
     }
-
+    if (rc == cps_api_ret_code_OK) {
+        nas_route_update_flag_config(obj, op);
+    }
     return rc;
 }
 
@@ -689,6 +782,13 @@ static cps_api_object_t nas_route_info_to_cps_object(cps_api_operation_types_t o
         cps_api_object_e_add(obj, parent_list, 3,
                              cps_api_object_ATTR_T_U32, &weight, sizeof(weight));
 
+        if (p_nh->flags == BASE_ROUTE_NH_FLAGS_ONLINK) {
+            uint32_t nh_flags = BASE_ROUTE_NH_FLAGS_ONLINK;
+            parent_list[2] = BASE_ROUTE_OBJ_ENTRY_NH_LIST_FLAGS;
+            cps_api_object_e_add(obj, parent_list, 3,
+                                 cps_api_object_ATTR_T_U32, &nh_flags, sizeof(nh_flags));
+        }
+
         parent_list[2] = BASE_ROUTE_OBJ_ENTRY_NH_LIST_RESOLVED;
         if (p_nh->p_arp_info != NULL)
         {
@@ -848,10 +948,12 @@ t_std_error nas_route_get_all_route_info(cps_api_object_list_t list, uint32_t vr
 
     t_fib_dr *p_dr = NULL;
 
-    if ((is_specific_vrf_get == false) && (is_specific_prefix_get == false)) {
-        return (nas_route_get_all_vrf_routes_info(list, vrf_id, af, false));
-    } else if ((is_specific_vrf_get) && (is_specific_prefix_get == false)) {
-        return (nas_route_get_all_vrf_routes_info(list, vrf_id, af, true));
+    if (is_specific_prefix_get == false) {
+        if (is_specific_vrf_get == false) {
+            return (nas_route_get_all_vrf_routes_info(list, vrf_id, af, false));
+        } else {
+            return (nas_route_get_all_vrf_routes_info(list, vrf_id, af, true));
+        }
     }
 
     if (af >= FIB_MAX_AFINDEX)
@@ -860,10 +962,8 @@ t_std_error nas_route_get_all_route_info(cps_api_object_list_t list, uint32_t vr
         return STD_ERR(ROUTE,FAIL,0);
     }
 
-    if (is_specific_prefix_get) {
-        p_dr = fib_get_dr (vrf_id, p_prefix, pref_len);
-    }
-    while (p_dr != NULL){
+    p_dr = fib_get_dr (vrf_id, p_prefix, pref_len);
+    if (p_dr != NULL) {
         cps_api_object_t obj = nas_route_info_to_cps_object(0, p_dr, false);
         if(obj != NULL){
             if (!cps_api_object_list_append(list,obj)) {
@@ -872,11 +972,6 @@ t_std_error nas_route_get_all_route_info(cps_api_object_list_t list, uint32_t vr
                 return STD_ERR(ROUTE,FAIL,0);
             }
         }
-
-        if (is_specific_prefix_get)
-            break;
-
-        p_dr = fib_get_next_dr (vrf_id, &p_dr->key.prefix, p_dr->prefix_len);
     }
     return STD_ERR_OK;
 }
@@ -1201,6 +1296,7 @@ cps_api_object_t nas_route_nh_to_nbr_cps_object(t_fib_nh *entry, cps_api_operati
     }
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_AF,entry->key.ip_addr.af_index);
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_IFINDEX,entry->key.if_index);
+    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_FLAGS,NAS_RT_NBR_FLAGS_PROACTIVE_RESOLVE);
 
     HAL_RT_LOG_INFO("HAL-RT-NH-PUB", "op:%d Resolve ARP for VRF %d(%s) parent:%d (%s) Addr: %s, Interface: %d "
                    "route-cnt:%d nht-active:%d",
@@ -1211,6 +1307,43 @@ cps_api_object_t nas_route_nh_to_nbr_cps_object(t_fib_nh *entry, cps_api_operati
     return obj;
 }
 
+t_std_error nas_route_nbr_entry_to_nbr_cps_object(t_fib_neighbour_entry *entry,
+                                                  cps_api_operation_types_t op, uint32_t flags){
+    cps_api_object_t obj = cps_api_object_create();
+    if(obj == NULL){
+        HAL_RT_LOG_ERR("HAL-RT-ARP","Failed to allocate memory to cps object");
+        return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
+    }
+
+    cps_api_key_t key;
+    cps_api_key_from_attr_with_qual(&key, BASE_NEIGHBOR_BASE_ROUTE_OBJ_NBR_OBJ, cps_api_qualifier_OBSERVED);
+    cps_api_object_set_type_operation(&key, op);
+
+    cps_api_object_set_key(obj,&key);
+
+    if(entry->family == HAL_INET4_FAMILY){
+        cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_ADDRESS,entry->nbr_addr.u.ipv4.s_addr);
+    }else{
+        cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_NBR_ADDRESS,(void *)entry->nbr_addr.u.ipv6.s6_addr,HAL_INET6_LEN);
+    }
+    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_VRF_ID, entry->vrfid);
+    cps_api_object_attr_add(obj,BASE_ROUTE_OBJ_VRF_NAME,
+                            FIB_GET_VRF_NAME(entry->vrfid, entry->family),
+                            strlen((const char*)FIB_GET_VRF_NAME(entry->vrfid, entry->family))+1);
+    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_AF,entry->family);
+    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_IFINDEX,entry->if_index);
+    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_FLAGS,flags);
+    cps_api_object_attr_add_u32(obj,OS_RE_BASE_ROUTE_OBJ_NBR_LOWER_LAYER_IF,entry->parent_if);
+
+    HAL_RT_LOG_INFO("HAL-RT-NH-PUB", "Trigger resolve Nbr for op:%d VRF %d Addr:%s af:%d "
+                    "flags:%d Intf:%d parent:%d status:%d", op, entry->vrfid, FIB_IP_ADDR_TO_STR (&entry->nbr_addr),
+                    entry->family, flags, entry->if_index, entry->parent_if, entry->status);
+    if(nas_route_publish_object(obj)!= STD_ERR_OK){
+        HAL_RT_LOG_ERR("HAL-RT-ARP","Failed to publish the parent nbr resolve trigger!");
+        return (STD_ERR_MK(e_std_err_ROUTE, e_std_err_code_FAIL, 0));
+    }
+    return STD_ERR_OK;
+}
 
 /* Publish the NH to Nbr-mgr for proactive resolution */
 bool nas_route_resolve_nh(t_fib_nh *entry, bool is_add) {

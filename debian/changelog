@@ -1,3 +1,13 @@
+opx-nas-l3 (3.12.0) unstable; urgency=medium
+
+  * Update: Avoid the ARP/Nbr refresh when the MAC not learnt in the kernel 
+  * Bugfix: Added the NULL check for NH to avoid the crash during best route get for NHT destination.
+  * Update: Use the right size for the vrf-name
+  * Update: Addressed the zero MAC with VXLAN intf case.
+  * Update: Trigger ARP refresh when VXLAN remote MAC moves from one VTEP to another.
+
+ -- Dell EMC <ops-dev@lists.openswitch.net>  Wed, 06 Jun 2019 15:00:00 -0800
+
 opx-nas-l3 (3.10.1+opx3) unstable; urgency=medium
 
   * Update: README copyright placement

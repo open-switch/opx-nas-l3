@@ -290,11 +290,6 @@ int hal_rt_vrf_de_init (hal_vrf_id_t vrf_id)
 
 t_std_error hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac_config_t*p_status, bool status) {
 
-#define STD_IS_VRRP_MAC(mac)                           \
-         ((mac[0] == 0x00) && (mac[1] == 0x00) &&      \
-          (mac[2] == 0x5E) && (mac[3] == 0x00) &&      \
-          ((mac[4] == 0x01) || (mac[4] == 0x02)))
-
     t_fib_vrf      *p_vrf = NULL;
     ndi_vr_entry_t  vr_entry;
     ndi_vrf_id_t    ndi_vr_id = 0;
@@ -313,9 +308,9 @@ t_std_error hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac
         HAL_RT_LOG_ERR("HAL-RT", "Vrf node NULL. Vrf_id: %d", vrf_id);
         return STD_ERR(ROUTE, FAIL, rc);
     }
-    HAL_RT_LOG_INFO("HAL-RT", "Vrf:%d ndi-vr-id if name:%s peer-mac:%s status:%d",
+    HAL_RT_LOG_INFO("HAL-RT", "Vrf:%d ndi-vr-id if name:%s peer-mac:%s status:%d ingress-only:%d",
                     vrf_id, p_status->if_name, hal_rt_mac_to_str(&p_status->mac, p_buf, HAL_RT_MAX_BUFSZ),
-                    status);
+                    status, p_status->ingress_only);
     /* VR create is used if interface name is null and MAC present in the object, for VLT and Container cases,
      * wild-card VLAN with Router MAC is good enough for L3 termination.
      * RIF create is used if the if-name and router MAC attributes are present,
@@ -389,6 +384,11 @@ t_std_error hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac
             } else if(intf_ctrl.int_type == nas_int_type_VLAN) {
                 rif_entry.rif_type = NDI_RIF_TYPE_VLAN;
                 rif_entry.attachment.vlan_id = intf_ctrl.vlan_id;
+            } else if(intf_ctrl.int_type == nas_int_type_DOT1D_BRIDGE) {
+                rif_entry.rif_type = NDI_RIF_TYPE_DOT1D_BRIDGE;
+                rif_entry.attachment.bridge_id = intf_ctrl.bridge_id;
+                HAL_RT_LOG_INFO("RT-RIF-ADD", "1D virtual bridge RIF entry creation for intf:%s(%d) type:%d bridge:%lu",
+                                intf_ctrl.if_name, intf_ctrl.if_index, intf_ctrl.int_type, intf_ctrl.bridge_id);
             } else {
                 HAL_RT_LOG_ERR("HAL-RT", "Invalid RIF entry creation ignored for rif-id:0x%lx intf:%s(%d) type:%d",
                                rif_id, intf_ctrl.if_name, intf_ctrl.if_index, intf_ctrl.int_type);
@@ -398,11 +398,9 @@ t_std_error hal_rt_process_peer_routing_config (uint32_t vrf_id, nas_rt_peer_mac
             rif_entry.flags = NDI_RIF_ATTR_SRC_MAC_ADDRESS;
             /* Virtual RIF is set only when we need to program ingress router MAC
                for ingress IP termination.
-               For now virtual RIF attribute flag is set only for VRRP MAC.
-               In future if there are other flows for which the virtual RIF attribute flag
-               is required, then it can be exposed as an attribute as part of peer routing config
+               if the config is only for ingress termination, then set the virtual rif flag.
              */
-            if (STD_IS_VRRP_MAC(p_status->mac))
+            if (p_status->ingress_only)
                 rif_entry.flags |= NDI_RIF_ATTR_VIRTUAL;
 
             memcpy(&rif_entry.src_mac, &(p_status->mac), sizeof(hal_mac_addr_t));
@@ -484,6 +482,8 @@ cps_api_object_t nas_route_peer_routing_config_to_cps_object(uint32_t vrf_id,
     memset(buff, '\0', sizeof(buff));
     const char *_p = std_mac_to_string((const hal_mac_addr_t *)&p_status->mac, buff, sizeof(buff));
     cps_api_object_attr_add(obj,BASE_ROUTE_PEER_ROUTING_CONFIG_PEER_MAC_ADDR,_p,strlen(_p)+1);
+
+    cps_api_object_attr_add_u32(obj,BASE_ROUTE_PEER_ROUTING_CONFIG_INGRESS_ONLY, p_status->ingress_only);
     return obj;
 }
 
@@ -558,7 +558,7 @@ t_std_error hal_rt_process_virtual_routing_ip_config (nas_rt_virtual_routing_ip_
     } else {
         if (!nas_rt_virtual_routing_ip_get(p_cfg, NULL)) {
             /* If we are trying to delete an entry which does not exist, return */
-            HAL_RT_LOG_ERR("HAL-RT", "Vrf:%d if-name:%s IP:%s does not exists",
+            HAL_RT_LOG_ERR("HAL-RT", "Vrf:%d if-name:%s IP:%s does not exist",
                            vrf_id, p_cfg->if_name, FIB_IP_ADDR_TO_STR(&p_cfg->ip_addr));
             return STD_ERR(ROUTE, FAIL, rc);
         }
@@ -709,7 +709,7 @@ static bool hal_rt_process_msg(cps_api_object_t obj, void *param)
             break;
         case cps_api_obj_CAT_OS_RE:
             g_fib_gbl_info.num_route_msg++;
-            if (hal_rt_cps_obj_to_route(obj, &p_msg)) {
+            if (hal_rt_cps_obj_to_route(obj, &p_msg, false)) {
                 nas_rt_process_msg(p_msg);
             }
             break;

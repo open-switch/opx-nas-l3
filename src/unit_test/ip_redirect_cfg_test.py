@@ -94,7 +94,7 @@ def handle_show(vrf, ifname):
 def test_pre_req_cfg():
     #print("Test pre requisite config")
     mode = 'OPX'
-    ret = exec_shell('opx-show-version | grep \"OS_NAME.*Enterprise\"')
+    ret = exec_shell('os10-show-version | grep \"OS_NAME.*Enterprise\"')
     if ret:
         mode = 'DoD'
 

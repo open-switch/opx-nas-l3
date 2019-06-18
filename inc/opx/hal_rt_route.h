@@ -647,6 +647,7 @@ typedef struct _t_fib_nh {
     uint32_t           clnts_ref_cnt; /* In case of parent NH being referrred by multiple leaked NH,
                                        increment this counter in the parent NH and notify nbr-mgr accordingly
                                        for proactive resolution */
+    uint32_t           flags; /* NextHop flags*/
 } t_fib_nh;
 
 /*
@@ -911,7 +912,7 @@ int fib_destroy_leaked_rt_tree(void);
 
 t_fib_nh *fib_proc_nh_add (uint32_t vrf_id, t_fib_ip_addr *p_ip_addr, uint32_t if_index,
                       t_fib_nh_owner_type owner_type, uint32_t owner_value, bool is_mgmt_nh,
-                      uint32_t parent_vrf_id);
+                      uint32_t parent_vrf_id, uint32_t flags);
 
 int fib_proc_nh_delete (t_fib_nh *p_nh, t_fib_nh_owner_type owner_type, uint32_t owner_value);
 

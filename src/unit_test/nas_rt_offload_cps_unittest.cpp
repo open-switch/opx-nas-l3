@@ -98,14 +98,14 @@ static cps_api_return_code_t nas_ut_rt_cfg (bool is_add, const char *ip_addr, ui
      * CPS transaction
      */
     cps_api_transaction_params_t tr;
-    cps_api_transaction_init(&tr);
+    (void)cps_api_transaction_init(&tr);
 
     if (is_add)
         cps_api_create(&tr,obj);
     else
         cps_api_delete(&tr,obj);
 
-    cps_api_commit(&tr);
+    (void)cps_api_commit(&tr);
     cps_api_transaction_close(&tr);
 
     return cps_api_ret_code_OK;
@@ -154,14 +154,14 @@ static cps_api_return_code_t nas_ut_neigh_cfg (bool is_add, const char *ip_addr,
      * CPS transaction
      */
     cps_api_transaction_params_t tr;
-    cps_api_transaction_init(&tr);
+    (void)cps_api_transaction_init(&tr);
 
     if (is_add)
         cps_api_create(&tr,obj);
     else
         cps_api_delete(&tr,obj);
 
-    cps_api_commit(&tr);
+    (void)cps_api_commit(&tr);
 
     cps_api_transaction_close(&tr);
 

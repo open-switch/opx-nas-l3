@@ -109,9 +109,15 @@ bool nbr_mgr_process_nas_cps_msg(cps_api_object_t obj, void *param)
             case BASE_ROUTE_OBJ_NBR_IFINDEX:
                 p_msg->nbr.if_index = cps_api_object_attr_data_uint(it.attr);
                 break;
+            case BASE_ROUTE_OBJ_NBR_FLAGS:
+                p_msg->nbr.flags = cps_api_object_attr_data_uint(it.attr);
+                break;
             case BASE_ROUTE_OBJ_NBR_ADDRESS:
                 memcpy(&p_msg->nbr.nbr_addr.u, cps_api_object_attr_data_bin(it.attr),
                        cps_api_object_attr_len (it.attr));
+                break;
+            case OS_RE_BASE_ROUTE_OBJ_NBR_LOWER_LAYER_IF:
+                p_msg->nbr.parent_if = cps_api_object_attr_data_uint(it.attr);
                 break;
         }
     }
@@ -119,12 +125,22 @@ bool nbr_mgr_process_nas_cps_msg(cps_api_object_t obj, void *param)
         safestrncpy(p_msg->nbr.vrf_name, vrf_name, sizeof(p_msg->nbr.vrf_name));
     }
     char buff[HAL_INET6_TEXT_LEN + 1];
-    NBR_MGR_LOG_DEBUG("NAS-MSG", "Nbr resolution request for vrf:%lu(%s) type:%d family:%d ip:%s if-index:%d",
-                      p_msg->nbr.vrfid, (vrf_name ? vrf_name : " "), p_msg->nbr.msg_type, p_msg->nbr.family,
-                      std_ip_to_string(&(p_msg->nbr.nbr_addr), buff, HAL_INET6_TEXT_LEN),
-                      p_msg->nbr.if_index);
-    /* Proactive resolution request from NAS-L3 if not already resolved */
-    p_msg->nbr.flags = NBR_MGR_NBR_RESOLVE;
+    NBR_MGR_LOG_INFO("NAS-MSG", "Nbr resolution request for vrf:%lu(%s) type:%d family:%d ip:%s if-index:%d parent-if:%d flags:%d",
+                     p_msg->nbr.vrfid, (vrf_name ? vrf_name : " "), p_msg->nbr.msg_type, p_msg->nbr.family,
+                     std_ip_to_string(&(p_msg->nbr.nbr_addr), buff, HAL_INET6_TEXT_LEN),
+                     p_msg->nbr.if_index, p_msg->nbr.parent_if, p_msg->nbr.flags);
+    if (p_msg->nbr.flags == NBR_MGR_NBR_FLAGS_TRIGGER_RESOLVE) {
+        p_msg->nbr.flags = NBR_MGR_NBR_TRIGGER_RESOLVE;
+    } else if (p_msg->nbr.flags == NBR_MGR_NBR_FLAGS_DISABLE_AGE_OUT_1D_BRIDGE_REMOTE_MAC) {
+        p_msg->nbr.flags = NBR_MGR_NBR_DISABLE_AGE_OUT_1D_REMOTE_MAC;
+    } else if (p_msg->nbr.flags == NBR_MGR_NBR_FLAGS_ENABLE_AGE_OUT) {
+        p_msg->nbr.flags = NBR_MGR_NBR_ENABLE_AGE_OUT;
+    } else if (p_msg->nbr.flags == NBR_MGR_NBR_FLAGS_UPDATE_PARENT_IF) {
+        p_msg->nbr.flags = NBR_MGR_NBR_UPDATE_PARENT_IF;
+    } else {
+        /* Proactive resolution request from NAS-L3 if not already resolved */
+        p_msg->nbr.flags = NBR_MGR_NBR_RESOLVE;
+    }
     nbr_mgr_enqueue_netlink_nas_msg(std::move(p_msg_uptr));
     return true;
 }
@@ -516,6 +532,7 @@ bool nbr_mgr_program_npu(nbr_mgr_op_t op, const nbr_mgr_nbr_entry_t& entry) {
     cps_api_object_attr_add_u32(cps_obj,BASE_ROUTE_OBJ_NBR_STATE, entry.status);
     //cps_api_object_attr_add(cps_obj, BASE_ROUTE_OBJ_NBR_IFNAME, ifname.c_str(), ifname.size()+1);
     cps_api_object_attr_add_u32(cps_obj,BASE_ROUTE_OBJ_NBR_IFINDEX, entry.if_index);
+    cps_api_object_attr_add_u32(cps_obj,OS_RE_BASE_ROUTE_OBJ_NBR_LOWER_LAYER_IF, entry.parent_if);
     cps_api_object_attr_add_u32(cps_obj,BASE_NEIGHBOR_BASE_ROUTE_OBJ_NBR_PHY_IFINDEX,
                                     entry.mbr_if_index);
 
@@ -697,8 +714,8 @@ bool nbr_mgr_is_mac_present_in_hw(hal_mac_addr_t mac, hal_ifindex_t if_index,
         NBR_MGR_LOG_ERR("NBR-GET","NAS MAC get from HW, unable to get intf info!");
         return false;
     }
-    /* If if_index is not a VLAN intf, return */
-    if (!intf.vlan_id) {
+    /* If the interface type is not .1D or .1Q, return from here  */
+    if ((intf.type != NBR_MGR_INTF_TYPE_1Q_BRIDGE) && (intf.type != NBR_MGR_INTF_TYPE_1D_BRIDGE)) {
         NBR_MGR_LOG_INFO("NBR-GET","NAS MAC get from HW,"
                         "VLAN id is not present for:%d", if_index);
         return false;
@@ -709,12 +726,19 @@ bool nbr_mgr_is_mac_present_in_hw(hal_mac_addr_t mac, hal_ifindex_t if_index,
         return false;
     }
 
+    NBR_MGR_LOG_INFO("NBR-MAC-GET","NAS MAC get from HW, intf:%d type:%d vlan-id:%d if-name:%s",
+                     if_index, intf.type, intf.vlan_id, intf.if_name);
     cps_api_object_t obj = cps_api_object_list_create_obj_and_append(get_req.filters);
     cps_api_key_from_attr_with_qual(cps_api_object_key(obj),BASE_MAC_QUERY_OBJ,
                                     cps_api_qualifier_TARGET);
     cps_api_object_attr_add(obj,BASE_MAC_QUERY_MAC_ADDRESS, mac,
                             sizeof(hal_mac_addr_t));
-    cps_api_object_attr_add_u16(obj,BASE_MAC_QUERY_VLAN, intf.vlan_id);
+    if (intf.type == NBR_MGR_INTF_TYPE_1Q_BRIDGE) {
+        cps_api_object_attr_add_u16(obj,BASE_MAC_QUERY_VLAN, intf.vlan_id);
+    } else {
+        cps_api_object_attr_add(obj,BASE_MAC_QUERY_BR_NAME, intf.if_name,
+                                strlen(intf.if_name)+1);
+    }
 
     cps_api_return_code_t rc = cps_api_get(&get_req);
     if (rc == cps_api_ret_code_OK) {
@@ -736,8 +760,8 @@ bool nbr_mgr_is_mac_present_in_hw(hal_mac_addr_t mac, hal_ifindex_t if_index,
             if (static_attr)
                 is_static = cps_api_object_attr_data_u32(static_attr);
 
-            NBR_MGR_LOG_INFO("NBR-MAC-GET","NAS MAC get from HW MAC vlan:%d mbr:%d action:%d static:%d",
-                            intf.vlan_id, mbr_if_index, action, is_static);
+            NBR_MGR_LOG_INFO("NBR-MAC-GET","NAS MAC get from HW MAC vlan:%d bridge:%d(%s) mbr:%d action:%d static:%d",
+                             intf.vlan_id, intf.if_index, intf.if_name, mbr_if_index, action, is_static);
         }
     }
 

@@ -48,7 +48,7 @@ cps_api_return_code_t nas_ut_vrf_cfg (const char *vrf_name, bool is_add)
      * CPS transaction
      */
     cps_api_transaction_params_t tr;
-    cps_api_transaction_init(&tr);
+    (void)cps_api_transaction_init(&tr);
 
     if (is_add)
         cps_api_create(&tr,obj);
@@ -79,11 +79,11 @@ cps_api_return_code_t nas_ut_intf_vrf_cfg (const char *vrf_name, const char *if_
      * CPS transaction
      */
     cps_api_transaction_params_t tr;
-    cps_api_transaction_init(&tr);
+    (void)cps_api_transaction_init(&tr);
 
     rc = cps_api_action(&tr,obj);
 
-    cps_api_commit(&tr);
+    (void)cps_api_commit(&tr);
 
     if (is_add && (rc == cps_api_ret_code_OK)) {
         cps_api_object_attr_t if_index  = cps_api_object_attr_get(obj, VRF_MGMT_INTF_BIND_NI_OUTPUT_IFINDEX);
@@ -118,7 +118,7 @@ cps_api_return_code_t nas_ut_intf_mgmt_vrf_cfg (const char *vrf_name, const char
      * CPS transaction
      */
     cps_api_transaction_params_t tr;
-    cps_api_transaction_init(&tr);
+    (void)cps_api_transaction_init(&tr);
 
     if (is_add)
         cps_api_create(&tr,obj);
@@ -133,7 +133,8 @@ cps_api_return_code_t nas_ut_intf_mgmt_vrf_cfg (const char *vrf_name, const char
 
 
 cps_api_return_code_t nas_ut_rt_cfg (const char *rt_vrf_name, bool is_add, const char *ip_addr, uint32_t prefix_len,
-                                     uint8_t af, const char *nh_vrf_name, const char *nh_addr, const char *if_name)
+                                     uint8_t af, const char *nh_vrf_name, const char *nh_addr, const char *if_name, bool is_onlink_nh,
+                                     bool is_replace)
 {
     cps_api_object_t obj = cps_api_object_create();
 
@@ -203,20 +204,32 @@ cps_api_return_code_t nas_ut_rt_cfg (const char *rt_vrf_name, bool is_add, const
             cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_BIN,
                                  &a6, sizeof(struct in6_addr));
         }
+        if (is_onlink_nh) {
+            uint32_t onlink_nh = BASE_ROUTE_NH_FLAGS_ONLINK;
+            ids[1] = 0;
+            ids[2] = BASE_ROUTE_OBJ_ENTRY_NH_LIST_FLAGS;
+            cps_api_object_e_add(obj,ids,ids_len,cps_api_object_ATTR_T_U32,
+                                 &onlink_nh, sizeof(uint32_t));
+        }
     }
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_ENTRY_NH_COUNT,1);
     /*
      * CPS transaction
      */
     cps_api_transaction_params_t tr;
-    cps_api_transaction_init(&tr);
+    (void)cps_api_transaction_init(&tr);
 
-    if (is_add)
-        cps_api_create(&tr,obj);
-    else
+    if (is_add) {
+        if (is_replace) {
+            cps_api_set(&tr,obj);
+        } else {
+            cps_api_create(&tr,obj);
+        }
+    } else {
         cps_api_delete(&tr,obj);
+    }
 
-    cps_api_commit(&tr);
+    (void)cps_api_commit(&tr);
     cps_api_transaction_close(&tr);
 
     return cps_api_ret_code_OK;
@@ -330,11 +343,11 @@ cps_api_return_code_t nas_ut_rt_ipv6_nh_cfg (const char *rt_vrf_name, bool is_ad
      * CPS transaction
      */
     cps_api_transaction_params_t tr;
-    cps_api_transaction_init(&tr);
+    (void)cps_api_transaction_init(&tr);
 
-    cps_api_action(&tr,obj);
+    (void)cps_api_action(&tr,obj);
 
-    cps_api_commit(&tr);
+    (void)cps_api_commit(&tr);
     cps_api_transaction_close(&tr);
 
     return cps_api_ret_code_OK;
@@ -380,14 +393,14 @@ cps_api_return_code_t nas_ut_neigh_cfg (bool is_add, const char *ip_addr, uint8_
      * CPS transaction
      */
     cps_api_transaction_params_t tr;
-    cps_api_transaction_init(&tr);
+    (void)cps_api_transaction_init(&tr);
 
     if (is_add)
         cps_api_create(&tr,obj);
     else
         cps_api_delete(&tr,obj);
 
-    cps_api_commit(&tr);
+    (void)cps_api_commit(&tr);
 
     cps_api_transaction_close(&tr);
 
@@ -497,8 +510,8 @@ void nas_route_dump_route_object_content(cps_api_object_t obj) {
     cps_api_object_attr_t pref_len = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_ENTRY_PREFIX_LEN);
     cps_api_object_attr_t nh_count = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_ENTRY_NH_COUNT);
     std::cout<<"Route VRF:"<<rt_vrf_name<<" NH VRF:"<<nh_vrf_name<<" AF "<<((af_data == AF_INET) ? "IPv4" : "IPv6")<<","<<
-        inet_ntop(af_data, cps_api_object_attr_data_bin(prefix), str,addr_len)<<"/"<<
-        cps_api_object_attr_data_u32(pref_len)<<std::endl;
+        (prefix ? inet_ntop(af_data, cps_api_object_attr_data_bin(prefix), str,addr_len) :"")<<"/"<<
+        (pref_len ? cps_api_object_attr_data_u32(pref_len) : 0) <<std::endl;
     if (nh_count != CPS_API_ATTR_NULL) {
         nhc = cps_api_object_attr_data_u32(nh_count);
         std::cout<<"NHC "<<nhc<<std::endl;
@@ -530,6 +543,11 @@ void nas_route_dump_route_object_content(cps_api_object_t obj) {
         attr = cps_api_object_e_get(obj,ids,ids_len);
         if (attr != CPS_API_ATTR_NULL)
             std::cout<<"Is Next Hop Resolved "<<cps_api_object_attr_data_u32(attr)<<std::endl;
+
+        ids[2] = BASE_ROUTE_OBJ_ENTRY_NH_LIST_FLAGS;
+        attr = cps_api_object_e_get(obj,ids,ids_len);
+        if (attr != CPS_API_ATTR_NULL)
+            std::cout<<"Is Next Hop onlink "<<cps_api_object_attr_data_u32(attr)<<std::endl;
     }
 }
 
@@ -624,7 +642,8 @@ cps_api_return_code_t nas_ut_validate_neigh_cfg (const char *vrf_name, uint32_t 
 }
 
 cps_api_return_code_t nas_ut_validate_rt_cfg (const char *rt_vrf_name, uint32_t af, const char *ip_addr, uint32_t prefix_len,
-                                              const char *nh_vrf_name, const char *nh_addr, const char *if_name, bool should_exist_in_npu)
+                                              const char *nh_vrf_name, const char *nh_addr, const char *if_name, bool should_exist_in_npu,
+                                              bool is_onlink_nh)
 {
     cps_api_return_code_t rc = cps_api_ret_code_ERR;
     cps_api_get_params_t gp;
@@ -689,6 +708,27 @@ cps_api_return_code_t nas_ut_validate_rt_cfg (const char *rt_vrf_name, uint32_t 
                     if (should_exist_in_npu) {
                         std::cout<<"IP route exists in NPU:"<<std::endl;
                         rc = cps_api_ret_code_ERR;
+                    }
+                }
+                if (is_onlink_nh) {
+                    uint32_t nhc = 0, nh_itr = 0;
+                    cps_api_object_attr_t nh_count = cps_api_object_attr_get(obj, BASE_ROUTE_OBJ_ENTRY_NH_COUNT);
+                    if (nh_count != CPS_API_ATTR_NULL) {
+                        nhc = cps_api_object_attr_data_u32(nh_count);
+                    }
+
+                    for (nh_itr = 0; nh_itr < nhc; nh_itr++)
+                    {
+                        cps_api_attr_id_t ids[3] = { BASE_ROUTE_OBJ_ENTRY_NH_LIST,
+                            0, BASE_ROUTE_OBJ_ENTRY_NH_LIST_FLAGS};
+                        const int ids_len = sizeof(ids)/sizeof(*ids);
+                        ids[1] = nh_itr;
+
+                        cps_api_object_attr_t attr = cps_api_object_e_get(obj,ids,ids_len);
+                        if ((attr == CPS_API_ATTR_NULL) || (cps_api_object_attr_data_u32(attr) != BASE_ROUTE_NH_FLAGS_ONLINK)) {
+                            std::cout<<"NH is not onlink"<<std::endl;
+                            rc = cps_api_ret_code_ERR;
+                        }
                     }
                 }
                 nas_route_dump_route_object_content(obj);

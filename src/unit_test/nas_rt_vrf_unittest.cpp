@@ -30,14 +30,14 @@
 /* NOTE: Change the back to back connected ports here based on availability in the node, also,
  * if we are running this test in Enterprise package, make sure "no switchport" command is executed in CLI
  * on these two ports before running the script. */
-const char *b2b_intf1 = "e101-019-0";
-const char *b2b_intf2 = "e101-020-0";
-const char *DoD_b2b_intf1 = "1/1/19";
-const char *DoD_b2b_intf2 = "1/1/20";
+static const char *b2b_intf1 = "e101-030-2";
+static const char *b2b_intf2 = "e101-030-3";
+static const char *DoD_b2b_intf1 = "1/1/30:2";
+static const char *DoD_b2b_intf2 = "1/1/30:3";
 
-const char *b2b_leak_intf1 = "e101-001-0";
-const char *b2b_leak_vrf_intf1 = "v-e101-001-0";
-const char *DoD_b2b_leak_intf1 = "1/1/1";
+static const char *b2b_leak_intf1 = "e101-001-0";
+static const char *b2b_leak_vrf_intf1 = "v-e101-001-0";
+static const char *DoD_b2b_leak_intf1 = "1/1/1";
 
 void print_time(char *buffer, int *p_sec, int *p_milli_sec)
 {
@@ -95,6 +95,30 @@ static void nas_vrf_change_mode(bool is_l3) {
         fclose(fp);
     }
 }
+
+static void nas_vrf_ip_config(bool is_add) {
+    int ret = system("os10-show-version | grep \"OS_NAME.*Enterprise\"");
+    if (ret == 0) {
+        FILE *fp;
+
+        fp = fopen("/tmp/test_pre_req","w");
+        fprintf(fp, "configure terminal\n");
+        fprintf(fp, "interface ethernet %s\n", DoD_b2b_intf1);
+        if (is_add) {
+            fprintf(fp, "ip address 30.0.0.1/16\n");
+            fprintf(fp, "ipv6 address 3333::1/64\n");
+        } else {
+            fprintf(fp, "no ip address\n");
+            fprintf(fp, "no ipv6 address\n");
+        }
+        fprintf(fp, "exit\n");
+        fflush(fp);
+        system("sudo -u admin clish --b /tmp/test_pre_req");
+
+        fclose(fp);
+    }
+}
+
 
 static void nas_rt_dump_nht_object_content(cps_api_object_t obj){
     char str[INET6_ADDRSTRLEN];
@@ -463,11 +487,13 @@ static void nas_rt_scal_neigh_test(int start_vrf_id, int no_of_vrfs, int scal_ar
                 }
             }
             rc = nas_ut_intf_vrf_cfg(vrf,vlan,false);
-            if (!fail_ok)
+            if (!fail_ok) {
                 ASSERT_TRUE(rc == cps_api_ret_code_OK);
+            }
             rc = nas_ut_vrf_cfg(vrf,false);
-            if (!fail_ok)
+            if (!fail_ok) {
                 ASSERT_TRUE(rc == cps_api_ret_code_OK);
+            }
 
             memset(cmd, '\0', sizeof(cmd));
             snprintf(cmd, 511, "ip link delete %s.%d", b2b_intf1, id);
@@ -731,7 +757,7 @@ static void nas_rt_validate_blue_vrf_config(cps_api_return_code_t rc_check) {
     ASSERT_TRUE(rc == rc_check);
 }
 
-static void nas_rt_validate_red_vrf_config(cps_api_return_code_t rc_check) {
+void nas_rt_validate_red_vrf_config(cps_api_return_code_t rc_check) {
     cps_api_return_code_t rc;
     sleep(5);
     rc = nas_ut_validate_rt_cfg ("red", AF_INET, "30.0.0.0", 24, "red", "", "", true);
@@ -771,7 +797,7 @@ static void nas_rt_validate_red_vrf_config(cps_api_return_code_t rc_check) {
     ASSERT_TRUE(rc == rc_check);
 }
 
-static void nas_rt_basic_red_vrf_vlan_cfg(bool is_add) {
+void nas_rt_basic_red_vrf_vlan_cfg(bool is_add) {
     cps_api_return_code_t rc;
     char cmd [512];
 
@@ -1046,8 +1072,7 @@ static void nas_rt_perf_test(int no_of_intfs, bool is_add) {
 
 
 TEST(nas_rt_vrf_test, nas_rt_basic_vlan_vrf) {
-    /* @@TODO Fix VLAN test case/ */
-    return;
+    /* @@TODO Fix VLAN test case/
     nas_rt_basic_red_vrf_vlan_cfg(true);
     nas_rt_validate_red_vrf_config(cps_api_ret_code_OK);
     system("ip netns exec red ping -c 3 30.0.0.2");
@@ -1057,6 +1082,8 @@ TEST(nas_rt_vrf_test, nas_rt_basic_vlan_vrf) {
     nas_rt_basic_red_vrf_vlan_cfg(false);
     nas_rt_validate_red_vrf_config(cps_api_ret_code_ERR);
     nas_rt_cleanup();
+    */
+    return;
 }
 
 TEST(nas_rt_vrf_test, nas_rt_basic_lag_vrf) {
@@ -2899,7 +2926,7 @@ TEST(nas_rt_vrf_test, nas_rt_vrf_vlan_del_test) {
     char val1[50], val2[50];
     memset(val1, '\0', sizeof(val1));
     memset(val2, '\0', sizeof(val2));
-    fscanf(result, "%s %s", val1, val2);
+    (void)fscanf(result, "%49s %49s", val1, val2);
     fclose(result);
     printf("\r\n val1:%s val2:%s\r\n", val1, val2);
     ASSERT_TRUE((strncmp(val2, "100.10.10.2", 50) == 0));
@@ -2918,7 +2945,7 @@ TEST(nas_rt_vrf_test, nas_rt_vrf_vlan_del_test) {
     result = fopen("/tmp/check", "r");
     memset(val1, '\0', sizeof(val1));
     memset(val2, '\0', sizeof(val2));
-    fscanf(result, "%s %s", val1, val2);
+    (void)fscanf(result, "%49s %49s", val1, val2);
     fclose(result);
     printf("\r\n val1:%s val2:%s\r\n", val1, val2);
     ASSERT_TRUE((strncmp(val2, "100.10.10.2", 50) != 0));
@@ -3096,6 +3123,41 @@ TEST(nas_rt_vrf_test, nas_rt_vrf_ecmp_test_2nh) {
     rc = nas_ut_validate_rt_ecmp_cfg ("blue", AF_INET6,"30::", 64, "blue", NULL, NULL, true, 2);
     ASSERT_TRUE(rc != cps_api_ret_code_OK);
     nas_rt_ecmp_config(false);
+}
+
+TEST(nas_rt_vrf_test, nas_rt_vrf_verify_onlink_nh) {
+    cps_api_return_code_t rc;
+    nas_vrf_change_mode(true);
+    nas_ut_rt_cfg (NULL,1, "50.0.0.0", 24, AF_INET, NULL, "30.0.0.2", b2b_intf1, true);
+    /* Onlink NH flag seems to be not supported in kernel when it is supported enabled the below code
+     * nas_ut_rt_cfg ("default",1, "5555::", 64, AF_INET6, NULL, "3333::2", b2b_intf1, true); */
+    /* Verify that route is created with onlink flag. */
+    sleep(5);
+    rc = nas_ut_validate_rt_cfg ("default", AF_INET, "50.0.0.0", 24, "default", "30.0.0.2", b2b_intf1, true, true);
+    ASSERT_TRUE(rc == cps_api_ret_code_OK);
+    /* Onlink NH flag seems to be not supported in kernel when it is supported enabled the below code
+     * nas_ut_rt_cfg ("default",1, "5555::", 64, AF_INET6, NULL, "3333::2", b2b_intf1, true); */
+    /* rc =  nas_ut_validate_rt_cfg ("default", AF_INET, "5555::", 64, "default", "3333::2", b2b_intf1, true, true);
+       ASSERT_TRUE(rc == cps_api_ret_code_OK); */
+    nas_vrf_ip_config(true);
+    sleep(5);
+    nas_ut_rt_cfg (NULL,1, "50.0.0.0", 24, AF_INET, NULL, "30.0.0.3", b2b_intf1, false, true);
+    nas_ut_rt_cfg ("default",1, "5555::", 64, AF_INET6, NULL, "3333::3", b2b_intf1, false, true);
+    /* Verify that nexthop with onlink flag is replaced with different nexthop with no onlink flag for a route. */
+    sleep(5);
+    rc = nas_ut_validate_rt_cfg ("default", AF_INET, "50.0.0.0", 24, "default", "30.0.0.3", b2b_intf1, true, false);
+    ASSERT_TRUE(rc == cps_api_ret_code_OK);
+    rc =  nas_ut_validate_rt_cfg ("default", AF_INET6, "5555::", 64, "default", "3333::3", b2b_intf1, true, false);
+    ASSERT_TRUE(rc == cps_api_ret_code_OK);
+    nas_ut_rt_cfg (NULL,0, "50.0.0.0", 24, AF_INET, NULL, "30.0.0.3", b2b_intf1, true);
+    nas_ut_rt_cfg ("default",0, "5555::", 64, AF_INET6, NULL, "3333::3", b2b_intf1, true);
+    sleep(5);
+    rc = nas_ut_validate_rt_cfg ("default", AF_INET, "50.0.0.0", 24, "default", "30.0.0.3", b2b_intf1, true, true);
+    ASSERT_TRUE(rc != cps_api_ret_code_OK);
+    rc =  nas_ut_validate_rt_cfg ("default", AF_INET, "5555::", 64, "default", "3333::3", b2b_intf1, true, true);
+    ASSERT_TRUE(rc != cps_api_ret_code_OK);
+    nas_vrf_ip_config(false);
+    nas_vrf_change_mode(false);
 }
 
 int main(int argc, char **argv) {

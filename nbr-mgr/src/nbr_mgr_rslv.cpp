@@ -115,6 +115,7 @@ static cps_api_object_t nbr_mgr_nbr_to_cps_obj(nbr_mgr_nbr_entry_t *entry,cps_ap
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_IFINDEX,entry->if_index);
 
     cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_FLAGS,entry->flags);
+    cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_STATE,entry->status);
     if (entry->status & NBR_MGR_NUD_PERMANENT) {
         cps_api_object_attr_add_u32(obj,BASE_ROUTE_OBJ_NBR_TYPE,BASE_ROUTE_RT_TYPE_STATIC);
     } else {
@@ -140,6 +141,9 @@ static char *nbr_mgr_nl_neigh_state_to_str (int type) {
             break;
         case NBR_MGR_NL_DELAY_REFRESH_MSG:
             snprintf (str, sizeof(str), "Delay Refresh");
+            break;
+        case NBR_MGR_NL_SET_NBR_STATE_MSG:
+            snprintf (str, sizeof(str), "State Update");
             break;
         default:
             snprintf (str, sizeof(str), "Unknown");
@@ -182,6 +186,8 @@ bool nbr_mgr_burst_resolve_handler(nbr_mgr_msg_t *p_msg) {
                (p_msg->type == NBR_MGR_NL_INSTANT_REFRESH_MSG) ||
                (p_msg->type == NBR_MGR_NL_DELAY_REFRESH_MSG)) {
         nas_os_refresh_neighbor(obj);
+    } else if (p_msg->type == NBR_MGR_NL_SET_NBR_STATE_MSG) {
+        nas_os_set_neighbor_state(obj);
     }
     cps_api_object_delete(obj);
     return true;

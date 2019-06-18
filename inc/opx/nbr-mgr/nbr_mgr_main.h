@@ -36,8 +36,9 @@
 #define NBR_MGR_NUD_NONE          0x00
 
 #define NBR_MGR_BURST_RESOLVE_CNT 300
-#define NBR_MGR_MIN_NBR_RETRY_CNT 10
-#define NBR_MGR_MAX_NBR_RETRY_CNT 25
+#define NBR_MGR_MAX_NBR_REFRESH_OS_MAC_LEARN_RETRY_CNT 5
+#define NBR_MGR_MIN_NBR_FAILED_RETRY_CNT 10
+#define NBR_MGR_MAX_NBR_FAILED_RETRY_CNT 25
 #define NBR_MGR_MAX_NBR_REFRESH_MAC_LEARN_RETRY_CNT 100
 #define NBR_MGR_INSTANT_RESOLVE_DELAY 0 /* No delay for resolving the ARP/Nbr entries */
 #define NBR_MGR_BURST_RESOLVE_DELAY 1 /* Every 1 sec NBR_MGR_BURST_RESOLVE_CNT ARP
@@ -51,6 +52,15 @@
 #define NBR_MGR_INTF_OPER_MSG  0x4
 #define NBR_MGR_DEFAULT_VRF_ID 0
 
+enum {
+    NBR_MGR_INTF_TYPE_PHY = 1,
+    NBR_MGR_INTF_TYPE_LAG,
+    NBR_MGR_INTF_TYPE_1Q_BRIDGE,
+    NBR_MGR_INTF_TYPE_1D_BRIDGE,
+    NBR_MGR_INTF_TYPE_MACVLAN,
+    NBR_MGR_INTF_TYPE_VXLAN,
+};
+
 /* Today, we get the oper. status in the attribute
  * BASE_IF_LINUX_IF_INTERFACES_INTERFACE_IF_FLAGS, if this is not case in future, change the code. */
 #define NBR_MGR_INTF_OPER_UP (1<<6) /* IFF_RUNNING */
@@ -58,6 +68,14 @@ enum {
     NBR_MGR_AUTO_REFRESH_INIT,
     NBR_MGR_AUTO_REFRESH_ENABLE,
     NBR_MGR_AUTO_REFRESH_DISABLE,
+};
+
+enum {
+    NBR_MGR_NBR_FLAGS_PROACTIVE_RESOLVE = 1, /* Start the proactive resolution as long as the intf. is up */
+    NBR_MGR_NBR_FLAGS_TRIGGER_RESOLVE, /* Start the resolution just once. */
+    NBR_MGR_NBR_FLAGS_DISABLE_AGE_OUT_1D_BRIDGE_REMOTE_MAC, /* Upon neighbor ageout, update the nbr state to reachable. */
+    NBR_MGR_NBR_FLAGS_ENABLE_AGE_OUT, /* Upon neighbor ageout, perform the regular age-out handling. */
+    NBR_MGR_NBR_FLAGS_UPDATE_PARENT_IF, /* Update the parent and child interfaces mapping for nbr handling. */
 };
 
 bool nbr_mgr_cps_init (void);

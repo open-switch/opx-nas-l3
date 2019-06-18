@@ -287,6 +287,21 @@ dn_hal_route_err _hal_fib_host_add (uint32_t vrf_id, t_fib_nh *p_fh)
         HAL_RT_LOG_DEBUG("HOST-NDI", "VRF %d.Arp info null!", vrf_id);
         return rc;
     }
+
+    if ((STD_IP_IS_ADDR_LINK_LOCAL(&(p_fh->key.ip_addr)) == false) &&
+        (std_is_ip_v4_linklocal_addr(&(p_fh->key.ip_addr)) == false)) {
+
+        t_fib_nh *p_nh = fib_get_next_nh(vrf_id, &(p_fh->key.ip_addr),0);
+        while (p_nh && (FIB_IS_NH_WRITTEN (p_nh)) && (p_nh->p_arp_info) &&
+               (memcmp(&(p_nh->key.ip_addr), &(p_fh->key.ip_addr), sizeof(t_fib_ip_addr)) == 0)) {
+
+            if (p_nh->p_arp_info->if_index != p_fh->p_arp_info->if_index) {
+                /* The programmed nbr is associated with different interface, delete it. */
+                _hal_fib_host_del (vrf_id, p_nh);
+            }
+            p_nh = fib_get_next_nh (vrf_id, &p_nh->key.ip_addr, p_nh->key.if_index);
+        }
+    }
     memset(&nbr_entry, 0, sizeof(ndi_neighbor_t));
 
     if (hal_form_nbr_entry(&nbr_entry, p_fh) != STD_ERR_OK) {

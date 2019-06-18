@@ -24,7 +24,7 @@ OnFailure=service_onfailure@%n.service
 Type=notify
 EnvironmentFile=/etc/opx/opx-environment
 ExecStart=/usr/bin/base_nbr_mgr_svc
-TimeoutStartSec=180
+TimeoutStartSec=90
 
 [Install]
 WantedBy=multi-user.target

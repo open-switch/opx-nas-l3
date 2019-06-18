@@ -51,7 +51,8 @@ typedef enum {
     NBR_MGR_NL_DELAY_REFRESH_MSG,
     NBR_MGR_DUMP_MSG,
     NBR_MGR_NL_DELAY_RESOLVE_MSG,
-    NBR_MGR_NL_INSTANT_REFRESH_MSG
+    NBR_MGR_NL_INSTANT_REFRESH_MSG,
+    NBR_MGR_NL_SET_NBR_STATE_MSG
 } nbr_mgr_msg_type_t;
 
 typedef enum {
@@ -75,7 +76,12 @@ typedef enum {
 #define NBR_MGR_NBR_REFRESH      0x2
 #define NBR_MGR_MAC_NOT_PRESENT  0x4
 #define NBR_MGR_NBR_MAC_CHANGE   0x8
-#define NBR_MGR_NBR_REFRESH_FOR_MAC_LEARN  0x10
+#define NBR_MGR_NBR_REFRESH_FOR_MAC_LEARN           0x10
+#define NBR_MGR_NBR_TRIGGER_RESOLVE                 0x20
+#define NBR_MGR_NBR_DISABLE_AGE_OUT_1D_REMOTE_MAC   0x40
+#define NBR_MGR_NBR_ENABLE_AGE_OUT                  0x80
+#define NBR_MGR_NBR_RESOLUTION_IN_PRGS              0x100
+#define NBR_MGR_NBR_UPDATE_PARENT_IF                0x200
 
 typedef struct  {
     unsigned short        family;
@@ -86,7 +92,7 @@ typedef struct  {
     hal_ifindex_t         parent_if;
     hal_ifindex_t         mbr_if_index;
     unsigned long         vrfid;
-    char                  vrf_name[HAL_IF_NAME_SZ + 1];
+    char                  vrf_name[NAS_VRF_NAME_SZ + 1];
     unsigned long         expire;
     unsigned long         flags;
     unsigned long         status;
@@ -101,13 +107,18 @@ typedef struct {
     bool is_bridge;
     uint32_t vlan_id;
     uint32_t flags;
+    uint32_t type; /* Interface type */
     unsigned long vrfid;
     hal_ifindex_t parent_or_child_if_index; /* If-index of the router interface in VRF context (child intf)
                                                or parent interface */
     unsigned long parent_or_child_vrfid; /* VRF-id of the router interface in VRF context (child VRF-id or
                                             parent VRF-id */
+    hal_ifindex_t mbr_if_index;
     char vrf_name[NAS_VRF_NAME_SZ + 1];
     char if_name[HAL_IF_NAME_SZ + 1]; /* interface name */
+    bool is_parent_and_child_in_same_vrf; /* This is set to TRUE when parent and
+                                             MAC VLAN interfaces are in the same VRF. */
+    bool is_child_intf; /* This is the child interface on parent intf (parent_or_child_if_index). */
 } nbr_mgr_intf_entry_t;
 
 typedef struct {

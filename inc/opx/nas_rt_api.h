@@ -42,6 +42,14 @@ typedef struct  {
     bool                        eor;
 } nas_route_domain_object_t;
 
+enum {
+    NAS_RT_NBR_FLAGS_PROACTIVE_RESOLVE = 1, /* Start the proactive resolution as long as the intf. is up */
+    NAS_RT_NBR_FLAGS_TRIGGER_RESOLVE, /* Start the resolution just once. */
+    NAS_RT_NBR_FLAGS_DISABLE_AGE_OUT_1D_BRIDGE_REMOTE_MAC, /* Upon neighbor ageout, update the nbr state to reachable. */
+    NAS_RT_NBR_FLAGS_ENABLE_AGE_OUT, /* Upon neighbor ageout, perform the regular age-out handling. */
+    NAS_RT_NBR_FLAGS_UPDATE_PARENT_IF, /* Update the parent and child interfaces mapping for nbr handling. */
+};
+
 typedef struct  {
     unsigned short                  af;
     unsigned long                   vrfid;
@@ -126,6 +134,7 @@ t_std_error nas_route_get_all_arp_info(cps_api_object_list_t list, uint32_t vrf_
 cps_api_return_code_t nas_route_process_cps_peer_routing(cps_api_transaction_params_t * param,
                                         size_t ix);
 t_std_error nas_route_get_all_peer_routing_config(bool is_specific_vrf_get, hal_vrf_id_t vrf_id,
+                                                  char *if_name, hal_mac_addr_t *mac_addr,
                                                   cps_api_object_list_t list);
 
 cps_api_return_code_t nas_route_process_cps_virtual_routing_ip_cfg (cps_api_transaction_params_t * param,
@@ -146,6 +155,8 @@ t_std_error nas_route_get_all_route_info(cps_api_object_list_t list, uint32_t vr
                                          hal_ip_addr_t *p_prefix, uint32_t pref_len, bool is_specific_prefix_get,
                                          bool is_specific_vrf_get);
 cps_api_object_t nas_route_nh_to_nbr_cps_object(t_fib_nh *entry, cps_api_operation_types_t op, bool is_pub);
+t_std_error nas_route_nbr_entry_to_nbr_cps_object(t_fib_neighbour_entry *entry, cps_api_operation_types_t op,
+                                                  uint32_t flags);
 bool nas_route_fdb_add_cps_msg (t_fib_nh *p_nh);
 
 bool nas_route_is_rsvd_intf(hal_ifindex_t nh_if_index);

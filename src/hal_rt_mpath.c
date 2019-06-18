@@ -29,9 +29,11 @@
 #include "std_error_codes.h"
 #include "nas_ndi_route.h"
 #include "nas_ndi_router_interface.h"
+#include "ds_common_types.h"
 
 #include "event_log.h"
 #include "std_ip_utils.h"
+#include "std_bit_ops.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -117,6 +119,7 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
     t_fib_nh *p_fh;
     t_fib_dr_fh *p_dr_fh;
     t_fib_nh_holder nh_holder;
+    const t_fib_gbl_info  *gbl_info = hal_rt_access_fib_gbl_info();
     ndi_route_t route_entry;
     ndi_nh_group_t nh_group_entry;
     ndi_nh_group_t removed_nh_group_entry;
@@ -343,6 +346,9 @@ dn_hal_route_err hal_fib_ecmp_route_add(uint32_t vrf_id, t_fib_dr *p_dr)
              *
              */
             is_ecmp_table_full = false;
+
+            nh_group_entry.res_hash = gbl_info->resilient_hash;
+
             rc = hal_rt_find_or_create_ecmp_group(p_dr, &nh_group_entry,
                     &nh_group_handle, &is_ecmp_table_full, &removed_nh_group_entry);
             if (rc != STD_ERR_OK) {
@@ -713,3 +719,102 @@ bool hal_fib_is_route_really_ecmp(t_fib_dr *p_dr, bool *p_out_is_cpu_route) {
 
     return false;
 }
+
+/*
+ * Update the resilient hash attribute for each node.  This function is called to
+ * scan and update the existing paths when a global attribute (resilient hash)
+ * has changed.
+ */
+void hal_rt_mpath_update_rh_af(hal_vrf_id_t vrf_id, uint8_t af_index)
+{
+    t_fib_mp_md5_node_key key;
+    t_fib_mp_md5_node *p_md5_node;
+    t_fib_mp_obj      *p_mp_obj;
+    t_fib_vrf_info    *p_vrf_info;
+    std_rt_head       *p_rt_head;
+    ndi_nh_group_t     p_nh_group_entry;
+    bool               rh_enabled = false;
+    t_fib_gbl_info    *gbl_info;
+
+    if (!(FIB_IS_VRF_ID_VALID (vrf_id))) {
+        HAL_RT_LOG_INFO("HAL-RT-MP", "Ignoring invalid VRF ID", vrf_id);
+        return;
+    }
+
+    if (af_index >= FIB_MAX_AFINDEX)
+    {
+        HAL_RT_LOG_INFO("HAL-RT-MP", "Ignoring invalid AF index", af_index);
+        return;
+    }
+
+    if (hal_rt_access_fib_vrf_mp_md5_tree(vrf_id, af_index) == NULL) {
+        return;
+    }
+
+    p_vrf_info = FIB_GET_VRF_INFO(vrf_id, af_index);
+    if (p_vrf_info == NULL) {
+        HAL_RT_LOG_INFO("HAL-RT-MP", "Ignoring invalid VRF object");
+        return;
+    }
+
+    memset(&key, 0, sizeof(key));
+
+    p_rt_head = std_radix_getnext(
+                        hal_rt_access_fib_vrf_mp_md5_tree(vrf_id, af_index),
+                        (uint8_t *)&key,
+                        HAL_RT_MP_MD5_NODE_TREE_KEY_SIZE);
+
+    gbl_info = hal_rt_access_fib_gbl_info();
+    rh_enabled = gbl_info->resilient_hash;
+
+    while (p_rt_head) {
+
+        p_md5_node = (t_fib_mp_md5_node *) p_rt_head;
+        p_mp_obj   = (t_fib_mp_obj *) std_dll_getfirst(&p_md5_node->mp_node_list);
+
+        if (p_mp_obj) {
+            memset(&p_nh_group_entry, 0, sizeof(p_nh_group_entry));
+
+            p_nh_group_entry.npu_id = p_mp_obj->unit;
+
+            /* indicate the resilient hash value has changed */
+            STD_BIT_SET(p_nh_group_entry.flags, NDI_ROUTE_NH_GROUP_RESILIENT_HASH);
+            p_nh_group_entry.res_hash = rh_enabled;
+
+            if (ndi_route_set_next_hop_group_attribute(&p_nh_group_entry,
+                                                       p_mp_obj->sai_ecmp_gid) != STD_ERR_OK) {
+                HAL_RT_LOG_ERR("HAL-RT-MP",
+                               "NH Group: Failed to update r-hash attribute, ecmp-gid: %lu, unit: %d (%s)",
+                               p_mp_obj->sai_ecmp_gid, p_mp_obj->unit, rh_enabled ? "enable" : "disable");
+            } else {
+                HAL_RT_LOG_DEBUG("HAL-RT-NDI",
+                                 "updated resilient attribute for GID %lu (%s)",
+                                 p_mp_obj->sai_ecmp_gid, rh_enabled ? "enable" : "disable");
+            }
+        }
+        memcpy(&key, &(p_md5_node->key), sizeof(key));
+
+        p_rt_head = std_radix_getnext (hal_rt_access_fib_vrf_mp_md5_tree(vrf_id,
+            af_index), (uint8_t *)&key, HAL_RT_MP_MD5_NODE_TREE_KEY_SIZE);
+    }
+
+    return;
+}
+
+
+/*
+ * Update the resilient hash attribute for all existing paths in each AF in each VRF group.
+ */
+void hal_rt_mpath_update_rh_all(void)
+{
+    uint32_t  vrf_id = 0;
+    uint8_t   af_index = 0;
+
+    for (vrf_id = FIB_MIN_VRF; vrf_id < FIB_MAX_VRF; vrf_id++) {
+        for (af_index = FIB_MIN_AFINDEX; af_index < FIB_MAX_AFINDEX; af_index++) {
+            hal_rt_mpath_update_rh_af(vrf_id, af_index);
+        }
+    }
+    return;
+}
+

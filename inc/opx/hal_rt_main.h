@@ -59,6 +59,8 @@
 
 #define FIB_IS_AFINDEX_VALID(af)         (((af >= FIB_MIN_AFINDEX) && (af < FIB_MAX_AFINDEX)) ? true : false)
 
+#define FIB_RT_NH_FLAGS_ONLINK 1
+
 enum _rt_proto {
     // Direct routes.
     RT_CONNECTED = 1,
@@ -180,6 +182,7 @@ typedef struct _t_fib_gbl_info {
     uint32_t         num_unk_msg;
     uint32_t         num_ip_msg;
     hal_mac_addr_t   base_mac_addr;
+    bool             resilient_hash;
     std_rt_table     *leaked_rt_tree;  /* Each node in the tree is of type t_fib_leaked_rt */
 } t_fib_gbl_info;
 
@@ -206,6 +209,8 @@ typedef struct _t_fib_nh_msg_info {
     hal_vrf_id_t   vrf_id;
     t_fib_ip_addr  ip_addr;
     hal_ifindex_t  if_index;
+    uint32_t       flags;
+    bool           is_nh_vrf_present;
 } t_fib_nh_msg_info;
 
 typedef struct _t_fib_arp_msg_info {
@@ -300,13 +305,14 @@ typedef struct _nas_rt_peer_mac_config_t{
     hal_vrf_id_t     vrf_id;
     char             if_name[HAL_IF_NAME_SZ];
     hal_mac_addr_t   mac;
+    bool             ingress_only;
     ndi_vrf_id_t     vrf_obj_id; /* NDI VRF handle */
     ndi_rif_id_t     rif_obj_id; /* NDI RIF handle */
 }nas_rt_peer_mac_config_t;
 
 typedef struct _nas_rt_virtual_routing_ip_config_t{
     hal_vrf_id_t     vrf_id;
-    char             vrf_name[HAL_IF_NAME_SZ + 1];
+    char             vrf_name[NAS_VRF_NAME_SZ + 1];
     char             if_name[HAL_IF_NAME_SZ];
     hal_ip_addr_t    ip_addr;
 }nas_rt_virtual_routing_ip_config_t;
@@ -341,6 +347,7 @@ typedef struct  {
     hal_ip_addr_t         nbr_addr;
     hal_mac_addr_t      nbr_hwaddr;
     hal_ifindex_t   if_index;
+    hal_ifindex_t   parent_if;
     hal_ifindex_t   mbr_if_index; /* VLAN member port - physical/LAG */
     unsigned long   vrfid;
     uint8_t         vrf_name[NAS_VRF_NAME_SZ + 1];
@@ -354,6 +361,7 @@ typedef struct {
     hal_ifindex_t   nh_if_index;
     hal_ip_addr_t   nh_addr;
     uint32_t         nh_weight;
+    uint32_t        nh_flags;
 } t_fib_nh_info;
 
 typedef struct  {
@@ -370,6 +378,8 @@ typedef struct  {
     uint8_t         nh_vrf_name[NAS_VRF_NAME_SZ + 1];
     hal_ip_addr_t         nh_addr;
     size_t hop_count;
+    bool            is_nh_vrf_present; /* This is helpful to know
+                                          whether the nh_vrfid value is filled or not. */
 
     /* variable size buffer to hold nh_list based on
      * the hop_count in received route event.
@@ -438,7 +448,7 @@ typedef struct {
     hal_ifindex_t   if_index;
     t_fib_ip_addr   prefix;
     bool            is_neigh_flush_with_intf;
-    char             vrf_name[HAL_IF_NAME_SZ + 1];
+    char             vrf_name[NAS_VRF_NAME_SZ + 1];
     uint8_t         prefix_len;
 } t_fib_offload_msg_neigh_flush;
 
@@ -451,8 +461,10 @@ typedef struct {
 
 t_fib_msg * hal_rt_alloc_mem_msg();
 t_fib_msg *hal_rt_alloc_route_mem_msg(uint32_t buf_size);
+void hal_rt_free_route_mem_msg(t_fib_msg *pmsg);
 void hal_rt_cps_obj_to_neigh(cps_api_object_t obj, t_fib_neighbour_entry *n);
-bool hal_rt_cps_obj_to_route(cps_api_object_t obj, t_fib_msg **p_msg_ret);
+bool hal_rt_cps_obj_to_route(cps_api_object_t obj, t_fib_msg **p_msg_ret, bool is_app_flow);
+bool hal_rt_cps_obj_to_route_nexthop(cps_api_object_t obj, t_fib_msg **p_msg_ret);
 bool hal_rt_ip_addr_cps_obj_to_route (cps_api_object_t obj, t_fib_msg **p_msg_ret);
 bool hal_rt_cps_obj_to_intf(cps_api_object_t obj, t_fib_intf_entry *p_intf);
 
